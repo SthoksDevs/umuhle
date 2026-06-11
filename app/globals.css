@@ -1,0 +1,106 @@
+/* app/globals.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --plum:    #9B7FB8;
+  --plum-t:  #F4EFF8;
+  --plum-d:  #7A5F99;
+  --nude:    #C28070;
+  --nude-b:  rgba(194, 128, 112, 0.28);
+  --forest:  #2B6B45;
+  --f30:     #BFD3C7;
+  --f15:     #EAF4EE;
+  --onyx:    #1A1A1A;
+  --grey:    #6B6B6B;
+  --light:   #B0A8A0;
+  --surface: #FAF1EE;
+  --white:   #FFFFFF;
+
+  --font-display: 'Raleway', sans-serif;
+  --font-body:    'DM Sans', sans-serif;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: var(--font-body);
+  color: var(--onyx);
+  background: var(--white);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--plum) !important;
+  box-shadow: 0 0 0 3px rgba(155, 127, 184, 0.15);
+}
+
+button { cursor: pointer; font-family: var(--font-body); }
+
+/* Scrollbar */
+::-webkit-scrollbar       { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--nude-b); border-radius: 5px; }
+
+/* Utility classes used throughout */
+.font-display { font-family: var(--font-display); }
+
+/* Star rating helper */
+.stars { color: #F4B400; }
+
+/* Fade-in animation */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: none; }
+}
+.animate-fade-up { animation: fadeUp 0.35s ease forwards; }
+
+/* Modal overlay */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(26,26,26,0.55);
+  backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 1rem;
+}
+
+/* Pill button */
+.btn-plum {
+  background: var(--plum);
+  color: #fff;
+  border: none;
+  border-radius: 100px;
+  padding: 0.75rem 1.75rem;
+  font-weight: 500;
+  font-size: 0.95rem;
+  transition: background 0.2s;
+}
+.btn-plum:hover { background: var(--plum-d); }
+
+.btn-outline {
+  background: transparent;
+  color: var(--plum);
+  border: 1.5px solid var(--plum);
+  border-radius: 100px;
+  padding: 0.7rem 1.75rem;
+  font-weight: 500;
+  font-size: 0.95rem;
+  transition: all 0.2s;
+}
+.btn-outline:hover { background: var(--plum-t); }
+
+/* Mobile adjustments */
+@media (max-width: 640px) {
+  html { font-size: 15px; }
+}
