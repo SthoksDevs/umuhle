@@ -13,21 +13,18 @@ export function createClient() {
         getAll() {
           return cookieStore.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: { name: string; value: string; options?: object }[]) {
           try {
             cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
+              cookieStore.set(name, value, options as any)
             );
-          } catch {
-            // Ignored in Server Components (middleware handles refresh)
-          }
+          } catch {}
         },
       },
     }
   );
 }
 
-/** Service-role client for admin operations (never expose to browser) */
 export function createAdminClient() {
   const cookieStore = cookies();
 
@@ -39,10 +36,10 @@ export function createAdminClient() {
         getAll() {
           return cookieStore.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: { name: string; value: string; options?: object }[]) {
           try {
             cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
+              cookieStore.set(name, value, options as any)
             );
           } catch {}
         },
