@@ -1,13 +1,15 @@
+```ts
 // lib/whatsapp.ts
 
 const WA_API_URL = `https://graph.facebook.com/v20.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
-/** Normalise to E.164 (+27...) */
 function normalisePhone(phone: string): string {
   const digits = phone.replace(/\D/g, "");
+
   if (digits.startsWith("0") && digits.length === 10) {
-    return `27${digits.slice(1)}`; // South African local → international
+    return `27${digits.slice(1)}`;
   }
+
   return digits;
 }
 
@@ -27,6 +29,7 @@ async function sendMessage(body: object): Promise<boolean> {
       console.error("WhatsApp API error:", JSON.stringify(err));
       return false;
     }
+
     return true;
   } catch (err) {
     console.error("WhatsApp send error:", err);
@@ -34,10 +37,6 @@ async function sendMessage(body: object): Promise<boolean> {
   }
 }
 
-/**
- * Send a plain text message.
- * For production, use template messages (approved by Meta) instead.
- */
 export async function sendTextMessage(
   phone: string,
   text: string
@@ -47,19 +46,13 @@ export async function sendTextMessage(
     recipient_type: "individual",
     to: normalisePhone(phone),
     type: "text",
-    text: { body: text, preview_url: false },
+    text: {
+      body: text,
+      preview_url: false,
+    },
   });
 }
 
-/**
- * Send an approved WhatsApp template message.
- * Templates must be approved in Meta Business Manager before use.
- *
- * Example template names (create these in Meta):
- *   - booking_confirmed   → "Hi {{1}}, your booking with {{2}} on {{3}} at {{4}} is confirmed! 💜"
- *   - booking_reminder    → "Reminder: your appointment with {{1}} is tomorrow at {{2}}."
- *   - booking_cancelled   → "Your booking on {{3}} has been cancelled. We hope to see you soon."
- */
 export async function sendTemplateMessage(
   phone: string,
   templateName: string,
@@ -71,62 +64,235 @@ export async function sendTemplateMessage(
     type: "template",
     template: {
       name: templateName,
-      language: { code: "en" },
+      language: {
+        code: "en",
+      },
       components,
     },
   });
 }
 
-// ─────────────────────────────────────────────
-//  Convenience notification helpers
-// ─────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Booking notifications
+// -----------------------------------------------------------------------------
 
-export async function notifyBookingConfirmed(opts: {
-  clientPhone: string;
+interface BookingNotifyOpts {
   clientName: string;
+  clientPhone: string;
   artistName: string;
-  date: string;
-  time: string;
-  serviceName: string;
-}) {
-  const text =
-    `✅ *Booking Confirmed!*\n\n` +
-    `Hi ${opts.clientName}, your booking with *${opts.artistName}* is confirmed.\n\n` +
-    `📅 ${opts.date} at ${opts.time}\n` +
-    `💅 ${opts.serviceName}\n\n` +
-    `_Reply to this message if you need to reschedule._`;
-
-  return sendTextMessage(opts.clientPhone, text);
-}
-
-export async function notifyArtistNewBooking(opts: {
   artistPhone: string;
-  clientName: string;
   date: string;
   time: string;
   serviceName: string;
-}) {
-  const text =
-    `🆕 *New Booking!*\n\n` +
-    `${opts.clientName} booked *${opts.serviceName}*\n` +
-    `📅 ${opts.date} at ${opts.time}\n\n` +
-    `Open your dashboard to confirm or manage the booking.`;
-
-  return sendTextMessage(opts.artistPhone, text);
+  meetingAddress?: string;
+  expectedDuration?: number;
+  clientPocName?: string;
+  clientPocPhone?: string;
+  artistPocName?: string;
+  artistPocPhone?: string;
 }
 
-export async function notifyBookingReminder(opts: {
-  clientPhone: string;
-  clientName: string;
-  artistName: string;
-  time: string;
-  serviceName: string;
-}) {
-  const text =
-    `⏰ *Appointment Reminder*\n\n` +
-    `Hi ${opts.clientName}! Your appointment with *${opts.artistName}* is *tomorrow at ${opts.time}*.\n` +
-    `💅 ${opts.serviceName}\n\n` +
-    `See you soon! 💜`;
+export async function notifyBookingCreated(
+  opts: BookingNotifyOpts
+) {
+  const addressLine = opts.meetingAddress
+    ? `\nAddress: ${opts.meetingAddress}`
+    : "";
 
-  return sendTextMessage(opts.clientPhone, text);
+  const durationLine = opts.expectedDuration
+    ? `\nDuration: ~${opts.expectedDuration} mins`
+    : "";
+
+  const clientMsg =
+    `*Booking Confirmed*\n\n` +
+    `Hi ${opts.clientName}, your booking with *${opts.artistName}* has been confirmed.\n\n` +
+    `Date: ${opts.date}\n` +
+    `Time: ${opts.time}\n` +
+    `Service: ${opts.serviceName}` +
+    `${addressLine}` +
+    `${durationLine}\n\n` +
+    `Reply to this message if you need to reschedule.`;
+
+  const artistMsg =
+    `*New Booking*\n\n` +
+    `${opts.clientName} has booked *${opts.serviceName}*.\n\n` +
+    `Date: ${opts.date}\n` +
+    `Time: ${opts.time}` +
+    `${addressLine}` +
+    `${durationLine}\n\n` +
+    `Open your dashboard to manage this booking.`;
+
+  const promises: Promise<boolean>[] = [
+    sendTextMessage(opts.clientPhone, clientMsg),
+    sendTextMessage(opts.artistPhone, artistMsg),
+  ];
+
+  if (opts.clientPocPhone) {
+    const pocMsg =
+      `*Umuhle Booking Update*\n\n` +
+      `${opts.clientName} has booked *${opts.serviceName}* with ${opts.artistName}.\n\n` +
+      `Date: ${opts.date}\n` +
+      `Time: ${opts.time}` +
+      `${addressLine}`;
+
+    promises.push(
+      sendTextMessage(opts.clientPocPhone, pocMsg)
+    );
+  }
+
+  if (opts.artistPocPhone) {
+    const pocMsg =
+      `*New Booking for ${opts.artistName}*\n\n` +
+      `Client: ${opts.clientName}\n` +
+      `Service: ${opts.serviceName}\n` +
+      `Date: ${opts.date}\n` +
+      `Time: ${opts.time}` +
+      `${addressLine}`;
+
+    promises.push(
+      sendTextMessage(opts.artistPocPhone, pocMsg)
+    );
+  }
+
+  await Promise.allSettled(promises);
+}
+
+export async function notifyBookingReminder(
+  opts: BookingNotifyOpts
+) {
+  const clientMsg =
+    `*Appointment Reminder*\n\n` +
+    `Hi ${opts.clientName}, this is a reminder that your appointment with *${opts.artistName}* is tomorrow at ${opts.time}.\n\n` +
+    `Service: ${opts.serviceName}\n\n` +
+    `We look forward to seeing you.`;
+
+  const artistMsg =
+    `*Tomorrow's Appointment*\n\n` +
+    `Reminder: ${opts.clientName} has booked *${opts.serviceName}* tomorrow at ${opts.time}.`;
+
+  const promises: Promise<boolean>[] = [
+    sendTextMessage(opts.clientPhone, clientMsg),
+    sendTextMessage(opts.artistPhone, artistMsg),
+  ];
+
+  if (opts.clientPocPhone) {
+    promises.push(
+      sendTextMessage(
+        opts.clientPocPhone,
+        `Reminder: ${opts.clientName} has an appointment with ${opts.artistName} tomorrow at ${opts.time}.`
+      )
+    );
+  }
+
+  if (opts.artistPocPhone) {
+    promises.push(
+      sendTextMessage(
+        opts.artistPocPhone,
+        `Reminder: ${opts.clientName} has an appointment with ${opts.artistName} tomorrow at ${opts.time}.`
+      )
+    );
+  }
+
+  await Promise.allSettled(promises);
+}
+
+export async function notifyAppointmentStarted(
+  opts: BookingNotifyOpts
+) {
+  const msg =
+    `*Appointment Started*\n\n` +
+    `${opts.clientName}'s appointment with ${opts.artistName} has started.\n\n` +
+    `Service: ${opts.serviceName}`;
+
+  const promises: Promise<boolean>[] = [];
+
+  if (opts.clientPocPhone) {
+    promises.push(
+      sendTextMessage(opts.clientPocPhone, msg)
+    );
+  }
+
+  if (opts.artistPocPhone) {
+    promises.push(
+      sendTextMessage(opts.artistPocPhone, msg)
+    );
+  }
+
+  await Promise.allSettled(promises);
+}
+
+export async function notifyAppointmentCompleted(opts: {
+  clientName: string;
+  clientPhone: string;
+  artistName: string;
+  artistPhone: string;
+  serviceName: string;
+  clientPocPhone?: string;
+  artistPocPhone?: string;
+}) {
+  const clientMsg =
+    `*Appointment Complete*\n\n` +
+    `Your appointment with ${opts.artistName} has been completed.\n\n` +
+    `We hope you enjoyed your ${opts.serviceName} service.\n\n` +
+    `Please leave a review on Umuhle.`;
+
+  const artistMsg =
+    `*Appointment Marked Complete*\n\n` +
+    `${opts.clientName}'s ${opts.serviceName} appointment has been completed.`;
+
+  const promises: Promise<boolean>[] = [
+    sendTextMessage(opts.clientPhone, clientMsg),
+    sendTextMessage(opts.artistPhone, artistMsg),
+  ];
+
+  if (opts.clientPocPhone) {
+    promises.push(
+      sendTextMessage(
+        opts.clientPocPhone,
+        `${opts.clientName}'s appointment with ${opts.artistName} has been completed.`
+      )
+    );
+  }
+
+  if (opts.artistPocPhone) {
+    promises.push(
+      sendTextMessage(
+        opts.artistPocPhone,
+        `${opts.clientName}'s ${opts.serviceName} appointment has been completed.`
+      )
+    );
+  }
+
+  await Promise.allSettled(promises);
+}
+
+export async function notifyPartnerWelcome(opts: {
+  partnerPhone: string;
+  partnerName: string;
+}) {
+  const msg =
+    `*Welcome to Umuhle Partners*\n\n` +
+    `Hi ${opts.partnerName}, you are now a verified Umuhle Partner.\n\n` +
+    `You can now:\n` +
+    `• List your products\n` +
+    `• Purchase advertisements\n` +
+    `• Manage your salon listing\n\n` +
+    `Visit your dashboard to get started.`;
+
+  return sendTextMessage(opts.partnerPhone, msg);
+}
+
+export async function notifyReferralRewarded(opts: {
+  phone: string;
+  name: string;
+  amount: number;
+}) {
+  const msg =
+    `*Referral Reward Received*\n\n` +
+    `Hi ${opts.name}, your referral reward of R${(
+      opts.amount / 100
+    ).toFixed(0)} has been added to your Umuhle wallet.\n\n` +
+    `Keep referring Partners to earn more rewards.`;
+
+  return sendTextMessage(opts.phone, msg);
 }
