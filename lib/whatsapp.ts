@@ -1,9 +1,7 @@
-```ts
-// lib/whatsapp.ts
-
-const WA_API_URL = `https://graph.facebook.com/v20.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
-
-function normalisePhone(phone: string): string {
+// lib/whatsapp.ts 
+  const WA_API_URL = `https://graph.facebook.com/v20.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`; 
+  
+  function normalisePhone(phone: string): string {
   const digits = phone.replace(/\D/g, "");
 
   if (digits.startsWith("0") && digits.length === 10) {
