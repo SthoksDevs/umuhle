@@ -21,7 +21,7 @@ const track = {
   gtag: (e: string, p?: Record<string, unknown>) => typeof window !== "undefined" && window.gtag?.("event", e, p),
 };
 
-const ICON = "/umuhle_icon_dark_bg.jpg";
+const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
 const CATEGORIES = ["All", "Hair", "Nails", "Makeup", "Lashes"] as const;
 type Category = typeof CATEGORIES[number];
@@ -449,11 +449,11 @@ function ArtistCard({ artist, onBook }: { artist: Artist; onBook: () => void }) 
     <div className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden hover:border-white/20 transition-colors group">
       <div className="relative h-40 bg-white/5">
         <Image
-          src={artist.avatar_url ?? "/umuhle_icon_dark_bg.jpg"}
+          src={artist.avatar_url ?? "/umuhle-icon.png"}
           alt={artist.display_name}
           fill
           className="object-cover group-hover:scale-105 transition-transform duration-500"
-          onError={e => { (e.target as HTMLImageElement).src = "/umuhle_icon_dark_bg.jpg"; }}
+          onError={e => { (e.target as HTMLImageElement).src = "/umuhle-icon.png"; }}
         />
         {artist.is_verified && (
           <span className="absolute top-2 right-2 bg-[#c9a96e] text-[#1a1025] text-[10px] font-bold px-2 py-0.5 rounded-full">
