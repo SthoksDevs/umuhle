@@ -18,20 +18,49 @@ export async function middleware(request: NextRequest) {
           );
           supabaseResponse = NextResponse.next({ request });
           cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options as any)
+            supabaseResponse.cookies.set(name, value, options as never)
           );
         },
       },
     }
   );
 
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  if (request.nextUrl.pathname.startsWith("/dashboard") && !user) {
+  const { pathname } = request.nextUrl;
+
+  // Redirect unauthenticated users away from protected routes
+  const protectedRoutes = ["/dashboard", "/partner", "/bookings", "/artist"];
+  const isProtected = protectedRoutes.some((r) => pathname.startsWith(r));
+
+  if (isProtected && !user) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     url.searchParams.set("auth", "login");
     return NextResponse.redirect(url);
+  }
+
+  // Admin-only routes
+  if (pathname.startsWith("/admin")) {
+    if (!user) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/";
+      return NextResponse.redirect(url);
+    }
+
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("is_admin, account_status")
+      .eq("id", user.id)
+      .single();
+
+    if (!profile?.is_admin || profile?.account_status !== "active") {
+      const url = request.nextUrl.clone();
+      url.pathname = "/";
+      return NextResponse.redirect(url);
+    }
   }
 
   return supabaseResponse;
