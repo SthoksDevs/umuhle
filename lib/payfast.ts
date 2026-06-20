@@ -7,15 +7,10 @@ export const PAYFAST_URL = IS_SANDBOX
   ? "https://sandbox.payfast.co.za/eng/process"
   : "https://www.payfast.co.za/eng/process";
 
-/** Format amount as "150.00" string required by PayFast */
 export function formatAmount(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
-/**
- * Generate the MD5 signature PayFast requires.
- * All params must be sorted alphabetically, empty values excluded.
- */
 export function generateSignature(
   params: Record<string, string>,
   passphrase?: string
@@ -35,10 +30,6 @@ export function generateSignature(
   return crypto.createHash("md5").update(str).digest("hex");
 }
 
-/**
- * Build the full PayFast payment parameter object (including signature).
- * `amount` should be in ZAR cents.
- */
 export function buildPaymentParams(options: {
   paymentId: string;
   amount: number; // cents
@@ -48,6 +39,8 @@ export function buildPaymentParams(options: {
   lastName: string;
   email: string;
   baseUrl: string;
+  customStr1?: string; // payment_type: "booking"|"order"|"ad"|"salon"
+  customStr2?: string; // extra reference
 }): Record<string, string> {
   const params: Record<string, string> = {
     merchant_id: process.env.PAYFAST_MERCHANT_ID!,
@@ -61,24 +54,18 @@ export function buildPaymentParams(options: {
     m_payment_id: options.paymentId,
     amount: formatAmount(options.amount),
     item_name: options.itemName,
-    ...(options.itemDescription
-      ? { item_description: options.itemDescription }
-      : {}),
+    ...(options.itemDescription ? { item_description: options.itemDescription } : {}),
+    ...(options.customStr1 ? { custom_str1: options.customStr1 } : {}),
+    ...(options.customStr2 ? { custom_str2: options.customStr2 } : {}),
   };
 
-  params.signature = generateSignature(
-    params,
-    process.env.PAYFAST_PASSPHRASE
-  );
-
+  params.signature = generateSignature(params, process.env.PAYFAST_PASSPHRASE);
   return params;
 }
 
-/** Validate PayFast ITN (Instant Transaction Notification / webhook) */
 export async function validateITN(
   payload: Record<string, string>
 ): Promise<boolean> {
-  // 1. Verify signature
   const { signature, ...rest } = payload;
   const expected = generateSignature(rest, process.env.PAYFAST_PASSPHRASE);
   if (expected !== signature) {
@@ -86,7 +73,6 @@ export async function validateITN(
     return false;
   }
 
-  // 2. Confirm with PayFast server
   const validateUrl = IS_SANDBOX
     ? "https://sandbox.payfast.co.za/eng/query/validate"
     : "https://www.payfast.co.za/eng/query/validate";
@@ -102,8 +88,7 @@ export async function validateITN(
       body,
     });
 
-    const text = await res.text();
-    return text.trim() === "VALID";
+    return (await res.text()).trim() === "VALID";
   } catch (err) {
     console.error("PayFast ITN validate error:", err);
     return false;
