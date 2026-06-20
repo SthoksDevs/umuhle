@@ -7,7 +7,7 @@ import type { Artist, Profile } from "@/types";
 import Image from "next/image";
 import Link from "next/link";
 
-// ── Analytics helpers ─────────────────────────────────────────────────────────
+// ── Pixel helpers ─────────────────────────────────────────────────────────────
 declare global {
   interface Window {
     ttq?: { track: (e: string, p?: Record<string, unknown>) => void };
@@ -15,16 +15,23 @@ declare global {
     gtag?: (...a: unknown[]) => void;
   }
 }
-const track = {
-  ttq: (e: string, p?: Record<string, unknown>) => typeof window !== "undefined" && window.ttq?.track(e, p),
-  fbq: (e: string, p?: Record<string, unknown>) => typeof window !== "undefined" && window.fbq?.("track", e, p),
-  gtag: (e: string, p?: Record<string, unknown>) => typeof window !== "undefined" && window.gtag?.("event", e, p),
-};
+function ttq(event: string, params?: Record<string, unknown>) {
+  if (typeof window !== "undefined" && window.ttq) window.ttq.track(event, params);
+}
+function fbq(event: string, params?: Record<string, unknown>) {
+  if (typeof window !== "undefined" && window.fbq) window.fbq("track", event, params);
+}
+function gtag(event: string, params?: Record<string, unknown>) {
+  if (typeof window !== "undefined" && window.gtag) window.gtag("event", event, params);
+}
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
 const CATEGORIES = ["All", "Hair", "Nails", "Makeup", "Lashes"] as const;
 type Category = typeof CATEGORIES[number];
+const CAT_ICONS: Record<string, string> = { hair: "✂", nails: "◈", makeup: "◉", lashes: "◎" };
+
+type CartItem = { id: string; name: string; price: number };
 
 const SOCIALS = [
   { label: "Facebook",  href: "https://web.facebook.com/umuhlebeautiful" },
@@ -37,14 +44,16 @@ const SOCIALS = [
 export default function Home() {
   const supabase = createClient();
 
-  const [user, setUser]       = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
-
-  // Search state
-  const [artists, setArtists]           = useState<Artist[]>([]);
-  const [loading, setLoading]           = useState(false);
-  const [searchQuery, setSearchQuery]   = useState("");
+  const [user, setUser]           = useState<User | null>(null);
+  const [profile, setProfile]     = useState<Profile | null>(null);
+  const [artists, setArtists]     = useState<Artist[]>([]);
+  const [loading, setLoading]     = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<Category>("All");
+
+  // Cart
+  const [cart, setCart]           = useState<CartItem[]>([]);
+  const [showCart, setShowCart]   = useState(false);
 
   // Auth modal
   const [showAuth, setShowAuth]   = useState(false);
@@ -53,7 +62,7 @@ export default function Home() {
   const [authError, setAuthError] = useState("");
   const [authForm, setAuthForm]   = useState({ email: "", password: "", name: "", phone: "" });
 
-  // Selected artist for booking preview
+  // Booking
   const [selectedArtist, setSelectedArtist] = useState<Artist | null>(null);
 
   // ── Auth listener ────────────────────────────────────────────────────────
@@ -71,7 +80,6 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Open auth modal if ?auth=login in URL
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("auth") === "login") { setShowAuth(true); setAuthMode("login"); }
@@ -93,14 +101,8 @@ export default function Home() {
       .eq("moderation_status", "approved")
       .order("rating", { ascending: false })
       .limit(24);
-
-    if (activeCategory !== "All") {
-      query = query.eq("category", activeCategory.toLowerCase());
-    }
-    if (searchQuery.trim()) {
-      query = query.ilike("display_name", `%${searchQuery.trim()}%`);
-    }
-
+    if (activeCategory !== "All") query = query.eq("category", activeCategory.toLowerCase());
+    if (searchQuery.trim()) query = query.ilike("display_name", `%${searchQuery.trim()}%`);
     const { data } = await query;
     setArtists((data ?? []) as Artist[]);
     setLoading(false);
@@ -112,10 +114,10 @@ export default function Home() {
   }, [fetchArtists]);
 
   // ── Auth handlers ────────────────────────────────────────────────────────
-  const handleGoogleLogin = async () => {
+  const handleOAuth = async (provider: "google" | "facebook") => {
     setAuthLoading(true);
     await supabase.auth.signInWithOAuth({
-      provider: "google",
+      provider,
       options: { redirectTo: `${window.location.origin}/auth/callback` },
     });
   };
@@ -126,14 +128,11 @@ export default function Home() {
     setAuthError("");
     try {
       if (authMode === "login") {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: authForm.email,
-          password: authForm.password,
-        });
+        const { error } = await supabase.auth.signInWithPassword({ email: authForm.email, password: authForm.password });
         if (error) throw error;
         setShowAuth(false);
-        track.gtag("login", { method: "email" });
-        track.fbq("Login");
+        gtag("login", { method: "email" });
+        fbq("Login");
       } else {
         const { error } = await supabase.auth.signUp({
           email: authForm.email,
@@ -145,9 +144,9 @@ export default function Home() {
         });
         if (error) throw error;
         setAuthError("Check your email to confirm your account.");
-        track.gtag("sign_up", { method: "email" });
-        track.fbq("CompleteRegistration");
-        track.ttq("CompleteRegistration");
+        gtag("sign_up", { method: "email" });
+        fbq("CompleteRegistration");
+        ttq("CompleteRegistration");
       }
     } catch (err: unknown) {
       setAuthError(err instanceof Error ? err.message : "Something went wrong");
@@ -161,283 +160,313 @@ export default function Home() {
     setProfile(null);
   };
 
+  const addToCart = (item: CartItem) => {
+    setCart(prev => [...prev, item]);
+    ttq("AddToCart", { contents: [{ content_id: item.id, content_name: item.name }], value: item.price / 100, currency: "ZAR" });
+    fbq("AddToCart", { content_ids: [item.id], content_name: item.name, value: item.price / 100, currency: "ZAR" });
+    gtag("add_to_cart", { currency: "ZAR", value: item.price / 100 });
+  };
+
+  const cartCount = cart.length;
+  const cartTotal = cart.reduce((s, i) => s + i.price, 0);
+
   // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-[#1a1025] text-white">
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
 
-      {/* ── Top nav ── */}
-      <header className="sticky top-0 z-50 bg-[#1a1025]/95 backdrop-blur border-b border-white/10">
-        <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between gap-4">
-          {/* Logo */}
-          <Link href="/" className="flex items-center gap-2 shrink-0">
-            <Image src={ICON} alt="Umuhle" width={28} height={28} className="rounded-full object-cover" />
-            <span className="font-semibold text-sm tracking-wide">umuhle</span>
-          </Link>
+      {/* ── Nav ── */}
+      <nav style={{ position: "sticky", top: 0, zIndex: 100, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(155,127,184,0.15)", padding: "0 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", height: 60 }}>
 
-          {/* Nav links */}
-          <nav className="hidden sm:flex items-center gap-6 text-sm">
-            <Link href="/"        className="text-white/70 hover:text-white transition-colors">Search</Link>
-            <Link href="/shop"    className="text-white/70 hover:text-white transition-colors">Shop</Link>
-            <Link href="/earn"    className="text-white/70 hover:text-white transition-colors">Earn</Link>
-          </nav>
+        {/* Logo */}
+        <Link href="/" style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.5rem", padding: 0, textDecoration: "none" }}>
+          <Image src={ICON} alt="Umuhle" width={32} height={32} style={{ borderRadius: "50%", objectFit: "cover" }} />
+          <span style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.2rem", letterSpacing: "0.12em", color: "var(--plum)" }}>umuhle</span>
+        </Link>
 
-          {/* Auth */}
-          <div className="flex items-center gap-2">
-            {user ? (
-              <div className="flex items-center gap-2">
-                <Link href="/dashboard" className="text-sm text-white/70 hover:text-white transition-colors hidden sm:block">
-                  Dashboard
-                </Link>
-                <button
-                  onClick={handleSignOut}
-                  className="text-xs text-white/50 hover:text-white/80 transition-colors"
-                >
-                  Sign out
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => { setShowAuth(true); setAuthMode("login"); }}
-                className="bg-[#c9a96e] text-[#1a1025] text-sm font-semibold px-4 py-1.5 rounded-full hover:bg-[#d4b87a] transition-colors"
-              >
-                Sign in
-              </button>
-            )}
-          </div>
-        </div>
-      </header>
-
-      {/* ── Hero ── */}
-      <section className="max-w-6xl mx-auto px-4 pt-16 pb-10 text-center">
-        <p className="text-[#c9a96e] text-xs tracking-[0.3em] uppercase mb-3">South Africa&apos;s Beauty Marketplace</p>
-        <h1 className="text-4xl sm:text-5xl font-light mb-4 leading-tight">
-          Find your perfect<br />
-          <em className="italic text-[#c9a96e]">beauty artist</em>
-        </h1>
-        <p className="text-white/50 text-sm max-w-md mx-auto mb-8">
-          Book hair stylists, nail technicians, makeup artists and more — wherever you are in South Africa.
-        </p>
-
-        {/* Search bar */}
-        <div className="max-w-lg mx-auto relative">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Search artists, styles, locations…"
-            className="w-full bg-white/10 border border-white/20 rounded-full px-5 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-[#c9a96e] transition-colors"
-          />
-          <span className="absolute right-4 top-1/2 -translate-y-1/2 text-white/30 text-sm">⌕</span>
-        </div>
-      </section>
-
-      {/* ── Category tabs ── */}
-      <section className="max-w-6xl mx-auto px-4 pb-6">
-        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-          {CATEGORIES.map(cat => (
-            <button
-              key={cat}
-              onClick={() => setActiveCategory(cat)}
-              className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                activeCategory === cat
-                  ? "bg-[#c9a96e] text-[#1a1025]"
-                  : "bg-white/10 text-white/60 hover:bg-white/15"
-              }`}
-            >
-              {cat}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      {/* ── Artist grid ── */}
-      <section className="max-w-6xl mx-auto px-4 pb-20">
-        {loading && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[...Array(6)].map((_, i) => (
-              <div key={i} className="bg-white/5 rounded-2xl h-56 animate-pulse" />
-            ))}
-          </div>
-        )}
-
-        {!loading && artists.length === 0 && (
-          <div className="text-center py-20">
-            <p className="text-white/40 text-sm">No artists found. Try a different search or category.</p>
-          </div>
-        )}
-
-        {!loading && artists.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {artists.map(artist => (
-              <ArtistCard
-                key={artist.id}
-                artist={artist}
-                onBook={() => {
-                  if (!user) { setShowAuth(true); setAuthMode("login"); return; }
-                  setSelectedArtist(artist);
-                  track.fbq("InitiateCheckout", { content_name: artist.display_name });
-                  track.ttq("InitiateCheckout");
-                }}
-              />
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* ── Bottom nav (mobile) ── */}
-      <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#1a1025] border-t border-white/10">
-        <div className="grid grid-cols-4 h-14">
+        {/* Centre nav */}
+        <div style={{ display: "flex", gap: "0.15rem" }}>
           {[
-            { label: "Search", href: "/",          icon: "⌕" },
-            { label: "Shop",   href: "/shop",       icon: "🛍" },
-            { label: "Earn",   href: "/earn",        icon: "💰" },
-            { label: user ? "Account" : "Sign in", href: user ? "/dashboard" : "#", icon: "👤" },
+            { label: "Search", href: "/" },
+            { label: "Shop",   href: "/shop" },
+            { label: "Earn",   href: "/earn" },
           ].map(item => (
-            item.href === "#" ? (
-              <button
-                key={item.label}
-                onClick={() => { setShowAuth(true); setAuthMode("login"); }}
-                className="flex flex-col items-center justify-center gap-0.5 text-white/50 hover:text-white transition-colors"
-              >
-                <span className="text-lg leading-none">{item.icon}</span>
-                <span className="text-[10px]">{item.label}</span>
-              </button>
-            ) : (
-              <Link
-                key={item.label}
-                href={item.href}
-                className="flex flex-col items-center justify-center gap-0.5 text-white/50 hover:text-white transition-colors"
-              >
-                <span className="text-lg leading-none">{item.icon}</span>
-                <span className="text-[10px]">{item.label}</span>
-              </Link>
-            )
+            <Link key={item.label} href={item.href} style={{ background: "transparent", border: "none", borderRadius: 100, padding: "0.4rem 1rem", color: "var(--grey)", fontWeight: 400, fontSize: "0.875rem", textDecoration: "none", transition: "all 0.2s" }}>
+              {item.label}
+            </Link>
           ))}
+          {user && (
+            <Link href="/dashboard" style={{ background: "transparent", border: "none", borderRadius: 100, padding: "0.4rem 1rem", color: "var(--grey)", fontWeight: 400, fontSize: "0.875rem", textDecoration: "none" }}>
+              Dashboard
+            </Link>
+          )}
+        </div>
+
+        {/* Right: cart + auth */}
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          {/* Cart icon */}
+          <button
+            onClick={() => setShowCart(true)}
+            aria-label={`Cart — ${cartCount} item${cartCount !== 1 ? "s" : ""}`}
+            style={{ position: "relative", background: "none", border: "none", cursor: "pointer", padding: "0.3rem", color: "var(--grey)", display: "flex" }}
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/>
+            </svg>
+            {cartCount > 0 && (
+              <span style={{ position: "absolute", top: -2, right: -2, background: "var(--plum)", color: "#fff", borderRadius: "50%", width: 16, height: 16, fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {cartCount}
+              </span>
+            )}
+          </button>
+
+          {user ? (
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+              <span style={{ fontSize: "0.85rem", color: "var(--grey)" }}>{profile?.full_name?.split(" ")[0] ?? user.email}</span>
+              <button className="btn-outline" style={{ padding: "0.4rem 1rem", fontSize: "0.8rem" }} onClick={handleSignOut}>Sign out</button>
+            </div>
+          ) : (
+            <button className="btn-plum" style={{ padding: "0.5rem 1.25rem", fontSize: "0.875rem" }} onClick={() => { setShowAuth(true); setAuthMode("login"); }}>Sign in</button>
+          )}
         </div>
       </nav>
 
+      {/* ── Main content ── */}
+      <div style={{ flex: 1 }}>
+        <main style={{ minHeight: "80vh", background: "var(--white)" }}>
+          {/* Hero */}
+          <section style={{ background: "linear-gradient(135deg, var(--plum-t) 0%, #fff 60%)", padding: "5rem 1.5rem 3rem", textAlign: "center" }}>
+            <p style={{ fontFamily: "var(--font-display)", fontSize: "0.8rem", letterSpacing: "0.35em", color: "var(--nude)", textTransform: "uppercase", marginBottom: "1rem" }}>beauty, near you</p>
+            <h1 style={{ fontFamily: "var(--font-display)", fontSize: "clamp(2.5rem,6vw,4.5rem)", fontWeight: 300, color: "var(--onyx)", lineHeight: 1.1, marginBottom: "1.25rem" }}>
+              You are <em style={{ color: "var(--plum)", fontStyle: "italic" }}>beautiful</em>
+            </h1>
+            <p style={{ fontSize: "1.1rem", color: "var(--grey)", maxWidth: 480, margin: "0 auto 2rem" }}>
+              Book trusted hair stylists, nail techs &amp; makeup artists — right in your neighbourhood.
+            </p>
+            <div style={{ display: "flex", gap: "0.75rem", justifyContent: "center", flexWrap: "wrap" }}>
+              <button className="btn-plum" onClick={() => document.getElementById("artists")?.scrollIntoView({ behavior: "smooth" })}>Find an artist</button>
+              <button className="btn-outline" onClick={() => { setAuthMode("register"); setShowAuth(true); }}>Join as a partner</button>
+            </div>
+          </section>
+
+          {/* Category pills */}
+          <section style={{ padding: "2rem 1.5rem 0", maxWidth: 900, margin: "0 auto" }}>
+            <div style={{ display: "flex", gap: "0.5rem", overflowX: "auto", paddingBottom: "0.5rem" }}>
+              {CATEGORIES.map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => setActiveCategory(cat)}
+                  style={{
+                    flexShrink: 0, borderRadius: 100, padding: "0.5rem 1.25rem",
+                    background: activeCategory === cat ? "var(--plum)" : "var(--plum-t)",
+                    color: activeCategory === cat ? "#fff" : "var(--plum)",
+                    border: "none", fontWeight: 500, fontSize: "0.875rem", transition: "all 0.2s", cursor: "pointer",
+                  }}
+                >
+                  {cat !== "All" && CAT_ICONS[cat.toLowerCase()] ? `${CAT_ICONS[cat.toLowerCase()]} ` : ""}{cat}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {/* Search */}
+          <section style={{ padding: "1.25rem 1.5rem 0", maxWidth: 900, margin: "0 auto" }}>
+            <input
+              type="text"
+              placeholder="Search by name or area…"
+              value={searchQuery}
+              onChange={e => {
+                setSearchQuery(e.target.value);
+                if (e.target.value.length > 2) {
+                  ttq("Search", { search_string: e.target.value });
+                  fbq("Search", { search_string: e.target.value });
+                  gtag("search", { search_term: e.target.value });
+                }
+              }}
+              style={{ width: "100%", padding: "0.75rem 1.25rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", fontSize: "0.95rem", color: "var(--onyx)", background: "var(--plum-t)", boxSizing: "border-box" }}
+            />
+          </section>
+
+          {/* Artist grid */}
+          <section id="artists" style={{ padding: "2rem 1.5rem 4rem", maxWidth: 900, margin: "0 auto" }}>
+            <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.5rem", marginBottom: "1.5rem", color: "var(--onyx)" }}>
+              {activeCategory === "All" ? "All artists" : `${activeCategory} artists`}
+              <span style={{ fontSize: "0.9rem", color: "var(--grey)", fontFamily: "var(--font-body)", fontWeight: 400, marginLeft: "0.5rem" }}>({artists.length})</span>
+            </h2>
+
+            {loading && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: "1.25rem" }}>
+                {[...Array(6)].map((_, i) => (
+                  <div key={i} style={{ borderRadius: 18, background: "var(--plum-t)", height: 280 }} />
+                ))}
+              </div>
+            )}
+
+            {!loading && artists.length === 0 && (
+              <p style={{ color: "var(--grey)", textAlign: "center", padding: "3rem 0" }}>
+                No artists found. Try a different search or category.
+              </p>
+            )}
+
+            {!loading && artists.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: "1.25rem" }}>
+                {artists.map(artist => (
+                  <ArtistCard
+                    key={artist.id}
+                    artist={artist}
+                    onBook={() => {
+                      if (!user) { setShowAuth(true); setAuthMode("login"); return; }
+                      setSelectedArtist(artist);
+                      ttq("ViewContent", { contents: [{ content_id: artist.id, content_name: artist.display_name }] });
+                      fbq("ViewContent", { content_ids: [artist.id], content_name: artist.display_name });
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        </main>
+      </div>
+
       {/* ── Footer ── */}
-      <footer className="border-t border-white/10 py-10 pb-20 sm:pb-10">
-        <div className="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6 text-xs text-white/40">
-          <div className="flex items-center gap-2">
-            <Image src={ICON} alt="Umuhle" width={20} height={20} className="rounded-full object-cover opacity-60" />
-            <span>© {new Date().getFullYear()} Umuhle (Pty) Ltd</span>
+      <footer style={{ borderTop: "1px solid rgba(155,127,184,0.15)", background: "var(--white)", padding: "2rem 1.5rem" }}>
+        <div style={{ maxWidth: 900, margin: "0 auto", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "1rem" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <Image src={ICON} alt="Umuhle" width={24} height={24} style={{ borderRadius: "50%" }} />
+            <span style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.1rem", letterSpacing: "0.12em", color: "var(--plum)" }}>umuhle</span>
           </div>
-          <div className="flex flex-wrap gap-4">
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: "0.75rem", color: "var(--light)", letterSpacing: "0.05em", marginRight: "0.25rem" }}>Follow us</span>
             {SOCIALS.map(s => (
-              <a key={s.label} href={s.href} target="_blank" rel="noopener noreferrer" className="hover:text-white/70 transition-colors">{s.label}</a>
+              <a key={s.label} href={s.href} target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none", padding: "0.25rem 0.75rem", borderRadius: 100, border: "1px solid rgba(155,127,184,0.25)", transition: "all 0.2s" }}>
+                {s.label}
+              </a>
             ))}
-            <Link href="/privacy-policy" className="hover:text-white/70 transition-colors">Privacy</Link>
-            <Link href="/terms-and-conditions" className="hover:text-white/70 transition-colors">Terms</Link>
+            <Link href="/privacy-policy" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>Privacy</Link>
+            <Link href="/terms-and-conditions" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>Terms</Link>
           </div>
+          <p style={{ fontSize: "0.75rem", color: "var(--light)" }}>© {new Date().getFullYear()} Umuhle. All rights reserved.</p>
         </div>
       </footer>
 
+      {/* ── Cart drawer ── */}
+      {showCart && (
+        <div className="modal-overlay" onClick={() => setShowCart(false)}>
+          <div onClick={e => e.stopPropagation()} style={{ position: "fixed", top: 0, right: 0, height: "100vh", width: "min(360px,100vw)", background: "#fff", boxShadow: "-4px 0 40px rgba(0,0,0,0.12)", display: "flex", flexDirection: "column", zIndex: 10000 }}>
+            <div style={{ padding: "1.25rem 1.5rem", borderBottom: "1px solid rgba(155,127,184,0.15)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.2rem", margin: 0 }}>Your cart</h3>
+              <button onClick={() => setShowCart(false)} style={{ background: "none", border: "none", fontSize: "1.4rem", color: "var(--light)", cursor: "pointer", lineHeight: 1 }}>×</button>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", padding: "1rem 1.5rem" }}>
+              {cart.length === 0
+                ? <p style={{ color: "var(--light)", textAlign: "center", marginTop: "2rem" }}>Your cart is empty.</p>
+                : cart.map((item, i) => (
+                  <div key={`${item.id}-${i}`} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.75rem 0", borderBottom: "1px solid rgba(155,127,184,0.08)" }}>
+                    <div>
+                      <p style={{ fontWeight: 500, fontSize: "0.9rem", margin: 0 }}>{item.name}</p>
+                      <p style={{ fontSize: "0.8rem", color: "var(--grey)", margin: 0 }}>{fmt(item.price)}</p>
+                    </div>
+                    <button onClick={() => setCart(prev => prev.filter((_, idx) => idx !== i))} style={{ background: "none", border: "none", color: "var(--light)", fontSize: "1.1rem", cursor: "pointer" }}>×</button>
+                  </div>
+                ))
+              }
+            </div>
+            {cart.length > 0 && (
+              <div style={{ padding: "1.25rem 1.5rem", borderTop: "1px solid rgba(155,127,184,0.15)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "1rem", fontWeight: 600 }}>
+                  <span>Total</span><span>{fmt(cartTotal)}</span>
+                </div>
+                <Link href="/shop" onClick={() => setShowCart(false)}>
+                  <button className="btn-plum" style={{ width: "100%" }}>Go to Shop →</button>
+                </Link>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ── Auth modal ── */}
       {showAuth && (
-        <div
-          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-4"
-          onClick={e => { if (e.target === e.currentTarget) setShowAuth(false); }}
-        >
-          <div className="bg-[#231535] rounded-2xl w-full max-w-sm p-6 space-y-4">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="font-semibold text-base">
-                {authMode === "login" ? "Welcome back" : "Create account"}
-              </h2>
-              <button onClick={() => setShowAuth(false)} className="text-white/40 hover:text-white text-xl leading-none">×</button>
+        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setShowAuth(false); }}>
+          <div style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 420, boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
+            <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.6rem", marginBottom: "0.25rem" }}>
+              {authMode === "login" ? "Welcome back" : "Create account"}
+            </h2>
+            <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
+              {authMode === "login" ? "Sign in to book your next appointment." : "Join Umuhle — it&apos;s free."}
+            </p>
+
+            {/* OAuth buttons */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1.5rem" }}>
+              <button
+                onClick={() => handleOAuth("google")}
+                disabled={authLoading}
+                style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "1.5px solid #E0E0E0", background: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}
+              >
+                <svg width="20" height="20" viewBox="0 0 48 48">
+                  <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.2l6.7-6.7C35.8 2.4 30.2 0 24 0 14.8 0 6.9 5.4 3 13.3l7.8 6.1C12.6 13.1 17.9 9.5 24 9.5z"/>
+                  <path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.5c-.5 2.8-2.1 5.2-4.5 6.8l7 5.4c4.1-3.8 6.5-9.4 6.5-16.2z"/>
+                  <path fill="#FBBC05" d="M10.8 28.5A14.6 14.6 0 0 1 9.5 24c0-1.6.3-3.1.7-4.5L2.4 13.4A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.7l8.2-6.2z"/>
+                  <path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.2-5.5l-7-5.4c-2 1.4-4.6 2.2-8.2 2.2-6.1 0-11.3-4.1-13.2-9.7l-8.2 6.2C6.9 42.6 14.8 48 24 48z"/>
+                </svg>
+                Continue with Google
+              </button>
+              <button
+                onClick={() => handleOAuth("facebook")}
+                disabled={authLoading}
+                style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "none", background: "#1877F2", color: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff">
+                  <path d="M24 12a12 12 0 1 0-13.875 11.85v-8.385H7.08V12h3.045V9.356c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874V12h3.328l-.532 3.465h-2.796v8.385A12 12 0 0 0 24 12z"/>
+                </svg>
+                Continue with Facebook
+              </button>
             </div>
 
-            {/* Google */}
-            <button
-              onClick={handleGoogleLogin}
-              disabled={authLoading}
-              className="w-full flex items-center justify-center gap-2 bg-white text-[#1a1025] rounded-xl py-2.5 text-sm font-medium hover:bg-white/90 transition-colors disabled:opacity-50"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-              Continue with Google
-            </button>
-
-            <div className="flex items-center gap-3 text-white/20 text-xs">
-              <div className="flex-1 h-px bg-white/10" />or<div className="flex-1 h-px bg-white/10" />
+            <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1.5rem" }}>
+              <div style={{ flex: 1, height: 1, background: "#E0E0E0" }} />
+              <span style={{ fontSize: "0.8rem", color: "var(--light)" }}>or</span>
+              <div style={{ flex: 1, height: 1, background: "#E0E0E0" }} />
             </div>
 
-            <form onSubmit={handleEmailAuth} className="space-y-3">
+            <form onSubmit={handleEmailAuth} style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
               {authMode === "register" && (
                 <>
-                  <input
-                    type="text"
-                    placeholder="Full name"
-                    value={authForm.name}
-                    onChange={e => setAuthForm(f => ({ ...f, name: e.target.value }))}
-                    required
-                    className="w-full bg-white/10 border border-white/15 rounded-xl px-4 py-2.5 text-sm placeholder:text-white/30 focus:outline-none focus:border-[#c9a96e]"
-                  />
-                  <input
-                    type="tel"
-                    placeholder="Phone number (optional)"
-                    value={authForm.phone}
-                    onChange={e => setAuthForm(f => ({ ...f, phone: e.target.value }))}
-                    className="w-full bg-white/10 border border-white/15 rounded-xl px-4 py-2.5 text-sm placeholder:text-white/30 focus:outline-none focus:border-[#c9a96e]"
-                  />
+                  <input placeholder="Full name" value={authForm.name} onChange={e => setAuthForm(f => ({ ...f, name: e.target.value }))} required style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }} />
+                  <input placeholder="Phone number (e.g. 082 123 4567)" value={authForm.phone} onChange={e => setAuthForm(f => ({ ...f, phone: e.target.value }))} style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }} />
                 </>
               )}
-              <input
-                type="email"
-                placeholder="Email address"
-                value={authForm.email}
-                onChange={e => setAuthForm(f => ({ ...f, email: e.target.value }))}
-                required
-                className="w-full bg-white/10 border border-white/15 rounded-xl px-4 py-2.5 text-sm placeholder:text-white/30 focus:outline-none focus:border-[#c9a96e]"
-              />
-              <input
-                type="password"
-                placeholder="Password"
-                value={authForm.password}
-                onChange={e => setAuthForm(f => ({ ...f, password: e.target.value }))}
-                required
-                className="w-full bg-white/10 border border-white/15 rounded-xl px-4 py-2.5 text-sm placeholder:text-white/30 focus:outline-none focus:border-[#c9a96e]"
-              />
-
+              <input type="email" placeholder="Email address" value={authForm.email} onChange={e => setAuthForm(f => ({ ...f, email: e.target.value }))} required style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }} />
+              <input type="password" placeholder="Password" value={authForm.password} onChange={e => setAuthForm(f => ({ ...f, password: e.target.value }))} required style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }} />
               {authError && (
-                <p className={`text-xs px-1 ${authError.includes("Check your email") ? "text-green-400" : "text-red-400"}`}>
+                <p style={{ color: authError.includes("Check your email") ? "var(--forest)" : "#E53935", fontSize: "0.85rem", margin: 0 }}>
                   {authError}
                 </p>
               )}
-
-              <button
-                type="submit"
-                disabled={authLoading}
-                className="w-full bg-[#c9a96e] text-[#1a1025] font-semibold rounded-xl py-2.5 text-sm hover:bg-[#d4b87a] transition-colors disabled:opacity-50"
-              >
+              <button type="submit" className="btn-plum" style={{ marginTop: "0.25rem" }} disabled={authLoading}>
                 {authLoading ? "Please wait…" : authMode === "login" ? "Sign in" : "Create account"}
               </button>
             </form>
 
-            <p className="text-center text-xs text-white/40">
-              {authMode === "login" ? (
-                <>Don&apos;t have an account? <button onClick={() => { setAuthMode("register"); setAuthError(""); }} className="text-[#c9a96e] hover:underline">Sign up</button></>
-              ) : (
-                <>Already have an account? <button onClick={() => { setAuthMode("login"); setAuthError(""); }} className="text-[#c9a96e] hover:underline">Sign in</button></>
-              )}
+            <p style={{ textAlign: "center", marginTop: "1.25rem", fontSize: "0.875rem", color: "var(--grey)" }}>
+              {authMode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
+              <button onClick={() => { setAuthMode(authMode === "login" ? "register" : "login"); setAuthError(""); }} style={{ background: "none", border: "none", color: "var(--plum)", fontWeight: 500, cursor: "pointer" }}>
+                {authMode === "login" ? "Sign up" : "Sign in"}
+              </button>
             </p>
 
-            <p className="text-center text-[10px] text-white/25 leading-relaxed">
+            <p style={{ textAlign: "center", marginTop: "0.75rem", fontSize: "0.75rem", color: "var(--light)" }}>
               By continuing you agree to our{" "}
-              <Link href="/terms-and-conditions" className="underline hover:text-white/50" onClick={() => setShowAuth(false)}>Terms</Link>
+              <Link href="/terms-and-conditions" style={{ color: "var(--plum)" }} onClick={() => setShowAuth(false)}>Terms</Link>
               {" "}and{" "}
-              <Link href="/privacy-policy" className="underline hover:text-white/50" onClick={() => setShowAuth(false)}>Privacy Policy</Link>
+              <Link href="/privacy-policy" style={{ color: "var(--plum)" }} onClick={() => setShowAuth(false)}>Privacy Policy</Link>
             </p>
           </div>
         </div>
       )}
 
-      {/* ── Booking preview drawer ── */}
+      {/* ── Booking modal ── */}
       {selectedArtist && (
-        <BookingDrawer
-          artist={selectedArtist}
-          onClose={() => setSelectedArtist(null)}
-          user={user!}
-        />
+        <BookingDrawer artist={selectedArtist} onClose={() => setSelectedArtist(null)} user={user!} />
       )}
     </div>
   );
@@ -446,35 +475,26 @@ export default function Home() {
 // ─── Artist card ──────────────────────────────────────────────────────────────
 function ArtistCard({ artist, onBook }: { artist: Artist; onBook: () => void }) {
   return (
-    <div className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden hover:border-white/20 transition-colors group">
-      <div className="relative h-40 bg-white/5">
-        <Image
-          src={artist.avatar_url ?? "/umuhle-icon.png"}
-          alt={artist.display_name}
-          fill
-          className="object-cover group-hover:scale-105 transition-transform duration-500"
-          onError={e => { (e.target as HTMLImageElement).src = "/umuhle-icon.png"; }}
-        />
-        {artist.is_verified && (
-          <span className="absolute top-2 right-2 bg-[#c9a96e] text-[#1a1025] text-[10px] font-bold px-2 py-0.5 rounded-full">
-            ✓ Verified
-          </span>
-        )}
+    <div
+      style={{ borderRadius: 18, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.15)", background: "#fff", transition: "transform 0.2s, box-shadow 0.2s" }}
+      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.transform = "translateY(-3px)"; (e.currentTarget as HTMLDivElement).style.boxShadow = "0 12px 40px rgba(155,127,184,0.15)"; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.transform = ""; (e.currentTarget as HTMLDivElement).style.boxShadow = ""; }}
+    >
+      <div style={{ height: 180, overflow: "hidden", position: "relative", background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <Image src={artist.avatar_url ?? ICON} alt={artist.display_name} width={100} height={100} style={{ objectFit: "contain", opacity: 0.85 }} />
+        {artist.is_verified && <span style={{ position: "absolute", top: 10, right: 10, background: "var(--forest)", color: "#fff", borderRadius: 100, padding: "0.2rem 0.6rem", fontSize: "0.7rem", fontWeight: 600 }}>✓ Verified</span>}
+        <span style={{ position: "absolute", bottom: 10, left: 10, background: "rgba(255,255,255,0.9)", borderRadius: 100, padding: "0.2rem 0.75rem", fontSize: "0.75rem", fontWeight: 500, color: "var(--plum)", backdropFilter: "blur(4px)" }}>
+          {CAT_ICONS[artist.category] ?? ""} {artist.category}
+        </span>
       </div>
-      <div className="p-4">
-        <div className="flex items-start justify-between mb-1">
-          <h3 className="font-semibold text-sm leading-tight">{artist.display_name}</h3>
-          <span className="text-xs text-white/50 shrink-0 ml-2">⭐ {artist.rating.toFixed(1)}</span>
+      <div style={{ padding: "1rem" }}>
+        <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1.05rem", marginBottom: "0.25rem" }}>{artist.display_name}</h3>
+        <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginBottom: "0.5rem" }}>{artist.suburb}</p>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.75rem" }}>
+          <span style={{ color: "#F4B400", fontSize: "0.85rem" }}>★ {artist.rating.toFixed(1)}</span>
+          <span style={{ fontSize: "0.75rem", color: "var(--light)" }}>{artist.review_count} reviews</span>
         </div>
-        <p className="text-xs text-[#c9a96e] capitalize mb-1">{artist.category}</p>
-        <p className="text-xs text-white/40 mb-1">{artist.suburb ? `${artist.suburb}, ` : ""}{artist.city}</p>
-        <p className="text-xs text-white/50 line-clamp-2 mb-3">{artist.bio}</p>
-        <button
-          onClick={onBook}
-          className="w-full bg-[#c9a96e] text-[#1a1025] text-xs font-semibold py-2 rounded-xl hover:bg-[#d4b87a] transition-colors"
-        >
-          Book now
-        </button>
+        <button className="btn-plum" style={{ width: "100%", padding: "0.6rem" }} onClick={onBook}>Book now</button>
       </div>
     </div>
   );
@@ -484,24 +504,21 @@ function ArtistCard({ artist, onBook }: { artist: Artist; onBook: () => void }) 
 function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () => void; user: User }) {
   const supabase = createClient();
   type Service = { id: string; name: string; price: number; duration_minutes: number };
-  const [services, setServices]     = useState<Service[]>([]);
-  const [selected, setSelected]     = useState<Service | null>(null);
-  const [date, setDate]             = useState("");
-  const [time, setTime]             = useState("");
-  const [address, setAddress]       = useState("");
-  const [pocName, setPocName]       = useState("");
-  const [pocPhone, setPocPhone]     = useState("");
-  const [step, setStep]             = useState<"services" | "datetime" | "confirm">("services");
-  const [loading, setLoading]       = useState(false);
-  const [error, setError]           = useState("");
+  const [services, setServices]   = useState<Service[]>([]);
+  const [selected, setSelected]   = useState<Service | null>(null);
+  const [date, setDate]           = useState("");
+  const [time, setTime]           = useState("");
+  const [address, setAddress]     = useState("");
+  const [pocName, setPocName]     = useState("");
+  const [pocPhone, setPocPhone]   = useState("");
+  const [step, setStep]           = useState<"services" | "datetime" | "confirm">("services");
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState("");
 
   useEffect(() => {
-    supabase
-      .from("services")
-      .select("id, name, price, duration_minutes")
-      .eq("artist_id", artist.id)
-      .eq("is_active", true)
+    supabase.from("services").select("id, name, price, duration_minutes").eq("artist_id", artist.id).eq("is_active", true)
       .then(({ data }) => setServices((data ?? []) as Service[]));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artist.id]);
 
   const handleBook = async () => {
@@ -512,177 +529,101 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
       const res = await fetch("/api/payfast/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "booking",
-          serviceId: selected.id,
-          artistId: artist.id,
-          bookingDate: date,
-          bookingTime: time,
-          meetingAddress: address,
-          clientPocName: pocName,
-          clientPocPhone: pocPhone,
-        }),
+        body: JSON.stringify({ type: "booking", serviceId: selected.id, artistId: artist.id, bookingDate: date, bookingTime: time, meetingAddress: address, clientPocName: pocName, clientPocPhone: pocPhone }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Payment initiation failed");
-
-      // Submit PayFast form
       const form = document.createElement("form");
-      form.method = "POST";
-      form.action = data.payfastUrl;
+      form.method = "POST"; form.action = data.payfastUrl;
       Object.entries(data.params as Record<string, string>).forEach(([k, v]) => {
-        const input = document.createElement("input");
-        input.type = "hidden";
-        input.name = k;
-        input.value = v;
-        form.appendChild(input);
+        const inp = document.createElement("input"); inp.type = "hidden"; inp.name = k; inp.value = v; form.appendChild(inp);
       });
-      document.body.appendChild(form);
-      form.submit();
+      document.body.appendChild(form); form.submit();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setLoading(false);
     }
   };
 
-  const minDate = new Date();
-  minDate.setDate(minDate.getDate() + 1);
-  const minDateStr = minDate.toISOString().split("T")[0];
+  const minDate = new Date(); minDate.setDate(minDate.getDate() + 1);
+  const inputStyle = { padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", width: "100%", boxSizing: "border-box" as const };
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-4"
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div className="bg-[#231535] rounded-2xl w-full max-w-sm p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between">
-          <h2 className="font-semibold text-sm">Book {artist.display_name}</h2>
-          <button onClick={onClose} className="text-white/40 hover:text-white text-xl leading-none">×</button>
+    <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 500, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
+        <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginBottom: "1.5rem" }}>
+          <Image src={artist.avatar_url ?? ICON} alt={artist.display_name} width={56} height={56} style={{ borderRadius: "50%", objectFit: "cover" }} />
+          <div>
+            <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1.2rem", margin: 0 }}>{artist.display_name}</h3>
+            <p style={{ color: "var(--grey)", fontSize: "0.85rem", margin: 0 }}>{artist.suburb} · ★ {artist.rating.toFixed(1)}</p>
+          </div>
+          <button onClick={onClose} style={{ marginLeft: "auto", background: "none", border: "none", fontSize: "1.4rem", color: "var(--light)", lineHeight: 1, cursor: "pointer" }}>×</button>
         </div>
 
-        {/* Step: Services */}
         {step === "services" && (
-          <div className="space-y-2">
-            <p className="text-xs text-white/40 mb-3">Select a service</p>
-            {services.length === 0 && <p className="text-xs text-white/30">No services listed yet.</p>}
-            {services.map(s => (
-              <button
-                key={s.id}
-                onClick={() => setSelected(s)}
-                className={`w-full text-left px-4 py-3 rounded-xl border transition-colors ${
-                  selected?.id === s.id
-                    ? "border-[#c9a96e] bg-[#c9a96e]/10"
-                    : "border-white/10 hover:border-white/20"
-                }`}
-              >
-                <div className="flex justify-between items-center">
-                  <span className="text-sm font-medium">{s.name}</span>
-                  <span className="text-[#c9a96e] font-semibold text-sm">{fmt(s.price)}</span>
-                </div>
-                <p className="text-xs text-white/40 mt-0.5">~{s.duration_minutes} min</p>
-              </button>
-            ))}
-            <button
-              disabled={!selected}
-              onClick={() => setStep("datetime")}
-              className="w-full bg-[#c9a96e] text-[#1a1025] font-semibold rounded-xl py-2.5 text-sm mt-2 disabled:opacity-40 hover:bg-[#d4b87a] transition-colors"
-            >
-              Continue
-            </button>
-          </div>
+          <>
+            <h4 style={{ fontWeight: 500, marginBottom: "1rem" }}>Choose a service</h4>
+            {services.length === 0 && <p style={{ color: "var(--grey)" }}>No services listed yet.</p>}
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+              {services.map(svc => (
+                <button key={svc.id} onClick={() => { setSelected(svc); setStep("datetime"); }}
+                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "1rem 1.25rem", borderRadius: 14, border: `1.5px solid ${selected?.id === svc.id ? "var(--plum)" : "rgba(155,127,184,0.2)"}`, background: "var(--plum-t)", textAlign: "left", cursor: "pointer" }}>
+                  <div>
+                    <div style={{ fontWeight: 500, fontSize: "0.95rem" }}>{svc.name}</div>
+                    <div style={{ fontSize: "0.8rem", color: "var(--grey)", marginTop: 2 }}>{svc.duration_minutes} min</div>
+                  </div>
+                  <div style={{ fontWeight: 600, color: "var(--plum)", fontSize: "1rem" }}>{fmt(svc.price)}</div>
+                </button>
+              ))}
+            </div>
+          </>
         )}
 
-        {/* Step: Date & time */}
         {step === "datetime" && (
-          <div className="space-y-3">
-            <p className="text-xs text-white/40">Choose date &amp; time</p>
-            <input
-              type="date"
-              min={minDateStr}
-              value={date}
-              onChange={e => setDate(e.target.value)}
-              className="w-full bg-white/10 border border-white/15 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#c9a96e]"
-            />
-            <input
-              type="time"
-              value={time}
-              onChange={e => setTime(e.target.value)}
-              className="w-full bg-white/10 border border-white/15 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[#c9a96e]"
-            />
-            <input
-              type="text"
-              placeholder="Meeting address (optional)"
-              value={address}
-              onChange={e => setAddress(e.target.value)}
-              className="w-full bg-white/10 border border-white/15 rounded-xl px-4 py-2.5 text-sm placeholder:text-white/30 focus:outline-none focus:border-[#c9a96e]"
-            />
-            <div className="border-t border-white/10 pt-3">
-              <p className="text-xs text-white/40 mb-2">Point of contact (optional)</p>
-              <input
-                type="text"
-                placeholder="Contact name"
-                value={pocName}
-                onChange={e => setPocName(e.target.value)}
-                className="w-full bg-white/10 border border-white/15 rounded-xl px-4 py-2.5 text-sm placeholder:text-white/30 focus:outline-none focus:border-[#c9a96e] mb-2"
-              />
-              <input
-                type="tel"
-                placeholder="Contact phone"
-                value={pocPhone}
-                onChange={e => setPocPhone(e.target.value)}
-                className="w-full bg-white/10 border border-white/15 rounded-xl px-4 py-2.5 text-sm placeholder:text-white/30 focus:outline-none focus:border-[#c9a96e]"
-              />
+          <>
+            <button onClick={() => setStep("services")} style={{ background: "none", border: "none", color: "var(--plum)", fontSize: "0.85rem", cursor: "pointer", marginBottom: "1rem" }}>← Back</button>
+            <h4 style={{ fontWeight: 500, marginBottom: "1rem" }}>Pick a date &amp; time</h4>
+            <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+              <input type="date" value={date} min={minDate.toISOString().split("T")[0]} onChange={e => setDate(e.target.value)} style={inputStyle} />
+              <input type="time" value={time} onChange={e => setTime(e.target.value)} style={inputStyle} />
+              <input type="text" placeholder="Meeting address (optional)" value={address} onChange={e => setAddress(e.target.value)} style={inputStyle} />
+              <div>
+                <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.5rem" }}>Point of contact (optional)</p>
+                <input type="text" placeholder="Contact name" value={pocName} onChange={e => setPocName(e.target.value)} style={{ ...inputStyle, marginBottom: "0.75rem" }} />
+                <input type="tel" placeholder="Contact phone" value={pocPhone} onChange={e => setPocPhone(e.target.value)} style={inputStyle} />
+              </div>
+              <button className="btn-plum" disabled={!date || !time} onClick={() => setStep("confirm")}>Review booking →</button>
             </div>
-            <div className="flex gap-2">
-              <button onClick={() => setStep("services")} className="flex-1 border border-white/20 rounded-xl py-2.5 text-sm text-white/60 hover:border-white/40">Back</button>
-              <button
-                disabled={!date || !time}
-                onClick={() => setStep("confirm")}
-                className="flex-1 bg-[#c9a96e] text-[#1a1025] font-semibold rounded-xl py-2.5 text-sm disabled:opacity-40 hover:bg-[#d4b87a] transition-colors"
-              >
-                Continue
-              </button>
-            </div>
-          </div>
+          </>
         )}
 
-        {/* Step: Confirm */}
         {step === "confirm" && selected && (
-          <div className="space-y-4">
-            <div className="bg-white/5 rounded-xl p-4 space-y-2 text-sm">
-              <Row label="Service"  value={selected.name} />
-              <Row label="Artist"   value={artist.display_name} />
-              <Row label="Date"     value={date} />
-              <Row label="Time"     value={time} />
-              {address && <Row label="Address" value={address} />}
-              <div className="border-t border-white/10 pt-2 mt-2">
-                <Row label="Total" value={fmt(selected.price)} highlight />
+          <>
+            <button onClick={() => setStep("datetime")} style={{ background: "none", border: "none", color: "var(--plum)", fontSize: "0.85rem", cursor: "pointer", marginBottom: "1rem" }}>← Back</button>
+            <h4 style={{ fontWeight: 500, marginBottom: "1.25rem" }}>Confirm booking</h4>
+            <div style={{ background: "var(--surface)", borderRadius: 14, padding: "1.25rem", marginBottom: "1.5rem" }}>
+              {[["Artist", artist.display_name], ["Service", selected.name], ["Date", date], ["Time", time], ...(address ? [["Address", address]] : [])].map(([l, v]) => (
+                <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "0.3rem 0", fontSize: "0.9rem" }}>
+                  <span style={{ color: "var(--grey)" }}>{l}</span>
+                  <span>{v}</span>
+                </div>
+              ))}
+              <div style={{ borderTop: "1px dashed rgba(155,127,184,0.3)", margin: "0.75rem 0" }} />
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "0.3rem 0", fontSize: "0.9rem" }}>
+                <span style={{ color: "var(--grey)" }}>Total</span>
+                <span style={{ fontWeight: 700, color: "var(--plum)" }}>{fmt(selected.price)}</span>
               </div>
             </div>
-            {error && <p className="text-red-400 text-xs">{error}</p>}
-            <div className="flex gap-2">
-              <button onClick={() => setStep("datetime")} className="flex-1 border border-white/20 rounded-xl py-2.5 text-sm text-white/60 hover:border-white/40">Back</button>
-              <button
-                onClick={handleBook}
-                disabled={loading}
-                className="flex-1 bg-[#c9a96e] text-[#1a1025] font-semibold rounded-xl py-2.5 text-sm disabled:opacity-50 hover:bg-[#d4b87a] transition-colors"
-              >
-                {loading ? "Redirecting…" : "Pay now"}
-              </button>
-            </div>
-            <p className="text-[10px] text-white/25 text-center">Redirecting to PayFast — secure payment</p>
-          </div>
+            {error && <p style={{ color: "#E53935", fontSize: "0.85rem", marginBottom: "1rem" }}>{error}</p>}
+            <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginBottom: "1.25rem" }}>
+              You&apos;ll be redirected to PayFast to complete payment securely. Once paid, you&apos;ll receive a WhatsApp confirmation.
+            </p>
+            <button className="btn-plum" style={{ width: "100%", padding: "0.875rem" }} onClick={handleBook} disabled={loading}>
+              {loading ? "Redirecting to PayFast…" : `Pay ${fmt(selected.price)} securely →`}
+            </button>
+          </>
         )}
       </div>
-    </div>
-  );
-}
-
-function Row({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
-  return (
-    <div className="flex justify-between items-center">
-      <span className="text-white/50 text-xs">{label}</span>
-      <span className={`text-xs font-medium ${highlight ? "text-[#c9a96e] font-semibold" : "text-white"}`}>{value}</span>
     </div>
   );
 }
