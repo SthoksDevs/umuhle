@@ -332,7 +332,7 @@ export default function Home() {
               </a>
             ))}
           </div>
-          <p style={{ fontSize: "0.75rem", color: "var(--light)" }}>© {new Date().getFullYear()} Umuhle. All rights reserved.</p>
+          <p style={{ fontSize: "0.75rem", color: "var(--light)" }}>© {new Date().getFullYear()} Umuhle. All rights reserved. <a href="/privacy-policy">Privacy Policy.</a> <a href="/terms-and-conditions">Terms and Conditions</a></p>
         </div>
       </footer>
 

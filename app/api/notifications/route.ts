@@ -3,8 +3,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { notifyBookingReminder } from "@/lib/whatsapp";
 
-// Called by a cron job (e.g. Vercel Cron or external scheduler) every hour.
-// Sends WhatsApp reminders for bookings starting in 12-24 hours that haven't been reminded yet.
 export async function POST(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -24,11 +22,9 @@ export async function POST(request: NextRequest) {
       booking_date,
       booking_time,
       client_poc_phone,
-      artist_poc_phone,
       client:profiles!bookings_client_id_fkey(full_name, phone),
       artist:artists!bookings_artist_id_fkey(
         display_name,
-        point_of_contact_name,
         point_of_contact_phone,
         profile:profiles!artists_profile_id_fkey(phone)
       ),
@@ -47,25 +43,27 @@ export async function POST(request: NextRequest) {
   let sent = 0;
 
   for (const booking of bookings ?? []) {
-    const clientPhone = (booking.client as { phone?: string })?.phone;
-    const artistPhone = (booking.artist as { profile?: { phone?: string } })?.profile?.phone;
+    // Supabase returns joined rows as arrays when using foreign keys
+    const clientRow = Array.isArray(booking.client) ? booking.client[0] : booking.client;
+    const artistRow = Array.isArray(booking.artist) ? booking.artist[0] : booking.artist;
+    const serviceRow = Array.isArray(booking.service) ? booking.service[0] : booking.service;
+    const artistProfileRow = Array.isArray(artistRow?.profile) ? artistRow.profile[0] : artistRow?.profile;
+
+    const clientPhone = clientRow?.phone as string | undefined;
+    const artistPhone = artistProfileRow?.phone as string | undefined;
 
     if (!clientPhone || !artistPhone) continue;
 
-    const artist = booking.artist as { display_name: string; point_of_contact_phone?: string };
-    const client = booking.client as { full_name: string };
-    const service = booking.service as { name: string; duration_minutes: number };
-
     await notifyBookingReminder({
-      clientName: client.full_name,
+      clientName: clientRow.full_name as string,
       clientPhone,
-      artistName: artist.display_name,
+      artistName: artistRow.display_name as string,
       artistPhone,
       date: booking.booking_date,
       time: booking.booking_time,
-      serviceName: service.name,
+      serviceName: serviceRow?.name as string,
       clientPocPhone: booking.client_poc_phone ?? undefined,
-      artistPocPhone: artist.point_of_contact_phone ?? undefined,
+      artistPocPhone: artistRow?.point_of_contact_phone as string | undefined,
     });
 
     await supabase
