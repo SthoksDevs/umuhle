@@ -21,7 +21,7 @@ function ttq(event: string, params?: Record<string, unknown>) {
 function fbq(event: string, params?: Record<string, unknown>) {
   if (typeof window !== "undefined" && window.fbq) window.fbq("track", event, params);
 }
-function gtag(event: string, params?: Record<string, unknown>) {
+function gTag(event: string, params?: Record<string, unknown>) {
   if (typeof window !== "undefined" && window.gtag) window.gtag("event", event, params);
 }
 
@@ -81,9 +81,14 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
     if (params.get("auth") === "login") { setShowAuth(true); setAuthMode("login"); }
     if (params.get("auth") === "register") { setShowAuth(true); setAuthMode("register"); }
+    // Clear error hash from OAuth failures so UI stays clean
+    if (window.location.hash.includes("error")) {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
   }, []);
 
   const fetchProfile = async (userId: string) => {
@@ -131,7 +136,7 @@ export default function Home() {
         const { error } = await supabase.auth.signInWithPassword({ email: authForm.email, password: authForm.password });
         if (error) throw error;
         setShowAuth(false);
-        gtag("login", { method: "email" });
+        gTag("login", { method: "email" });
         fbq("Login");
       } else {
         const { error } = await supabase.auth.signUp({
@@ -144,7 +149,7 @@ export default function Home() {
         });
         if (error) throw error;
         setAuthError("Check your email to confirm your account.");
-        gtag("sign_up", { method: "email" });
+        gTag("sign_up", { method: "email" });
         fbq("CompleteRegistration");
         ttq("CompleteRegistration");
       }
@@ -164,11 +169,27 @@ export default function Home() {
     setCart(prev => [...prev, item]);
     ttq("AddToCart", { contents: [{ content_id: item.id, content_name: item.name }], value: item.price / 100, currency: "ZAR" });
     fbq("AddToCart", { content_ids: [item.id], content_name: item.name, value: item.price / 100, currency: "ZAR" });
-    gtag("add_to_cart", { currency: "ZAR", value: item.price / 100 });
+    gTag("add_to_cart", { currency: "ZAR", value: item.price / 100 });
   };
+  void addToCart; // referenced by cart drawer
 
   const cartCount = cart.length;
   const cartTotal = cart.reduce((s, i) => s + i.price, 0);
+
+  // ── Nav button style ─────────────────────────────────────────────────────
+  const navLink = (active: boolean) => ({
+    background: active ? "var(--plum-t)" : "transparent",
+    border: "none",
+    borderRadius: 100,
+    padding: "0.4rem 1rem",
+    color: active ? "var(--plum)" : "var(--grey)",
+    fontWeight: active ? 500 : 400,
+    fontSize: "0.875rem",
+    textDecoration: "none" as const,
+    transition: "all 0.2s",
+    cursor: "pointer" as const,
+    display: "inline-block" as const,
+  });
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
@@ -177,39 +198,26 @@ export default function Home() {
       {/* ── Nav ── */}
       <nav style={{ position: "sticky", top: 0, zIndex: 100, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(155,127,184,0.15)", padding: "0 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", height: 60 }}>
 
-        {/* Logo */}
-        <Link href="/" style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.5rem", padding: 0, textDecoration: "none" }}>
+        <Link href="/" style={{ display: "flex", alignItems: "center", gap: "0.5rem", textDecoration: "none" }}>
           <Image src={ICON} alt="Umuhle" width={32} height={32} style={{ borderRadius: "50%", objectFit: "cover" }} />
           <span style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.2rem", letterSpacing: "0.12em", color: "var(--plum)" }}>umuhle</span>
         </Link>
 
-        {/* Centre nav */}
         <div style={{ display: "flex", gap: "0.15rem" }}>
-          {[
-            { label: "Search", href: "/" },
-            { label: "Shop",   href: "/shop" },
-            { label: "Earn",   href: "/earn" },
-          ].map(item => (
-            <Link key={item.label} href={item.href} style={{ background: "transparent", border: "none", borderRadius: 100, padding: "0.4rem 1rem", color: "var(--grey)", fontWeight: 400, fontSize: "0.875rem", textDecoration: "none", transition: "all 0.2s" }}>
-              {item.label}
-            </Link>
-          ))}
-          {user && (
-            <Link href="/dashboard" style={{ background: "transparent", border: "none", borderRadius: 100, padding: "0.4rem 1rem", color: "var(--grey)", fontWeight: 400, fontSize: "0.875rem", textDecoration: "none" }}>
-              Dashboard
-            </Link>
-          )}
+          <Link href="/"     style={navLink(true)}>Search</Link>
+          <Link href="/shop" style={navLink(false)}>Shop</Link>
+          <Link href="/earn" style={navLink(false)}>Earn</Link>
+          {user && <Link href="/dashboard" style={navLink(false)}>Dashboard</Link>}
         </div>
 
-        {/* Right: cart + auth */}
         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          {/* Cart icon */}
+          {/* Cart */}
           <button
             onClick={() => setShowCart(true)}
             aria-label={`Cart — ${cartCount} item${cartCount !== 1 ? "s" : ""}`}
             style={{ position: "relative", background: "none", border: "none", cursor: "pointer", padding: "0.3rem", color: "var(--grey)", display: "flex" }}
           >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
               <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/>
             </svg>
             {cartCount > 0 && (
@@ -230,22 +238,19 @@ export default function Home() {
         </div>
       </nav>
 
-      {/* ── Main content ── */}
+      {/* ── Page ── */}
       <div style={{ flex: 1 }}>
         <main style={{ minHeight: "80vh", background: "var(--white)" }}>
+
           {/* Hero */}
           <section style={{ background: "linear-gradient(135deg, var(--plum-t) 0%, #fff 60%)", padding: "5rem 1.5rem 3rem", textAlign: "center" }}>
             <p style={{ fontFamily: "var(--font-display)", fontSize: "0.8rem", letterSpacing: "0.35em", color: "var(--nude)", textTransform: "uppercase", marginBottom: "1rem" }}>beauty, near you</p>
             <h1 style={{ fontFamily: "var(--font-display)", fontSize: "clamp(2.5rem,6vw,4.5rem)", fontWeight: 300, color: "var(--onyx)", lineHeight: 1.1, marginBottom: "1.25rem" }}>
               You are <em style={{ color: "var(--plum)", fontStyle: "italic" }}>beautiful</em>
             </h1>
-            <p style={{ fontSize: "1.1rem", color: "var(--grey)", maxWidth: 480, margin: "0 auto 2rem" }}>
+            <p style={{ fontSize: "1.1rem", color: "var(--grey)", maxWidth: 480, margin: "0 auto" }}>
               Book trusted hair stylists, nail techs &amp; makeup artists — right in your neighbourhood.
             </p>
-            <div style={{ display: "flex", gap: "0.75rem", justifyContent: "center", flexWrap: "wrap" }}>
-              <button className="btn-plum" onClick={() => document.getElementById("artists")?.scrollIntoView({ behavior: "smooth" })}>Find an artist</button>
-              <button className="btn-outline" onClick={() => { setAuthMode("register"); setShowAuth(true); }}>Join as a partner</button>
-            </div>
           </section>
 
           {/* Category pills */}
@@ -255,12 +260,7 @@ export default function Home() {
                 <button
                   key={cat}
                   onClick={() => setActiveCategory(cat)}
-                  style={{
-                    flexShrink: 0, borderRadius: 100, padding: "0.5rem 1.25rem",
-                    background: activeCategory === cat ? "var(--plum)" : "var(--plum-t)",
-                    color: activeCategory === cat ? "#fff" : "var(--plum)",
-                    border: "none", fontWeight: 500, fontSize: "0.875rem", transition: "all 0.2s", cursor: "pointer",
-                  }}
+                  style={{ flexShrink: 0, borderRadius: 100, padding: "0.5rem 1.25rem", background: activeCategory === cat ? "var(--plum)" : "var(--plum-t)", color: activeCategory === cat ? "#fff" : "var(--plum)", border: "none", fontWeight: 500, fontSize: "0.875rem", transition: "all 0.2s", cursor: "pointer" }}
                 >
                   {cat !== "All" && CAT_ICONS[cat.toLowerCase()] ? `${CAT_ICONS[cat.toLowerCase()]} ` : ""}{cat}
                 </button>
@@ -279,7 +279,7 @@ export default function Home() {
                 if (e.target.value.length > 2) {
                   ttq("Search", { search_string: e.target.value });
                   fbq("Search", { search_string: e.target.value });
-                  gtag("search", { search_term: e.target.value });
+                  gTag("search", { search_term: e.target.value });
                 }
               }}
               style={{ width: "100%", padding: "0.75rem 1.25rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", fontSize: "0.95rem", color: "var(--onyx)", background: "var(--plum-t)", boxSizing: "border-box" }}
@@ -334,17 +334,17 @@ export default function Home() {
             <Image src={ICON} alt="Umuhle" width={24} height={24} style={{ borderRadius: "50%" }} />
             <span style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.1rem", letterSpacing: "0.12em", color: "var(--plum)" }}>umuhle</span>
           </div>
-          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: "0.75rem", color: "var(--light)", letterSpacing: "0.05em", marginRight: "0.25rem" }}>Follow us</span>
+          <div style={{ display: "flex", gap: "1.25rem", alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: "0.75rem", color: "var(--light)", letterSpacing: "0.05em" }}>Follow us</span>
             {SOCIALS.map(s => (
-              <a key={s.label} href={s.href} target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none", padding: "0.25rem 0.75rem", borderRadius: 100, border: "1px solid rgba(155,127,184,0.25)", transition: "all 0.2s" }}>
+              <a key={s.label} href={s.href} target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none", transition: "color 0.2s" }}>
                 {s.label}
               </a>
             ))}
             <Link href="/privacy-policy" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>Privacy</Link>
             <Link href="/terms-and-conditions" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>Terms</Link>
           </div>
-          <p style={{ fontSize: "0.75rem", color: "var(--light)" }}>© {new Date().getFullYear()} Umuhle. All rights reserved.</p>
+          <p style={{ fontSize: "0.75rem", color: "var(--light)", margin: 0 }}>© {new Date().getFullYear()} Umuhle. All rights reserved.</p>
         </div>
       </footer>
 
@@ -376,7 +376,7 @@ export default function Home() {
                   <span>Total</span><span>{fmt(cartTotal)}</span>
                 </div>
                 <Link href="/shop" onClick={() => setShowCart(false)}>
-                  <button className="btn-plum" style={{ width: "100%" }}>Go to Shop →</button>
+                  <button className="btn-plum" style={{ width: "100%" }}>Go to Shop</button>
                 </Link>
               </div>
             )}
@@ -386,22 +386,18 @@ export default function Home() {
 
       {/* ── Auth modal ── */}
       {showAuth && (
-        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setShowAuth(false); }}>
+        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) { setShowAuth(false); setAuthError(""); } }}>
           <div style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 420, boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
             <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.6rem", marginBottom: "0.25rem" }}>
               {authMode === "login" ? "Welcome back" : "Create account"}
             </h2>
             <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-              {authMode === "login" ? "Sign in to book your next appointment." : "Join Umuhle — it&apos;s free."}
+              {authMode === "login" ? "Sign in to book your next appointment." : "Join Umuhle — it's free."}
             </p>
 
-            {/* OAuth buttons */}
+            {/* OAuth */}
             <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1.5rem" }}>
-              <button
-                onClick={() => handleOAuth("google")}
-                disabled={authLoading}
-                style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "1.5px solid #E0E0E0", background: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}
-              >
+              <button onClick={() => handleOAuth("google")} disabled={authLoading} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "1.5px solid #E0E0E0", background: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}>
                 <svg width="20" height="20" viewBox="0 0 48 48">
                   <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.2l6.7-6.7C35.8 2.4 30.2 0 24 0 14.8 0 6.9 5.4 3 13.3l7.8 6.1C12.6 13.1 17.9 9.5 24 9.5z"/>
                   <path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.5c-.5 2.8-2.1 5.2-4.5 6.8l7 5.4c4.1-3.8 6.5-9.4 6.5-16.2z"/>
@@ -410,11 +406,7 @@ export default function Home() {
                 </svg>
                 Continue with Google
               </button>
-              <button
-                onClick={() => handleOAuth("facebook")}
-                disabled={authLoading}
-                style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "none", background: "#1877F2", color: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}
-              >
+              <button onClick={() => handleOAuth("facebook")} disabled={authLoading} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "none", background: "#1877F2", color: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}>
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff">
                   <path d="M24 12a12 12 0 1 0-13.875 11.85v-8.385H7.08V12h3.045V9.356c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874V12h3.328l-.532 3.465h-2.796v8.385A12 12 0 0 0 24 12z"/>
                 </svg>
@@ -481,8 +473,8 @@ function ArtistCard({ artist, onBook }: { artist: Artist; onBook: () => void }) 
       onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.transform = ""; (e.currentTarget as HTMLDivElement).style.boxShadow = ""; }}
     >
       <div style={{ height: 180, overflow: "hidden", position: "relative", background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <Image src={artist.avatar_url ?? ICON} alt={artist.display_name} width={100} height={100} style={{ objectFit: "contain", opacity: 0.85 }} />
-        {artist.is_verified && <span style={{ position: "absolute", top: 10, right: 10, background: "var(--forest)", color: "#fff", borderRadius: 100, padding: "0.2rem 0.6rem", fontSize: "0.7rem", fontWeight: 600 }}>✓ Verified</span>}
+        <Image src={artist.avatar_url ?? "/umuhle-icon.png"} alt={artist.display_name} width={100} height={100} style={{ objectFit: "contain", opacity: 0.85 }} />
+        {artist.is_verified && <span style={{ position: "absolute", top: 10, right: 10, background: "var(--forest)", color: "#fff", borderRadius: 100, padding: "0.2rem 0.6rem", fontSize: "0.7rem", fontWeight: 600 }}>Verified</span>}
         <span style={{ position: "absolute", bottom: 10, left: 10, background: "rgba(255,255,255,0.9)", borderRadius: 100, padding: "0.2rem 0.75rem", fontSize: "0.75rem", fontWeight: 500, color: "var(--plum)", backdropFilter: "blur(4px)" }}>
           {CAT_ICONS[artist.category] ?? ""} {artist.category}
         </span>
@@ -523,8 +515,7 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
 
   const handleBook = async () => {
     if (!selected) return;
-    setLoading(true);
-    setError("");
+    setLoading(true); setError("");
     try {
       const res = await fetch("/api/payfast/initiate", {
         method: "POST",
@@ -546,13 +537,13 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
   };
 
   const minDate = new Date(); minDate.setDate(minDate.getDate() + 1);
-  const inputStyle = { padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", width: "100%", boxSizing: "border-box" as const };
+  const inputStyle: React.CSSProperties = { padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", width: "100%", boxSizing: "border-box" };
 
   return (
     <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 500, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
         <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginBottom: "1.5rem" }}>
-          <Image src={artist.avatar_url ?? ICON} alt={artist.display_name} width={56} height={56} style={{ borderRadius: "50%", objectFit: "cover" }} />
+          <Image src={artist.avatar_url ?? "/umuhle-icon.png"} alt={artist.display_name} width={56} height={56} style={{ borderRadius: "50%", objectFit: "cover" }} />
           <div>
             <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1.2rem", margin: 0 }}>{artist.display_name}</h3>
             <p style={{ color: "var(--grey)", fontSize: "0.85rem", margin: 0 }}>{artist.suburb} · ★ {artist.rating.toFixed(1)}</p>
@@ -568,10 +559,7 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
               {services.map(svc => (
                 <button key={svc.id} onClick={() => { setSelected(svc); setStep("datetime"); }}
                   style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "1rem 1.25rem", borderRadius: 14, border: `1.5px solid ${selected?.id === svc.id ? "var(--plum)" : "rgba(155,127,184,0.2)"}`, background: "var(--plum-t)", textAlign: "left", cursor: "pointer" }}>
-                  <div>
-                    <div style={{ fontWeight: 500, fontSize: "0.95rem" }}>{svc.name}</div>
-                    <div style={{ fontSize: "0.8rem", color: "var(--grey)", marginTop: 2 }}>{svc.duration_minutes} min</div>
-                  </div>
+                  <div><div style={{ fontWeight: 500, fontSize: "0.95rem" }}>{svc.name}</div><div style={{ fontSize: "0.8rem", color: "var(--grey)", marginTop: 2 }}>{svc.duration_minutes} min</div></div>
                   <div style={{ fontWeight: 600, color: "var(--plum)", fontSize: "1rem" }}>{fmt(svc.price)}</div>
                 </button>
               ))}
@@ -581,7 +569,7 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
 
         {step === "datetime" && (
           <>
-            <button onClick={() => setStep("services")} style={{ background: "none", border: "none", color: "var(--plum)", fontSize: "0.85rem", cursor: "pointer", marginBottom: "1rem" }}>← Back</button>
+            <button onClick={() => setStep("services")} style={{ background: "none", border: "none", color: "var(--plum)", fontSize: "0.85rem", cursor: "pointer", marginBottom: "1rem" }}>Back</button>
             <h4 style={{ fontWeight: 500, marginBottom: "1rem" }}>Pick a date &amp; time</h4>
             <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
               <input type="date" value={date} min={minDate.toISOString().split("T")[0]} onChange={e => setDate(e.target.value)} style={inputStyle} />
@@ -592,20 +580,19 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
                 <input type="text" placeholder="Contact name" value={pocName} onChange={e => setPocName(e.target.value)} style={{ ...inputStyle, marginBottom: "0.75rem" }} />
                 <input type="tel" placeholder="Contact phone" value={pocPhone} onChange={e => setPocPhone(e.target.value)} style={inputStyle} />
               </div>
-              <button className="btn-plum" disabled={!date || !time} onClick={() => setStep("confirm")}>Review booking →</button>
+              <button className="btn-plum" disabled={!date || !time} onClick={() => setStep("confirm")}>Review booking</button>
             </div>
           </>
         )}
 
         {step === "confirm" && selected && (
           <>
-            <button onClick={() => setStep("datetime")} style={{ background: "none", border: "none", color: "var(--plum)", fontSize: "0.85rem", cursor: "pointer", marginBottom: "1rem" }}>← Back</button>
+            <button onClick={() => setStep("datetime")} style={{ background: "none", border: "none", color: "var(--plum)", fontSize: "0.85rem", cursor: "pointer", marginBottom: "1rem" }}>Back</button>
             <h4 style={{ fontWeight: 500, marginBottom: "1.25rem" }}>Confirm booking</h4>
             <div style={{ background: "var(--surface)", borderRadius: 14, padding: "1.25rem", marginBottom: "1.5rem" }}>
-              {[["Artist", artist.display_name], ["Service", selected.name], ["Date", date], ["Time", time], ...(address ? [["Address", address]] : [])].map(([l, v]) => (
+              {([["Artist", artist.display_name], ["Service", selected.name], ["Date", date], ["Time", time], ...(address ? [["Address", address]] : [])] as [string, string][]).map(([l, v]) => (
                 <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "0.3rem 0", fontSize: "0.9rem" }}>
-                  <span style={{ color: "var(--grey)" }}>{l}</span>
-                  <span>{v}</span>
+                  <span style={{ color: "var(--grey)" }}>{l}</span><span>{v}</span>
                 </div>
               ))}
               <div style={{ borderTop: "1px dashed rgba(155,127,184,0.3)", margin: "0.75rem 0" }} />
@@ -616,10 +603,10 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
             </div>
             {error && <p style={{ color: "#E53935", fontSize: "0.85rem", marginBottom: "1rem" }}>{error}</p>}
             <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginBottom: "1.25rem" }}>
-              You&apos;ll be redirected to PayFast to complete payment securely. Once paid, you&apos;ll receive a WhatsApp confirmation.
+              You will be redirected to PayFast to complete payment securely. Once paid, you will receive a WhatsApp confirmation.
             </p>
             <button className="btn-plum" style={{ width: "100%", padding: "0.875rem" }} onClick={handleBook} disabled={loading}>
-              {loading ? "Redirecting to PayFast…" : `Pay ${fmt(selected.price)} securely →`}
+              {loading ? "Redirecting to PayFast…" : `Pay ${fmt(selected.price)} securely`}
             </button>
           </>
         )}
