@@ -13,6 +13,17 @@ export async function GET(request: Request) {
     if (!error) {
       // Always redirect to dashboard after email confirmation or OAuth
       const redirectTo = next === "/" ? "/dashboard" : next;
+
+      // Behind a proxy (e.g. Vercel), `origin` derived from the request URL can
+      // resolve to an internal host. Prefer the public host the browser
+      // actually requested so the redirect lands on the real domain.
+      const forwardedHost = request.headers.get("x-forwarded-host");
+      const forwardedProto = request.headers.get("x-forwarded-proto") ?? "https";
+      const isLocalEnv = process.env.NODE_ENV === "development";
+
+      if (!isLocalEnv && forwardedHost) {
+        return NextResponse.redirect(`${forwardedProto}://${forwardedHost}${redirectTo}`);
+      }
       return NextResponse.redirect(`${origin}${redirectTo}`);
     }
   }

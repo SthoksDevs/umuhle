@@ -3,9 +3,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
-import type { Artist, Profile } from "@/types";
+import type { Artist, Profile, AccountType } from "@/types";
+import { ACCOUNT_TYPES, ARTIST_CATEGORIES } from "@/types";
 import Image from "next/image";
 import Link from "next/link";
+import Footer from "@/components/Footer";
 
 // ── Pixel helpers ─────────────────────────────────────────────────────────────
 declare global {
@@ -33,13 +35,6 @@ const CAT_ICONS: Record<string, string> = { hair: "✂", nails: "◈", makeup: "
 
 type CartItem = { id: string; name: string; price: number };
 
-const SOCIALS = [
-  { label: "Facebook",  href: "https://web.facebook.com/umuhlebeautiful" },
-  { label: "Instagram", href: "https://www.instagram.com/umuhle_beautiful/" },
-  { label: "TikTok",    href: "http://tiktok.com/@umuhle_beautiful" },
-  { label: "WhatsApp",  href: "https://wa.me/27733014819" },
-];
-
 // ─────────────────────────────────────────────────────────────────────────────
 export default function Home() {
   const supabase = createClient();
@@ -47,7 +42,7 @@ export default function Home() {
   const [user, setUser]           = useState<User | null>(null);
   const [profile, setProfile]     = useState<Profile | null>(null);
   const [artists, setArtists]     = useState<Artist[]>([]);
-  const [loading, setLoading]     = useState(false);
+  const [loading, setLoading]     = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<Category>("All");
 
@@ -61,6 +56,8 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authForm, setAuthForm]   = useState({ email: "", password: "", name: "", phone: "" });
+  const [accountType, setAccountType] = useState<AccountType>("customer");
+  const [artistCategory, setArtistCategory] = useState<string>("hair");
 
   // Booking
   const [selectedArtist, setSelectedArtist] = useState<Artist | null>(null);
@@ -143,7 +140,12 @@ export default function Home() {
           email: authForm.email,
           password: authForm.password,
           options: {
-            data: { full_name: authForm.name, phone: authForm.phone },
+            data: {
+              full_name: authForm.name,
+              phone: authForm.phone,
+              account_type: accountType,
+              artist_category: accountType === "artist" ? artistCategory : null,
+            },
             emailRedirectTo: `${window.location.origin}/auth/callback`,
           },
         });
@@ -262,7 +264,7 @@ export default function Home() {
                   onClick={() => setActiveCategory(cat)}
                   style={{ flexShrink: 0, borderRadius: 100, padding: "0.5rem 1.25rem", background: activeCategory === cat ? "var(--plum)" : "var(--plum-t)", color: activeCategory === cat ? "#fff" : "var(--plum)", border: "none", fontWeight: 500, fontSize: "0.875rem", transition: "all 0.2s", cursor: "pointer" }}
                 >
-                  {cat !== "All" && CAT_ICONS[cat.toLowerCase()] ? `${CAT_ICONS[cat.toLowerCase()]} ` : ""}{cat}
+                  {cat}
                 </button>
               ))}
             </div>
@@ -294,11 +296,9 @@ export default function Home() {
             </h2>
 
             {loading && (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: "1.25rem" }}>
-                {[...Array(6)].map((_, i) => (
-                  <div key={i} style={{ borderRadius: 18, background: "var(--plum-t)", height: 280 }} />
-                ))}
-              </div>
+              <p style={{ color: "var(--grey)", textAlign: "center", padding: "3rem 0" }}>
+                Loading artists…
+              </p>
             )}
 
             {!loading && artists.length === 0 && (
@@ -328,25 +328,7 @@ export default function Home() {
       </div>
 
       {/* ── Footer ── */}
-      <footer style={{ borderTop: "1px solid rgba(155,127,184,0.15)", background: "var(--white)", padding: "2rem 1.5rem" }}>
-        <div style={{ maxWidth: 900, margin: "0 auto", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "1rem" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <Image src={ICON} alt="Umuhle" width={24} height={24} style={{ borderRadius: "50%" }} />
-            <span style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.1rem", letterSpacing: "0.12em", color: "var(--plum)" }}>umuhle</span>
-          </div>
-          <div style={{ display: "flex", gap: "1.25rem", alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: "0.75rem", color: "var(--light)", letterSpacing: "0.05em" }}>Follow us</span>
-            {SOCIALS.map(s => (
-              <a key={s.label} href={s.href} target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none", transition: "color 0.2s" }}>
-                {s.label}
-              </a>
-            ))}
-            <Link href="/privacy-policy" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>Privacy</Link>
-            <Link href="/terms-and-conditions" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>Terms</Link>
-          </div>
-          <p style={{ fontSize: "0.75rem", color: "var(--light)", margin: 0 }}>© {new Date().getFullYear()} Umuhle. All rights reserved.</p>
-        </div>
-      </footer>
+      <Footer />
 
       {/* ── Cart drawer ── */}
       {showCart && (
@@ -425,6 +407,41 @@ export default function Home() {
                 <>
                   <input placeholder="Full name" value={authForm.name} onChange={e => setAuthForm(f => ({ ...f, name: e.target.value }))} required style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }} />
                   <input placeholder="Phone number (e.g. 082 123 4567)" value={authForm.phone} onChange={e => setAuthForm(f => ({ ...f, phone: e.target.value }))} style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }} />
+
+                  <div>
+                    <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.5rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                      I am signing up as
+                    </label>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.5rem" }}>
+                      {ACCOUNT_TYPES.map(t => (
+                        <button
+                          type="button"
+                          key={t.id}
+                          onClick={() => setAccountType(t.id)}
+                          style={{
+                            padding: "0.6rem 0.4rem", borderRadius: 12, fontSize: "0.78rem", fontWeight: 500,
+                            border: `1.5px solid ${accountType === t.id ? "var(--plum)" : "#E0E0E0"}`,
+                            background: accountType === t.id ? "var(--plum-t)" : "#fff",
+                            color: accountType === t.id ? "var(--plum)" : "var(--grey)", cursor: "pointer",
+                          }}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {accountType === "artist" && (
+                    <select
+                      value={artistCategory}
+                      onChange={e => setArtistCategory(e.target.value)}
+                      style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", background: "#fff" }}
+                    >
+                      {ARTIST_CATEGORIES.map(c => (
+                        <option key={c.id} value={c.id}>{c.label}</option>
+                      ))}
+                    </select>
+                  )}
                 </>
               )}
               <input type="email" placeholder="Email address" value={authForm.email} onChange={e => setAuthForm(f => ({ ...f, email: e.target.value }))} required style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }} />

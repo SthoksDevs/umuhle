@@ -199,6 +199,14 @@ function ProfileTab({ profile, user, onUpdate }: { profile: Profile; user: User;
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyReferral = () => {
+    if (!profile.referral_code) return;
+    navigator.clipboard.writeText(profile.referral_code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -271,10 +279,10 @@ function ProfileTab({ profile, user, onUpdate }: { profile: Profile; user: User;
               {profile.referral_code}
             </span>
             <button
-              onClick={() => navigator.clipboard.writeText(profile.referral_code!)}
-              style={{ background: "var(--plum)", color: "#fff", border: "none", borderRadius: 8, padding: "0.35rem 0.75rem", fontSize: "0.78rem", fontWeight: 500, cursor: "pointer" }}
+              onClick={handleCopyReferral}
+              style={{ background: copied ? "var(--forest)" : "var(--plum)", color: "#fff", border: "none", borderRadius: 8, padding: "0.35rem 0.75rem", fontSize: "0.78rem", fontWeight: 500, cursor: "pointer", transition: "background 0.2s" }}
             >
-              Copy
+              {copied ? "Copied ✓" : "Copy"}
             </button>
           </div>
           <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginTop: "0.5rem" }}>

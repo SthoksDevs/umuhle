@@ -3,6 +3,7 @@
 import { useCart } from "@/lib/cart-context";
 import Image from "next/image";
 import Link from "next/link";
+import Footer from "@/components/Footer";
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
@@ -11,7 +12,7 @@ export default function CartPage() {
   const { items, count, subtotal, removeItem, setQuantity } = useCart();
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--white)" }}>
+    <div style={{ minHeight: "100vh", background: "var(--white)", display: "flex", flexDirection: "column" }}>
       {/* Nav */}
       <nav style={{ position: "sticky", top: 0, zIndex: 100, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(155,127,184,0.15)", padding: "0 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", height: 60 }}>
         <Link href="/" style={{ display: "flex", alignItems: "center", gap: "0.5rem", textDecoration: "none" }}>
@@ -26,7 +27,7 @@ export default function CartPage() {
         <Link href="/shop" style={{ fontSize: "0.85rem", color: "var(--plum)", textDecoration: "none" }}>Continue shopping</Link>
       </nav>
 
-      <main style={{ maxWidth: 800, margin: "0 auto", padding: "3rem 1.5rem 5rem" }}>
+      <main style={{ maxWidth: 800, margin: "0 auto", padding: "3rem 1.5rem 5rem", flex: 1, width: "100%", boxSizing: "border-box" }}>
         <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "2rem", marginBottom: "0.5rem" }}>Your cart</h1>
         <p style={{ color: "var(--grey)", marginBottom: "2.5rem" }}>{count} item{count !== 1 ? "s" : ""}</p>
 
@@ -91,6 +92,8 @@ export default function CartPage() {
           </div>
         )}
       </main>
+
+      <Footer />
     </div>
   );
 }
