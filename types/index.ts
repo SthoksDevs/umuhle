@@ -5,6 +5,11 @@ export type AccountStatus = "active" | "pending_review" | "suspended" | "deleted
 export type ModerationStatus = "draft" | "scanning" | "approved" | "needs_review" | "rejected";
 export type BookingStatus = "pending_payment" | "confirmed" | "in_progress" | "completed" | "cancelled" | "no_show";
 
+// What the person told us they signed up to do. Kept separate from the
+// is_artist/is_partner flags (which reflect what's actually been set up),
+// since selecting "Artist" at signup doesn't instantly create an artists row.
+export type AccountType = "customer" | "artist" | "business_partner";
+
 export interface Profile {
   id: string;
   email: string;
@@ -20,6 +25,8 @@ export interface Profile {
   suspended_by: string | null;
   referral_code: string | null;
   referred_by: string | null;
+  account_type: AccountType | null;
+  artist_category: ServiceCategory | null; // set at signup when account_type = 'artist'
   created_at: string;
   updated_at: string;
 }
@@ -141,13 +148,19 @@ export interface CartItem {
   quantity: number;
 }
 
+export type PaymentMethod = "payfast" | "happypay" | "google_pay";
+
 export interface Order {
   id: string;
   client_id: string;
   total_amount: number;
   status: "pending_payment" | "paid" | "processing" | "shipped" | "delivered" | "cancelled";
   shipping_address: string | null;
+  contact_name: string | null;
+  contact_whatsapp: string | null;
+  payment_method: PaymentMethod | null;
   payfast_payment_id: string | null;
+  gateway_order_id: string | null; // HappyPay order id / Google Pay token reference
   created_at: string;
   order_items?: OrderItem[];
 }
@@ -258,6 +271,19 @@ export interface Report {
   status: "open" | "reviewed" | "dismissed";
   created_at: string;
 }
+
+export const ARTIST_CATEGORIES: { id: ServiceCategory; label: string }[] = [
+  { id: "hair", label: "Hair stylist" },
+  { id: "nails", label: "Nail technician" },
+  { id: "makeup", label: "Makeup artist" },
+  { id: "lashes", label: "Lashes" },
+];
+
+export const ACCOUNT_TYPES: { id: AccountType; label: string; blurb: string }[] = [
+  { id: "customer", label: "Customer", blurb: "Book artists & shop products" },
+  { id: "artist", label: "Artist", blurb: "Hair, nails, makeup or lashes" },
+  { id: "business_partner", label: "Business Partner", blurb: "Sell beauty products" },
+];
 
 export const AD_PACKAGES = [
   { id: "starter",  name: "Starter",  price: 2000,  ads: 1,  weeks: 6,  label: "6 weeks" },

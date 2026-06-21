@@ -264,6 +264,31 @@ export async function notifyAppointmentCompleted(opts: {
   await Promise.allSettled(promises);
 }
 
+export async function notifyOrderPaid(opts: {
+  clientName: string;
+  clientPhone: string;
+  orderId: string;
+  itemCount: number;
+  totalAmount: number; // cents
+  paymentMethod: "payfast" | "happypay" | "google_pay";
+}) {
+  const methodLabel =
+    opts.paymentMethod === "happypay" ? "HappyPay (Pay in installments)"
+    : opts.paymentMethod === "google_pay" ? "Google Pay"
+    : "Card/EFT via PayFast";
+
+  const msg =
+    `*Order Confirmed*\\n\\n` +
+    `Hi ${opts.clientName}, we've received payment for your Umuhle Shop order.\\n\\n` +
+    `Order: #${opts.orderId.slice(0, 8).toUpperCase()}\\n` +
+    `Items: ${opts.itemCount}\\n` +
+    `Total: R${(opts.totalAmount / 100).toFixed(0)}\\n` +
+    `Paid via: ${methodLabel}\\n\\n` +
+    `We'll message you here as soon as your order ships.`;
+
+  return sendTextMessage(opts.clientPhone, msg);
+}
+
 export async function notifyPartnerWelcome(opts: {
   partnerPhone: string;
   partnerName: string;

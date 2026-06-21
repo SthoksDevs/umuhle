@@ -11,7 +11,9 @@ export async function GET(request: Request) {
     const supabase = await createClient();
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
-      return NextResponse.redirect(`${origin}${next}`);
+      // Always redirect to dashboard after email confirmation or OAuth
+      const redirectTo = next === "/" ? "/dashboard" : next;
+      return NextResponse.redirect(`${origin}${redirectTo}`);
     }
   }
 

@@ -39,6 +39,10 @@ create table public.profiles (
   is_artist           boolean not null default false,
   is_partner          boolean not null default false,
   is_admin            boolean not null default false,
+  -- What the person told us they signed up to do
+  account_type        text default 'customer'
+                        check (account_type in ('customer','artist','business_partner')),
+  artist_category     text check (artist_category in ('hair','nails','makeup','lashes')),
   -- Account status
   account_status      text not null default 'active'
                         check (account_status in ('active','pending_review','suspended','deleted')),
@@ -70,18 +74,32 @@ create trigger trg_referral_code
 -- Auto-create profile on signup
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_account_type text := coalesce(new.raw_user_meta_data->>'account_type', 'customer');
+  v_artist_category text := nullif(new.raw_user_meta_data->>'artist_category', '');
 begin
-  insert into public.profiles (id, email, full_name, phone, avatar_url)
+  if v_account_type not in ('customer','artist','business_partner') then
+    v_account_type := 'customer';
+  end if;
+
+  insert into public.profiles (
+    id, email, full_name, phone, avatar_url,
+    account_type, artist_category, is_artist, is_partner
+  )
   values (
     new.id,
     new.email,
     coalesce(new.raw_user_meta_data->>'full_name', ''),
     coalesce(new.raw_user_meta_data->>'phone', null),
-    coalesce(new.raw_user_meta_data->>'avatar_url', null)
+    coalesce(new.raw_user_meta_data->>'avatar_url', null),
+    v_account_type,
+    case when v_account_type = 'artist' then v_artist_category else null end,
+    v_account_type = 'artist',
+    v_account_type = 'business_partner'
   )
   on conflict (id) do update
     set email      = excluded.email,
-        full_name  = coalesce(excluded.full_name, profiles.full_name),
+        full_name  = coalesce(nullif(excluded.full_name, ''), profiles.full_name),
         avatar_url = coalesce(excluded.avatar_url, profiles.avatar_url);
   return new;
 end;
@@ -253,7 +271,13 @@ create table public.orders (
   status              text not null default 'pending_payment'
                         check (status in ('pending_payment','paid','processing','shipped','delivered','cancelled')),
   shipping_address    text,
+  contact_name        text,
+  contact_whatsapp    text,
+  payment_method      text default 'payfast'
+                        check (payment_method in ('payfast','happypay','google_pay')),
   payfast_payment_id  text,
+  gateway_order_id        text, -- HappyPay orderId / Google Pay reference
+  gateway_webhook_secret  text, -- validates HappyPay's success/failure webhook calls
   created_at          timestamptz not null default now()
 );
 
@@ -470,6 +494,18 @@ $$;
 create trigger trg_suspension_change
   after update of account_status on public.profiles
   for each row execute function public.handle_suspension_change();
+
+-- ════════════════════════════════════════════════════════════
+--  Stock decrement helper (called once a product order is paid)
+-- ════════════════════════════════════════════════════════════
+create or replace function public.decrement_stock(p_product_id uuid, p_qty integer)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  update public.products
+  set stock_count = greatest(stock_count - p_qty, 0)
+  where id = p_product_id;
+end;
+$$;
 
 -- ════════════════════════════════════════════════════════════
 --  ROW LEVEL SECURITY

@@ -4,6 +4,7 @@ import { buildPaymentParams, PAYFAST_URL } from "@/lib/payfast";
 import { createClient } from "@/lib/supabase/server";
 import { AD_PACKAGES } from "@/types";
 import { v4 as uuidv4 } from "uuid";
+import { createPendingOrder } from "@/lib/orders";
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
@@ -119,54 +120,27 @@ async function initiateOrder(
   body: Record<string, unknown>,
   baseUrl: string
 ) {
-  const { items, shippingAddress } = body as {
+  const { items, shippingAddress, contactName, contactWhatsapp } = body as {
     items: { productId: string; quantity: number }[];
     shippingAddress: string;
+    contactName?: string;
+    contactWhatsapp?: string;
   };
 
-  // Fetch all product prices
-  const productIds = items.map((i) => i.productId);
-  const { data: products } = await supabase
-    .from("products")
-    .select("id, name, price, stock_count, is_active, moderation_status")
-    .in("id", productIds);
-
-  if (!products) return NextResponse.json({ error: "Products not found" }, { status: 404 });
-
-  let totalAmount = 0;
-  const orderItems: { product_id: string; quantity: number; unit_price: number }[] = [];
-
-  for (const item of items) {
-    const product = products.find((p) => p.id === item.productId);
-    if (!product || !product.is_active || product.moderation_status !== "approved") {
-      return NextResponse.json({ error: `Product ${item.productId} unavailable` }, { status: 400 });
-    }
-    if (product.stock_count < item.quantity) {
-      return NextResponse.json({ error: `Insufficient stock for ${product.name}` }, { status: 400 });
-    }
-    totalAmount += product.price * item.quantity;
-    orderItems.push({ product_id: product.id, quantity: item.quantity, unit_price: product.price });
-  }
-
-  const orderId = uuidv4();
-
-  await supabase.from("orders").insert({
-    id: orderId,
-    client_id: userId,
-    total_amount: totalAmount,
-    status: "pending_payment",
-    shipping_address: shippingAddress || null,
+  const created = await createPendingOrder(supabase, userId, items, {
+    paymentMethod: "payfast",
+    shippingAddress,
+    contactName,
+    contactWhatsapp,
   });
-
-  await supabase.from("order_items").insert(
-    orderItems.map((oi) => ({ ...oi, order_id: orderId }))
-  );
+  if ("error" in created) return NextResponse.json({ error: created.error }, { status: 400 });
+  const { orderId, totalAmount, lines } = created.result;
 
   const params = buildPaymentParams({
     paymentId: orderId,
     amount: totalAmount,
     itemName: `Umuhle Shop Order`,
-    itemDescription: `${orderItems.length} item(s)`,
+    itemDescription: `${lines.length} item(s)`,
     firstName,
     lastName,
     email: profile.email,

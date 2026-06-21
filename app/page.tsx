@@ -29,6 +29,7 @@ const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
 const CATEGORIES = ["All", "Hair", "Nails", "Makeup", "Lashes"] as const;
 type Category = typeof CATEGORIES[number];
+const CAT_ICONS: Record<string, string> = { hair: "✂", nails: "◈", makeup: "◉", lashes: "◎" };
 
 type CartItem = { id: string; name: string; price: number };
 
@@ -261,6 +262,7 @@ export default function Home() {
                   onClick={() => setActiveCategory(cat)}
                   style={{ flexShrink: 0, borderRadius: 100, padding: "0.5rem 1.25rem", background: activeCategory === cat ? "var(--plum)" : "var(--plum-t)", color: activeCategory === cat ? "#fff" : "var(--plum)", border: "none", fontWeight: 500, fontSize: "0.875rem", transition: "all 0.2s", cursor: "pointer" }}
                 >
+                  {cat !== "All" && CAT_ICONS[cat.toLowerCase()] ? `${CAT_ICONS[cat.toLowerCase()]} ` : ""}{cat}
                 </button>
               ))}
             </div>
@@ -474,6 +476,7 @@ function ArtistCard({ artist, onBook }: { artist: Artist; onBook: () => void }) 
         <Image src={artist.avatar_url ?? "/umuhle-icon.png"} alt={artist.display_name} width={100} height={100} style={{ objectFit: "contain", opacity: 0.85 }} />
         {artist.is_verified && <span style={{ position: "absolute", top: 10, right: 10, background: "var(--forest)", color: "#fff", borderRadius: 100, padding: "0.2rem 0.6rem", fontSize: "0.7rem", fontWeight: 600 }}>Verified</span>}
         <span style={{ position: "absolute", bottom: 10, left: 10, background: "rgba(255,255,255,0.9)", borderRadius: 100, padding: "0.2rem 0.75rem", fontSize: "0.75rem", fontWeight: 500, color: "var(--plum)", backdropFilter: "blur(4px)" }}>
+          {CAT_ICONS[artist.category] ?? ""} {artist.category}
         </span>
       </div>
       <div style={{ padding: "1rem" }}>
