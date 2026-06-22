@@ -104,3 +104,39 @@ button { cursor: pointer; font-family: var(--font-body); }
 @media (max-width: 640px) {
   html { font-size: 15px; }
 }
+
+/* ── Responsive nav ── */
+@media (max-width: 640px) {
+  .nav-links-desktop  { display: none !important; }
+  .nav-actions-desktop { display: none !important; }
+  .nav-mobile-right   { display: flex !important; }
+}
+
+/* ── Responsive footer ── */
+@media (max-width: 640px) {
+  .footer-links {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 0.6rem !important;
+  }
+  .footer-socials {
+    width: 100%;
+  }
+  .footer-legal {
+    width: 100%;
+  }
+}
+
+/* ── Multi-select highlight ── */
+select[multiple] option:checked {
+  background: var(--plum-t);
+  color: var(--plum);
+  font-weight: 500;
+}
+select[multiple] option {
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+}
+select[multiple] {
+  cursor: pointer;
+}

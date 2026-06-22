@@ -31,6 +31,7 @@ export default function ShopPage() {
   const [activeCategory, setActiveCat] = useState<Cat>("All");
   const [showAuth, setShowAuth] = useState(false);
   const [added, setAdded]       = useState<string | null>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => setUser(user ?? null));
@@ -55,19 +56,55 @@ export default function ShopPage() {
           <Image src={ICON} alt="Umuhle" width={32} height={32} style={{ borderRadius: "50%", objectFit: "cover" }} />
           <span style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.2rem", letterSpacing: "0.12em", color: "var(--plum)" }}>umuhle</span>
         </Link>
-        <div style={{ display: "flex", gap: "0.15rem" }}>
+
+        {/* Desktop nav links */}
+        <div className="nav-links-desktop" style={{ display: "flex", gap: "0.15rem" }}>
           {[["Search", "/"], ["Shop", "/shop"], ["Earn", "/earn"]].map(([label, href]) => (
             <Link key={label} href={href} style={{ borderRadius: 100, padding: "0.4rem 1rem", color: href === "/shop" ? "var(--plum)" : "var(--grey)", fontWeight: href === "/shop" ? 500 : 400, fontSize: "0.875rem", textDecoration: "none", background: href === "/shop" ? "var(--plum-t)" : "transparent" }}>
               {label}
             </Link>
           ))}
         </div>
-        {user ? (
-          <Link href="/dashboard" style={{ fontSize: "0.85rem", color: "var(--grey)", textDecoration: "none" }}>Dashboard</Link>
-        ) : (
-          <button className="btn-plum" style={{ padding: "0.5rem 1.25rem", fontSize: "0.875rem" }} onClick={() => setShowAuth(true)}>Sign in</button>
-        )}
+
+        {/* Desktop right */}
+        <div className="nav-actions-desktop">
+          {user ? (
+            <Link href="/dashboard" style={{ fontSize: "0.85rem", color: "var(--grey)", textDecoration: "none" }}>Dashboard</Link>
+          ) : (
+            <button className="btn-plum" style={{ padding: "0.5rem 1.25rem", fontSize: "0.875rem" }} onClick={() => setShowAuth(true)}>Sign in</button>
+          )}
+        </div>
+
+        {/* Mobile right: sign in + hamburger */}
+        <div className="nav-mobile-right" style={{ display: "none", alignItems: "center", gap: "0.5rem" }}>
+          {!user && (
+            <button className="btn-plum" style={{ padding: "0.4rem 1rem", fontSize: "0.8rem" }} onClick={() => setShowAuth(true)}>Sign in</button>
+          )}
+          <button
+            aria-label="Open menu"
+            onClick={() => setMobileMenuOpen(v => !v)}
+            style={{ background: "none", border: "none", cursor: "pointer", padding: "0.3rem", color: "var(--grey)", display: "flex", flexDirection: "column", gap: 5, alignItems: "center", justifyContent: "center" }}
+          >
+            <span style={{ display: "block", width: 22, height: 2, background: "var(--grey)", borderRadius: 2, transition: "all 0.2s", transform: mobileMenuOpen ? "rotate(45deg) translate(5px,5px)" : "none" }} />
+            <span style={{ display: "block", width: 22, height: 2, background: "var(--grey)", borderRadius: 2, transition: "all 0.2s", opacity: mobileMenuOpen ? 0 : 1 }} />
+            <span style={{ display: "block", width: 22, height: 2, background: "var(--grey)", borderRadius: 2, transition: "all 0.2s", transform: mobileMenuOpen ? "rotate(-45deg) translate(5px,-5px)" : "none" }} />
+          </button>
+        </div>
       </nav>
+
+      {/* Mobile dropdown menu */}
+      {mobileMenuOpen && (
+        <div className="mobile-menu" style={{ position: "sticky", top: 60, zIndex: 99, background: "rgba(255,255,255,0.97)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(155,127,184,0.15)", padding: "0.75rem 1.5rem", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+          {[["Search", "/"], ["Shop", "/shop"], ["Earn", "/earn"]].map(([label, href]) => (
+            <Link key={label} href={href} onClick={() => setMobileMenuOpen(false)} style={{ borderRadius: 100, padding: "0.4rem 1rem", color: href === "/shop" ? "var(--plum)" : "var(--grey)", fontWeight: href === "/shop" ? 500 : 400, fontSize: "0.875rem", textDecoration: "none", background: href === "/shop" ? "var(--plum-t)" : "transparent", display: "inline-block" }}>
+              {label}
+            </Link>
+          ))}
+          {user && (
+            <Link href="/dashboard" onClick={() => setMobileMenuOpen(false)} style={{ borderRadius: 100, padding: "0.4rem 1rem", color: "var(--grey)", fontWeight: 400, fontSize: "0.875rem", textDecoration: "none", display: "inline-block" }}>Dashboard</Link>
+          )}
+        </div>
+      )}
 
       <main style={{ maxWidth: 960, margin: "0 auto", padding: "3rem 1.5rem 4rem", flex: 1, width: "100%", boxSizing: "border-box" }}>
         <p style={{ fontFamily: "var(--font-display)", fontSize: "0.8rem", letterSpacing: "0.35em", color: "var(--nude)", textTransform: "uppercase", marginBottom: "0.5rem" }}>curated for you</p>

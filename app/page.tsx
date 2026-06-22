@@ -59,6 +59,9 @@ export default function Home() {
   const [accountType, setAccountType] = useState<AccountType>("customer");
   const [artistCategory, setArtistCategory] = useState<string>("hair");
 
+  // Mobile nav
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
   // Booking
   const [selectedArtist, setSelectedArtist] = useState<Artist | null>(null);
 
@@ -254,14 +257,16 @@ export default function Home() {
           <span style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.2rem", letterSpacing: "0.12em", color: "var(--plum)" }}>umuhle</span>
         </Link>
 
-        <div style={{ display: "flex", gap: "0.15rem" }}>
+        {/* Desktop nav links */}
+        <div className="nav-links-desktop" style={{ display: "flex", gap: "0.15rem" }}>
           <Link href="/"     style={navLink(true)}>Search</Link>
           <Link href="/shop" style={navLink(false)}>Shop</Link>
           <Link href="/earn" style={navLink(false)}>Earn</Link>
           {user && <Link href="/dashboard" style={navLink(false)}>Dashboard</Link>}
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+        {/* Desktop right actions */}
+        <div className="nav-actions-desktop" style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
           {/* Cart */}
           <button
             onClick={() => setShowCart(true)}
@@ -287,7 +292,55 @@ export default function Home() {
             <button className="btn-plum" style={{ padding: "0.5rem 1.25rem", fontSize: "0.875rem" }} onClick={() => { setShowAuth(true); setAuthMode("login"); }}>Sign in</button>
           )}
         </div>
+
+        {/* Mobile right: cart + sign in + hamburger */}
+        <div className="nav-mobile-right" style={{ display: "none", alignItems: "center", gap: "0.5rem" }}>
+          {/* Cart icon */}
+          <button
+            onClick={() => setShowCart(true)}
+            aria-label={`Cart — ${cartCount} item${cartCount !== 1 ? "s" : ""}`}
+            style={{ position: "relative", background: "none", border: "none", cursor: "pointer", padding: "0.3rem", color: "var(--grey)", display: "flex" }}
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/>
+            </svg>
+            {cartCount > 0 && (
+              <span style={{ position: "absolute", top: -2, right: -2, background: "var(--plum)", color: "#fff", borderRadius: "50%", width: 16, height: 16, fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {cartCount}
+              </span>
+            )}
+          </button>
+
+          {/* Sign in button (only when not logged in) */}
+          {!user && (
+            <button className="btn-plum" style={{ padding: "0.4rem 1rem", fontSize: "0.8rem" }} onClick={() => { setShowAuth(true); setAuthMode("login"); }}>Sign in</button>
+          )}
+
+          {/* Hamburger */}
+          <button
+            aria-label="Open menu"
+            onClick={() => setMobileMenuOpen(v => !v)}
+            style={{ background: "none", border: "none", cursor: "pointer", padding: "0.3rem", color: "var(--grey)", display: "flex", flexDirection: "column", gap: 5, alignItems: "center", justifyContent: "center" }}
+          >
+            <span style={{ display: "block", width: 22, height: 2, background: "var(--grey)", borderRadius: 2, transition: "all 0.2s", transform: mobileMenuOpen ? "rotate(45deg) translate(5px,5px)" : "none" }} />
+            <span style={{ display: "block", width: 22, height: 2, background: "var(--grey)", borderRadius: 2, transition: "all 0.2s", opacity: mobileMenuOpen ? 0 : 1 }} />
+            <span style={{ display: "block", width: 22, height: 2, background: "var(--grey)", borderRadius: 2, transition: "all 0.2s", transform: mobileMenuOpen ? "rotate(-45deg) translate(5px,-5px)" : "none" }} />
+          </button>
+        </div>
       </nav>
+
+      {/* ── Mobile dropdown menu ── */}
+      {mobileMenuOpen && (
+        <div className="mobile-menu" style={{ position: "sticky", top: 60, zIndex: 99, background: "rgba(255,255,255,0.97)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(155,127,184,0.15)", padding: "0.75rem 1.5rem", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+          <Link href="/" onClick={() => setMobileMenuOpen(false)} style={navLink(true)}>Search</Link>
+          <Link href="/shop" onClick={() => setMobileMenuOpen(false)} style={navLink(false)}>Shop</Link>
+          <Link href="/earn" onClick={() => setMobileMenuOpen(false)} style={navLink(false)}>Earn</Link>
+          {user && <Link href="/dashboard" onClick={() => setMobileMenuOpen(false)} style={navLink(false)}>Dashboard</Link>}
+          {user && (
+            <button className="btn-outline" style={{ padding: "0.5rem 1rem", fontSize: "0.85rem", marginTop: "0.5rem", textAlign: "left" }} onClick={() => { setMobileMenuOpen(false); handleSignOut(); }}>Sign out</button>
+          )}
+        </div>
+      )}
 
       {/* ── Page ── */}
       <div style={{ flex: 1 }}>
@@ -306,12 +359,12 @@ export default function Home() {
 
           {/* Category pills */}
           <section style={{ padding: "2rem 1.5rem 0", maxWidth: 900, margin: "0 auto" }}>
-            <div style={{ display: "flex", gap: "0.5rem", overflowX: "auto", paddingBottom: "0.5rem" }}>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", paddingBottom: "0.5rem" }}>
               {CATEGORIES.map(cat => (
                 <button
                   key={cat}
                   onClick={() => setActiveCategory(cat)}
-                  style={{ flexShrink: 0, borderRadius: 100, padding: "0.5rem 1.25rem", background: activeCategory === cat ? "var(--plum)" : "var(--plum-t)", color: activeCategory === cat ? "#fff" : "var(--plum)", border: "none", fontWeight: 500, fontSize: "0.875rem", transition: "all 0.2s", cursor: "pointer" }}
+                  style={{ borderRadius: 100, padding: "0.5rem 1.25rem", background: activeCategory === cat ? "var(--plum)" : "var(--plum-t)", color: activeCategory === cat ? "#fff" : "var(--plum)", border: "none", fontWeight: 500, fontSize: "0.875rem", transition: "all 0.2s", cursor: "pointer" }}
                 >
                   {cat}
                 </button>
@@ -515,65 +568,91 @@ export default function Home() {
                       I am signing up as
                     </label>
 
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "repeat(3, 1fr)",
-                        gap: "0.5rem",
-                      }}
-                    >
-                      {ACCOUNT_TYPES.map(t => (
-                        <button
-                          type="button"
-                          key={t.id}
-                          onClick={() => setAccountType(t.id)}
-                          style={{
-                            padding: "0.6rem 0.4rem",
-                            borderRadius: 12,
-                            fontSize: "0.78rem",
-                            fontWeight: 500,
-                            border: `1.5px solid ${
-                              accountType === t.id
-                                ? "var(--plum)"
-                                : "#E0E0E0"
-                            }`,
-                            background:
-                              accountType === t.id
-                                ? "var(--plum-t)"
-                                : "#fff",
-                            color:
-                              accountType === t.id
-                                ? "var(--plum)"
-                                : "var(--grey)",
-                            cursor: "pointer",
-                          }}
-                        >
-                          {t.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {accountType === "artist" && (
                     <select
-                      value={artistCategory}
-                      onChange={e =>
-                        setArtistCategory(e.target.value)
-                      }
+                      multiple
+                      value={[accountType]}
+                      onChange={e => {
+                        const selected = Array.from(e.target.selectedOptions).map(o => o.value as AccountType);
+                        if (selected.length > 0) setAccountType(selected[selected.length - 1] as AccountType);
+                      }}
                       style={{
-                        padding: "0.75rem 1rem",
+                        width: "100%",
                         borderRadius: 12,
                         border: "1.5px solid #E0E0E0",
                         fontSize: "0.9rem",
                         background: "#fff",
+                        padding: "0.25rem",
+                        minHeight: 96,
+                        outline: "none",
                       }}
                     >
-                      {ARTIST_CATEGORIES.map(c => (
-                        <option key={c.id} value={c.id}>
-                          {c.label}
+                      {ACCOUNT_TYPES.map(t => (
+                        <option
+                          key={t.id}
+                          value={t.id}
+                          style={{
+                            padding: "0.55rem 0.75rem",
+                            borderRadius: 8,
+                            cursor: "pointer",
+                          }}
+                        >
+                          {t.label} — {t.blurb}
                         </option>
                       ))}
                     </select>
+                    <p style={{ fontSize: "0.72rem", color: "var(--light)", margin: "0.35rem 0 0" }}>
+                      Tap to select your account type
+                    </p>
+                  </div>
+
+                  {accountType === "artist" && (
+                    <>
+                      <label
+                        style={{
+                          display: "block",
+                          fontSize: "0.78rem",
+                          fontWeight: 500,
+                          color: "var(--grey)",
+                          marginBottom: "0.4rem",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                        }}
+                      >
+                        Artist specialisation
+                      </label>
+                      <select
+                        multiple
+                        value={[artistCategory]}
+                        onChange={e => {
+                          const selected = Array.from(e.target.selectedOptions).map(o => o.value);
+                          if (selected.length > 0) setArtistCategory(selected[selected.length - 1]);
+                        }}
+                        style={{
+                          width: "100%",
+                          borderRadius: 12,
+                          border: "1.5px solid #E0E0E0",
+                          fontSize: "0.9rem",
+                          background: "#fff",
+                          padding: "0.25rem",
+                          minHeight: 108,
+                          outline: "none",
+                        }}
+                      >
+                        {ARTIST_CATEGORIES.map(c => (
+                          <option
+                            key={c.id}
+                            value={c.id}
+                            style={{ padding: "0.55rem 0.75rem", cursor: "pointer" }}
+                          >
+                            {c.label}
+                          </option>
+                        ))}
+                        <option value="all" style={{ padding: "0.55rem 0.75rem", cursor: "pointer" }}>All of the above</option>
+                      </select>
+                      <p style={{ fontSize: "0.72rem", color: "var(--light)", margin: "0.35rem 0 0" }}>
+                        Tap to select your specialisation
+                      </p>
+                    </>
                   )}
                 </>
               )}
