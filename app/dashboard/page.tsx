@@ -984,7 +984,7 @@ function InviteTab({ profile }: { profile: Profile }) {
     <div style={{ maxWidth: 520 }}>
       <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>Invite &amp; Earn</h2>
       <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "2rem", lineHeight: 1.6 }}>
-        Share your personal invite link with friends. When they sign up and book through Umuhle, you both earn rewards.
+        Share your personal invite link with friends. When they sign up and book through Umuhle, you earn a reward.
       </p>
 
       {referralLink ? (
@@ -1011,20 +1011,21 @@ function InviteTab({ profile }: { profile: Profile }) {
 
           {/* Share button */}
           <button onClick={handleShare} className="btn-plum" style={{ padding: "0.75rem 2rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <span>📤</span> Share invite
+            Share invite
           </button>
 
           {/* How it works */}
           <div style={{ marginTop: "2.5rem", display: "flex", flexDirection: "column", gap: "0.85rem" }}>
             <p style={{ fontSize: "0.8rem", fontWeight: 500, color: "var(--grey)", textTransform: "uppercase", letterSpacing: "0.08em" }}>How it works</p>
             {[
-              { icon: "🔗", text: "Share your unique invite link with a friend." },
-              { icon: "✍️", text: "They sign up using your link." },
-              { icon: "💜", text: "When they make their first booking, you both earn rewards." },
+              "Share your unique invite link with a friend.",
+              "They sign up using your link.",
+              "When they make their first booking, you earn a reward.",
             ].map((step, i) => (
               <div key={i} style={{ display: "flex", gap: "0.85rem", alignItems: "flex-start" }}>
-                <span style={{ fontSize: "1.3rem", flexShrink: 0 }}>{step.icon}</span>
-                <p style={{ fontSize: "0.88rem", color: "var(--grey)", margin: 0, lineHeight: 1.5 }}>{step.text}</p>
+                <p style={{ fontSize: "0.88rem", color: "var(--grey)", margin: 0, lineHeight: 1.5 }}>
+                  {i + 1}. {step}
+                </p>
               </div>
             ))}
           </div>
