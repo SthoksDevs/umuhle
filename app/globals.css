@@ -112,6 +112,11 @@ button { cursor: pointer; font-family: var(--font-body); }
   .nav-mobile-right   { display: flex !important; }
 }
 
+/* ── Footer defaults ── */
+.footer-socials {
+  display: flex !important;
+}
+
 /* ── Responsive footer ── */
 @media (max-width: 640px) {
   .footer-links {
