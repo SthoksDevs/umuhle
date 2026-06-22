@@ -52,7 +52,7 @@ export default function Home() {
 
   // Auth modal
   const [showAuth, setShowAuth]   = useState(false);
-  const [authMode, setAuthMode]   = useState<"login" | "register">("login");
+  const [authMode, setAuthMode] = useState<"login" | "register" | "forgot">("login");
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authForm, setAuthForm]   = useState({ email: "", password: "", name: "", phone: "" });
@@ -68,13 +68,14 @@ export default function Home() {
       setUser(user ?? null);
       if (user) fetchProfile(user.id);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
-    setUser(session?.user ?? null);
-
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => { setUser(session?.user ?? null);
     if (session?.user) {
       fetchProfile(session.user.id);
 
-      if (window.location.pathname === "/") {
+      if (
+        window.location.pathname === "/" ||
+        window.location.pathname === "/auth/callback"
+      ) {
         window.location.href = "/dashboard";
       }
     } else {
@@ -128,7 +129,9 @@ export default function Home() {
     setAuthLoading(true);
     await supabase.auth.signInWithOAuth({
       provider,
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback?next=/dashboard`,
+      },
     });
   };
 
@@ -169,6 +172,44 @@ export default function Home() {
       setAuthLoading(false);
     }
   };
+
+  const handleForgotPassword = async (
+  e: React.FormEvent
+) => {
+  e.preventDefault();
+
+  if (!authForm.email) {
+    setAuthError("Enter your email address.");
+    return;
+  }
+
+  setAuthLoading(true);
+  setAuthError("");
+
+  try {
+    const { error } =
+      await supabase.auth.resetPasswordForEmail(
+        authForm.email,
+        {
+          redirectTo: window.location.origin,
+        }
+      );
+
+    if (error) throw error;
+
+    setAuthError(
+      "Password reset email sent. Check your inbox."
+    );
+  } catch (err: unknown) {
+    setAuthError(
+      err instanceof Error
+        ? err.message
+        : "Something went wrong"
+    );
+  } finally {
+    setAuthLoading(false);
+  }
+};
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -410,27 +451,101 @@ export default function Home() {
               <div style={{ flex: 1, height: 1, background: "#E0E0E0" }} />
             </div>
 
-            <form onSubmit={handleEmailAuth} style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            <form
+              onSubmit={
+                authMode === "forgot"
+                  ? handleForgotPassword
+                  : handleEmailAuth
+              }
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.75rem",
+              }}
+            >
               {authMode === "register" && (
                 <>
-                  <input placeholder="Full name" value={authForm.name} onChange={e => setAuthForm(f => ({ ...f, name: e.target.value }))} required style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }} />
-                  <input placeholder="Phone number (e.g. 082 123 4567)" value={authForm.phone} onChange={e => setAuthForm(f => ({ ...f, phone: e.target.value }))} style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }} />
+                  <input
+                    placeholder="Full name"
+                    value={authForm.name}
+                    onChange={e =>
+                      setAuthForm(f => ({
+                        ...f,
+                        name: e.target.value,
+                      }))
+                    }
+                    required
+                    style={{
+                      padding: "0.75rem 1rem",
+                      borderRadius: 12,
+                      border: "1.5px solid #E0E0E0",
+                      fontSize: "0.9rem",
+                    }}
+                  />
+
+                  <input
+                    placeholder="Phone number (e.g. 082 123 4567)"
+                    value={authForm.phone}
+                    onChange={e =>
+                      setAuthForm(f => ({
+                        ...f,
+                        phone: e.target.value,
+                      }))
+                    }
+                    style={{
+                      padding: "0.75rem 1rem",
+                      borderRadius: 12,
+                      border: "1.5px solid #E0E0E0",
+                      fontSize: "0.9rem",
+                    }}
+                  />
 
                   <div>
-                    <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.5rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: "0.78rem",
+                        fontWeight: 500,
+                        color: "var(--grey)",
+                        marginBottom: "0.5rem",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.05em",
+                      }}
+                    >
                       I am signing up as
                     </label>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.5rem" }}>
+
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(3, 1fr)",
+                        gap: "0.5rem",
+                      }}
+                    >
                       {ACCOUNT_TYPES.map(t => (
                         <button
                           type="button"
                           key={t.id}
                           onClick={() => setAccountType(t.id)}
                           style={{
-                            padding: "0.6rem 0.4rem", borderRadius: 12, fontSize: "0.78rem", fontWeight: 500,
-                            border: `1.5px solid ${accountType === t.id ? "var(--plum)" : "#E0E0E0"}`,
-                            background: accountType === t.id ? "var(--plum-t)" : "#fff",
-                            color: accountType === t.id ? "var(--plum)" : "var(--grey)", cursor: "pointer",
+                            padding: "0.6rem 0.4rem",
+                            borderRadius: 12,
+                            fontSize: "0.78rem",
+                            fontWeight: 500,
+                            border: `1.5px solid ${
+                              accountType === t.id
+                                ? "var(--plum)"
+                                : "#E0E0E0"
+                            }`,
+                            background:
+                              accountType === t.id
+                                ? "var(--plum-t)"
+                                : "#fff",
+                            color:
+                              accountType === t.id
+                                ? "var(--plum)"
+                                : "var(--grey)",
+                            cursor: "pointer",
                           }}
                         >
                           {t.label}
@@ -442,25 +557,118 @@ export default function Home() {
                   {accountType === "artist" && (
                     <select
                       value={artistCategory}
-                      onChange={e => setArtistCategory(e.target.value)}
-                      style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", background: "#fff" }}
+                      onChange={e =>
+                        setArtistCategory(e.target.value)
+                      }
+                      style={{
+                        padding: "0.75rem 1rem",
+                        borderRadius: 12,
+                        border: "1.5px solid #E0E0E0",
+                        fontSize: "0.9rem",
+                        background: "#fff",
+                      }}
                     >
                       {ARTIST_CATEGORIES.map(c => (
-                        <option key={c.id} value={c.id}>{c.label}</option>
+                        <option key={c.id} value={c.id}>
+                          {c.label}
+                        </option>
                       ))}
                     </select>
                   )}
                 </>
               )}
-              <input type="email" placeholder="Email address" value={authForm.email} onChange={e => setAuthForm(f => ({ ...f, email: e.target.value }))} required style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }} />
-              <input type="password" placeholder="Password" value={authForm.password} onChange={e => setAuthForm(f => ({ ...f, password: e.target.value }))} required style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }} />
+
+              <input
+                type="email"
+                placeholder="Email address"
+                value={authForm.email}
+                onChange={e =>
+                  setAuthForm(f => ({
+                    ...f,
+                    email: e.target.value,
+                  }))
+                }
+                required
+                style={{
+                  padding: "0.75rem 1rem",
+                  borderRadius: 12,
+                  border: "1.5px solid #E0E0E0",
+                  fontSize: "0.9rem",
+                }}
+              />
+
+              {authMode !== "forgot" && (
+                <>
+                  <input
+                    type="password"
+                    placeholder="Password"
+                    value={authForm.password}
+                    onChange={e =>
+                      setAuthForm(f => ({
+                        ...f,
+                        password: e.target.value,
+                      }))
+                    }
+                    required
+                    style={{
+                      padding: "0.75rem 1rem",
+                      borderRadius: 12,
+                      border: "1.5px solid #E0E0E0",
+                      fontSize: "0.9rem",
+                    }}
+                  />
+
+                  {authMode === "login" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("forgot");
+                        setAuthError("");
+                      }}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        padding: 0,
+                        textAlign: "right",
+                        color: "var(--plum)",
+                        cursor: "pointer",
+                        fontSize: "0.85rem",
+                        alignSelf: "flex-end",
+                      }}
+                    >
+                      Forgot password?
+                    </button>
+                  )}
+                </>
+              )}
+
               {authError && (
-                <p style={{ color: authError.includes("Check your email") ? "var(--forest)" : "#E53935", fontSize: "0.85rem", margin: 0 }}>
+                <p
+                  style={{
+                    color: authError.includes("Check your email")
+                      ? "var(--forest)"
+                      : "#E53935",
+                    fontSize: "0.85rem",
+                    margin: 0,
+                  }}
+                >
                   {authError}
                 </p>
               )}
-              <button type="submit" className="btn-plum" style={{ marginTop: "0.25rem" }} disabled={authLoading}>
-                {authLoading ? "Please wait…" : authMode === "login" ? "Sign in" : "Create account"}
+
+              <button
+                type="submit"
+                className="btn-plum"
+                style={{ marginTop: "0.25rem" }}
+                disabled={authLoading}
+              >
+                {authLoading
+                  ? "Please wait…"
+                  : authMode === "login"
+                  ? "Sign in"
+                  : authMode === "forgot"
+                  ? "Send reset link"
+                  : "Create account"}
               </button>
             </form>
 
