@@ -69,10 +69,18 @@ export default function Home() {
       if (user) fetchProfile(user.id);
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
-      setUser(session?.user ?? null);
-      if (session?.user) fetchProfile(session.user.id);
-      else setProfile(null);
-    });
+    setUser(session?.user ?? null);
+
+    if (session?.user) {
+      fetchProfile(session.user.id);
+
+      if (window.location.pathname === "/") {
+        window.location.href = "/dashboard";
+      }
+    } else {
+      setProfile(null);
+    }
+  });
     return () => subscription.unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
