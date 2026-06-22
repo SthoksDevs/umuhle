@@ -16,15 +16,19 @@ const AD_PACKAGES = [
 
 export default function EarnPage() {
   const supabase = createClient();
-  const [user, setUser]     = useState<User | null>(null);
+  const [user, setUser]       = useState<User | null>(null);
   const [profile, setProfile] = useState<Record<string, string> | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied]   = useState(false);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       setUser(user ?? null);
       if (user) {
-        supabase.from("profiles").select("referral_code, full_name").eq("id", user.id).single()
+        supabase
+          .from("profiles")
+          .select("referral_code, full_name")
+          .eq("id", user.id)
+          .single()
           .then(({ data }) => { if (data) setProfile(data as Record<string, string>); });
       }
     });
@@ -37,6 +41,7 @@ export default function EarnPage() {
   }, []);
 
   const referralCode = profile?.referral_code ?? null;
+
   const handleCopy = () => {
     if (!referralCode) return;
     navigator.clipboard.writeText(referralCode);
@@ -49,6 +54,7 @@ export default function EarnPage() {
       <SiteHeader initialUser={user} />
 
       <main style={{ maxWidth: 900, margin: "0 auto", padding: "3rem 1.5rem 4rem", flex: 1, width: "100%", boxSizing: "border-box" }}>
+
         {/* Hero */}
         <p style={{ fontFamily: "var(--font-display)", fontSize: "0.8rem", letterSpacing: "0.35em", color: "var(--nude)", textTransform: "uppercase", marginBottom: "0.75rem" }}>Referral Programme</p>
         <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "2.5rem", color: "var(--onyx)", marginBottom: "1rem" }}>
@@ -58,34 +64,42 @@ export default function EarnPage() {
           Share your unique referral code with any beauty professional. When they sign up and purchase their first advertisement, you earn <strong>R10</strong>. No cap on referrals. Withdraw once you reach <strong>R100</strong>.
         </p>
 
-        {/* Referral code card */}
+        {/* ── Referral code card ──
+            Logged in + code ready  → show code + copy button
+            Logged in + no code yet → show "being generated" message
+            Logged out              → show nothing (no sign-in prompt)
+        */}
         {user && referralCode ? (
-          <div style={{ background: "var(--plum-t)", border: "1.5px solid rgba(155,127,184,0.4)", borderRadius: 16, padding: "1.5rem 2rem", display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "3rem", gap: "1rem", flexWrap: "wrap" }}>
+          <div style={{
+            background: "var(--plum-t)", border: "1.5px solid rgba(155,127,184,0.4)",
+            borderRadius: 16, padding: "1.5rem 2rem",
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            marginBottom: "3rem", gap: "1rem", flexWrap: "wrap",
+          }}>
             <div>
               <p style={{ fontSize: "0.8rem", color: "var(--plum)", marginBottom: 4, fontWeight: 500 }}>Your referral code</p>
               <p style={{ fontFamily: "monospace", fontSize: "2rem", fontWeight: 700, letterSpacing: "0.12em", margin: 0 }}>{referralCode}</p>
             </div>
             <button className="btn-plum" onClick={handleCopy}>{copied ? "Copied! ✓" : "Copy code"}</button>
           </div>
-        ) : !user ? (
-          <div style={{ background: "var(--plum-t)", border: "1.5px solid rgba(155,127,184,0.2)", borderRadius: 16, padding: "1.5rem 2rem", marginBottom: "3rem", textAlign: "center" }}>
-            <p style={{ color: "var(--grey)", fontSize: "0.95rem", marginBottom: "1rem" }}>Sign in to see your personal referral code.</p>
-            <Link href="/?auth=login"><button className="btn-plum">Sign in to earn</button></Link>
-          </div>
-        ) : (
-          <div style={{ background: "var(--plum-t)", border: "1.5px solid rgba(155,127,184,0.2)", borderRadius: 16, padding: "1.5rem 2rem", marginBottom: "3rem" }}>
+        ) : user ? (
+          /* Logged in but code not yet generated */
+          <div style={{
+            background: "var(--plum-t)", border: "1.5px solid rgba(155,127,184,0.2)",
+            borderRadius: 16, padding: "1.5rem 2rem", marginBottom: "3rem",
+          }}>
             <p style={{ color: "var(--grey)", fontSize: "0.9rem", margin: 0 }}>Your code is being generated — refresh in a moment.</p>
           </div>
-        )}
+        ) : null /* Logged out — show nothing here */ }
 
         {/* How it works */}
         <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.6rem", color: "var(--onyx)", marginBottom: "1.5rem" }}>How it works</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: "1rem", marginBottom: "3rem" }}>
           {[
-            ["01", "Get your code", "Your unique code is on your dashboard after signing in."],
-            ["02", "Share it",      "Send it to any beauty professional — a hairdresser, nail tech, or makeup artist."],
-            ["03", "They advertise","They sign up on Umuhle, enter your code, and pay for their first Ad."],
-            ["04", "Earn R10",      "R10 is credited to your Umuhle wallet automatically."],
+            ["01", "Get your code",   "Your unique code is on your dashboard after signing in."],
+            ["02", "Share it",         "Send it to any beauty professional — a hairdresser, nail tech, or makeup artist."],
+            ["03", "They advertise",   "They sign up on Umuhle, enter your code, and pay for their first Ad."],
+            ["04", "Earn R10",         "R10 is credited to your Umuhle wallet automatically."],
           ].map(([step, title, desc]) => (
             <div key={step} style={{ border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 14, padding: "1.25rem", background: "#fff" }}>
               <p style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--plum)", letterSpacing: "0.08em", marginBottom: 8 }}>STEP {step}</p>
@@ -95,7 +109,7 @@ export default function EarnPage() {
           ))}
         </div>
 
-        {/* Rules */}
+        {/* Earning rules */}
         <div style={{ background: "var(--surface)", borderRadius: 14, padding: "1.5rem", marginBottom: "3rem" }}>
           <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.2rem", marginBottom: "1rem" }}>Earning rules</h3>
           {[
@@ -140,6 +154,7 @@ export default function EarnPage() {
             <button className="btn-plum">Become a Partner</button>
           </Link>
         </div>
+
       </main>
 
       <Footer />

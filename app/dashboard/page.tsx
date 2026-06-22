@@ -18,14 +18,17 @@ function formatDate(dateStr: string) {
   return d.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "long", year: "numeric" });
 }
 
-type Tab = "bookings" | "wishlist" | "profile" | "ads" | "my-store" | "my-services";
+// ── Tab type extended with "invite" and "my-salon" (replaces "my-store") ──────
+type Tab = "bookings" | "wishlist" | "profile" | "ads" | "my-salon" | "my-services" | "invite";
 
 const SERVICE_TYPES = [
-  { id: "hair",   label: "Hair",   icon: "✂" },
-  { id: "nails",  label: "Nails",  icon: "◈" },
-  { id: "makeup", label: "Makeup", icon: "◉" },
-  { id: "lashes", label: "Lashes", icon: "◎" },
+  { id: "hair",   label: "Hair",   icon: "✂",  banner: "/banners/hair.jpg",   description: "From protective styles to blowouts, braids to colour — let clients know exactly what you specialise in." },
+  { id: "nails",  label: "Nails",  icon: "◈",  banner: "/banners/nails.jpg",  description: "Gels, acrylics, nail art, manicures and more — list every nail style you offer so clients can find you." },
+  { id: "makeup", label: "Makeup", icon: "◉",  banner: "/banners/makeup.jpg", description: "Bridal, editorial, glam, natural — describe the makeup looks you create." },
+  { id: "lashes", label: "Lashes", icon: "◎",  banner: "/banners/lashes.jpg", description: "Classic, hybrid, volume, mega volume — tell clients which lash styles you do." },
 ] as const;
+
+type ServiceTypeId = typeof SERVICE_TYPES[number]["id"];
 
 type BookingWithRelations = Booking & {
   artist?: Artist & { profile?: Profile };
@@ -102,7 +105,6 @@ function PillNav<T extends string>({
           ))}
         </div>
       </div>
-      {/* Scroll arrow — mobile only */}
       {canScrollRight && (
         <button
           onClick={scrollRight}
@@ -362,8 +364,15 @@ function AdsTab() {
   );
 }
 
-// ─── My Store tab ──────────────────────────────────────────────────────────────
-type StoreListing = {
+// ─── My Salon tab ──────────────────────────────────────────────────────────────
+const DAYS_OF_WEEK = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+type GalleryFile = {
+  file: File;
+  preview: string;
+};
+
+type SalonListing = {
   id?: string;
   salon_name: string;
   description: string;
@@ -372,51 +381,107 @@ type StoreListing = {
   city: string;
   phone: string;
   email: string;
-  opening_hours: string;
+  // Business hours
+  business_days: string[];      // e.g. ["Monday","Tuesday",...]
+  hours_open: string;           // "08:00"
+  hours_close: string;          // "17:00"
+  // Gallery
+  gallery_urls: string[];
   status?: "pending" | "approved" | "rejected";
 };
 
-function MyStoreTab({ user }: { user: User }) {
-  const supabase = createClient();
-  const [listing, setListing] = useState<StoreListing | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState("");
-  const [form, setForm] = useState<StoreListing>({
-    salon_name: "", description: "", address: "", suburb: "", city: "", phone: "", email: "", opening_hours: "",
-  });
+const emptySalon = (): SalonListing => ({
+  salon_name: "", description: "", address: "", suburb: "", city: "",
+  phone: "", email: "", business_days: [], hours_open: "08:00", hours_close: "17:00",
+  gallery_urls: [],
+});
 
-  useEffect(() => {
-    supabase
-      .from("store_listings")
-      .select("*")
-      .eq("owner_id", user.id)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data) { setListing(data as StoreListing); setForm(data as StoreListing); }
-        setLoading(false);
-      });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user.id]);
+function SalonForm({
+  initial,
+  userId,
+  onSaved,
+  onCancel,
+  isEdit,
+}: {
+  initial: SalonListing;
+  userId: string;
+  onSaved: (listing: SalonListing) => void;
+  onCancel?: () => void;
+  isEdit: boolean;
+}) {
+  const supabase = createClient();
+  const [form, setForm] = useState<SalonListing>(initial);
+  const [gallery, setGallery] = useState<GalleryFile[]>([]);
+  const [galleryError, setGalleryError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const dragRef = useRef<HTMLDivElement>(null);
+
+  const inputStyle: React.CSSProperties = { width: "100%", padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", boxSizing: "border-box" };
+  const labelStyle: React.CSSProperties = { display: "block", fontSize: "0.8rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" };
+
+  const toggleDay = (day: string) => {
+    setForm(f => ({
+      ...f,
+      business_days: f.business_days.includes(day)
+        ? f.business_days.filter(d => d !== day)
+        : [...f.business_days, day],
+    }));
+  };
+
+  const handleGalleryFiles = (files: FileList | null) => {
+    if (!files) return;
+    setGalleryError("");
+    const incoming = Array.from(files);
+    const allowed = ["image/jpeg", "image/png", "image/webp"];
+    const valid: GalleryFile[] = [];
+    for (const f of incoming) {
+      if (!allowed.includes(f.type)) { setGalleryError("Only JPG, PNG or WEBP files are allowed."); continue; }
+      if (f.size > 5 * 1024 * 1024) { setGalleryError("Each image must be under 5MB."); continue; }
+      if (gallery.length + valid.length >= 5) { setGalleryError("Maximum 5 images allowed."); break; }
+      valid.push({ file: f, preview: URL.createObjectURL(f) });
+    }
+    setGallery(prev => [...prev, ...valid].slice(0, 5));
+  };
+
+  const removeGalleryItem = (idx: number) => {
+    setGallery(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); };
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    handleGalleryFiles(e.dataTransfer.files);
+  };
+
+  const uploadGallery = async (): Promise<string[]> => {
+    const urls: string[] = [...form.gallery_urls];
+    for (const item of gallery) {
+      const ext = item.file.name.split(".").pop();
+      const path = `salons/${userId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const { error: uploadErr } = await supabase.storage.from("salon-gallery").upload(path, item.file, { upsert: false });
+      if (uploadErr) throw uploadErr;
+      const { data: { publicUrl } } = supabase.storage.from("salon-gallery").getPublicUrl(path);
+      urls.push(publicUrl);
+    }
+    return urls.slice(0, 5);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSaving(true); setError(""); setSaved(false);
+    setSaving(true); setError("");
     try {
-      const payload = { ...form, owner_id: user.id, status: "pending" };
+      const galleryUrls = await uploadGallery();
+      const payload = { ...form, gallery_urls: galleryUrls, owner_id: userId, status: "pending" };
       let data, err;
-      if (listing?.id) {
-        ({ data, error: err } = await supabase.from("store_listings").update(payload).eq("id", listing.id).select().single());
+      if (form.id) {
+        ({ data, error: err } = await supabase.from("store_listings").update(payload).eq("id", form.id).select().single());
       } else {
         ({ data, error: err } = await supabase.from("store_listings").insert(payload).select().single());
       }
       if (err) throw err;
-      setListing(data as StoreListing);
-      setSaved(true);
-      setShowForm(false);
-      setTimeout(() => setSaved(false), 4000);
+      setGallery([]);
+      onSaved(data as SalonListing);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -424,203 +489,609 @@ function MyStoreTab({ user }: { user: User }) {
     }
   };
 
-  if (loading) return <div style={{ color: "var(--grey)", fontSize: "0.9rem" }}>Loading…</div>;
+  return (
+    <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "1.25rem", marginBottom: "2rem", background: "#fff", borderRadius: 20, padding: "1.5rem", border: "1.5px solid rgba(155,127,184,0.15)" }}>
+      <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", margin: 0 }}>
+        {isEdit ? "Edit listing" : "Add a salon"}
+      </h3>
 
-  const inputStyle: React.CSSProperties = { width: "100%", padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", boxSizing: "border-box" };
-  const labelStyle: React.CSSProperties = { display: "block", fontSize: "0.8rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" };
+      <div>
+        <label style={labelStyle}>Salon name *</label>
+        <input required value={form.salon_name} onChange={e => setForm(f => ({ ...f, salon_name: e.target.value }))} placeholder="e.g. Beauty by Thandi" style={inputStyle} />
+      </div>
+      <div>
+        <label style={labelStyle}>Description</label>
+        <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Tell clients what makes your salon special…" rows={3} style={{ ...inputStyle, resize: "vertical" }} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+        <div>
+          <label style={labelStyle}>Suburb *</label>
+          <input required value={form.suburb} onChange={e => setForm(f => ({ ...f, suburb: e.target.value }))} placeholder="e.g. Sandton" style={inputStyle} />
+        </div>
+        <div>
+          <label style={labelStyle}>City *</label>
+          <input required value={form.city} onChange={e => setForm(f => ({ ...f, city: e.target.value }))} placeholder="e.g. Johannesburg" style={inputStyle} />
+        </div>
+      </div>
+      <div>
+        <label style={labelStyle}>Street address *</label>
+        <input required value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} placeholder="123 Main Street, Sandton" style={inputStyle} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+        <div>
+          <label style={labelStyle}>Phone number *</label>
+          <input required type="tel" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="082 123 4567" style={inputStyle} />
+        </div>
+        <div>
+          <label style={labelStyle}>Business email</label>
+          <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="hello@yoursalon.co.za" style={inputStyle} />
+        </div>
+      </div>
+
+      {/* Business hours */}
+      <div>
+        <label style={labelStyle}>Business hours — days open</label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+          {DAYS_OF_WEEK.map(day => {
+            const active = form.business_days.includes(day);
+            return (
+              <button
+                key={day}
+                type="button"
+                onClick={() => toggleDay(day)}
+                style={{
+                  borderRadius: 100, border: `1.5px solid ${active ? "var(--plum)" : "rgba(155,127,184,0.25)"}`,
+                  background: active ? "var(--plum)" : "#fff",
+                  color: active ? "#fff" : "var(--grey)",
+                  padding: "0.35rem 0.85rem", fontSize: "0.8rem", fontWeight: active ? 500 : 400,
+                  cursor: "pointer", transition: "all 0.15s",
+                }}
+              >
+                {day.slice(0, 3)}
+              </button>
+            );
+          })}
+        </div>
+        {form.business_days.length === 0 && (
+          <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "0.35rem" }}>Select at least one day.</p>
+        )}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+        <div>
+          <label style={labelStyle}>Opening time</label>
+          <input type="time" value={form.hours_open} onChange={e => setForm(f => ({ ...f, hours_open: e.target.value }))} style={inputStyle} />
+        </div>
+        <div>
+          <label style={labelStyle}>Closing time</label>
+          <input type="time" value={form.hours_close} onChange={e => setForm(f => ({ ...f, hours_close: e.target.value }))} style={inputStyle} />
+        </div>
+      </div>
+
+      {/* Gallery upload */}
+      <div>
+        <label style={labelStyle}>Gallery images (up to 5 · JPG, PNG, WEBP · max 5MB each)</label>
+        <div
+          ref={dragRef}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+          onClick={() => document.getElementById(`gallery-input-${form.id ?? "new"}`)?.click()}
+          style={{
+            border: "2px dashed rgba(155,127,184,0.35)", borderRadius: 14,
+            background: "var(--plum-t)", padding: "1.5rem",
+            textAlign: "center", cursor: "pointer", transition: "background 0.2s",
+          }}
+          onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = "#ede6f5"}
+          onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = "var(--plum-t)"}
+        >
+          <div style={{ fontSize: "1.75rem", marginBottom: "0.35rem" }}>🖼️</div>
+          <p style={{ fontSize: "0.85rem", color: "var(--grey)" }}>Drag &amp; drop images here, or <span style={{ color: "var(--plum)", fontWeight: 500 }}>click to browse</span></p>
+          <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "0.25rem" }}>{gallery.length}/5 added</p>
+          <input
+            id={`gallery-input-${form.id ?? "new"}`}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            multiple
+            onChange={e => handleGalleryFiles(e.target.files)}
+            style={{ display: "none" }}
+          />
+        </div>
+        {galleryError && <p style={{ color: "#E53935", fontSize: "0.8rem", marginTop: "0.35rem" }}>{galleryError}</p>}
+        {gallery.length > 0 && (
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
+            {gallery.map((g, i) => (
+              <div key={i} style={{ position: "relative" }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={g.preview} alt={`Gallery ${i + 1}`} style={{ width: 72, height: 72, borderRadius: 10, objectFit: "cover", border: "1.5px solid rgba(155,127,184,0.25)" }} />
+                <button
+                  type="button"
+                  onClick={() => removeGalleryItem(i)}
+                  style={{ position: "absolute", top: -6, right: -6, background: "#E53935", border: "none", borderRadius: "50%", width: 20, height: 20, color: "#fff", fontSize: "0.7rem", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+                >✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {form.gallery_urls.length > 0 && (
+          <div>
+            <p style={{ fontSize: "0.75rem", color: "var(--light)", margin: "0.5rem 0 0.35rem" }}>Existing images:</p>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              {form.gallery_urls.map((url, i) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img key={i} src={url} alt={`Gallery ${i + 1}`} style={{ width: 72, height: 72, borderRadius: 10, objectFit: "cover", border: "1.5px solid rgba(155,127,184,0.25)" }} />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {error && <p style={{ color: "#E53935", fontSize: "0.85rem" }}>{error}</p>}
+
+      <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+        <button type="submit" className="btn-plum" disabled={saving} style={{ padding: "0.75rem 2rem" }}>
+          {saving ? "Saving…" : isEdit ? "Save changes" : "Add to cart — R35"}
+        </button>
+        {onCancel && (
+          <button type="button" onClick={onCancel} className="btn-outline" style={{ padding: "0.75rem 1.5rem" }}>Cancel</button>
+        )}
+      </div>
+      {!isEdit && (
+        <p style={{ fontSize: "0.78rem", color: "var(--light)" }}>
+          After submitting, you will be prompted to pay R35 to publish your listing. Renewal is once per year.
+        </p>
+      )}
+    </form>
+  );
+}
+
+function MySalonTab({ user }: { user: User }) {
+  const supabase = createClient();
+  const [listings, setListings] = useState<SalonListing[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [addingNew, setAddingNew] = useState(false);
+  const [savedMsg, setSavedMsg] = useState("");
+
+  useEffect(() => {
+    supabase
+      .from("store_listings")
+      .select("*")
+      .eq("owner_id", user.id)
+      .then(({ data }) => {
+        if (data) setListings(data as SalonListing[]);
+        setLoading(false);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user.id]);
 
   const statusInfo: Record<string, { bg: string; color: string; label: string; desc: string }> = {
-    pending:  { bg: "#FFF3E0", color: "#E65100", label: "Under review",  desc: "Your listing has been submitted and is being reviewed by our team. We'll notify you once approved." },
-    approved: { bg: "#E8F5E9", color: "#2E7D32", label: "Live",          desc: "Your salon is listed on Umuhle and visible in Nearby Salons search results." },
+    pending:  { bg: "#FFF3E0", color: "#E65100", label: "Under review",  desc: "Your listing has been submitted and is being reviewed by our team." },
+    approved: { bg: "#E8F5E9", color: "#2E7D32", label: "Live",          desc: "Your salon is listed on Umuhle and visible in Nearby Salons search." },
     rejected: { bg: "#FBE9E7", color: "#BF360C", label: "Not approved",  desc: "Your listing was not approved. Please update the details and resubmit." },
   };
 
+  const handleSaved = (saved: SalonListing) => {
+    setListings(prev => {
+      const idx = prev.findIndex(l => l.id === saved.id);
+      if (idx >= 0) { const next = [...prev]; next[idx] = saved; return next; }
+      return [...prev, saved];
+    });
+    setEditingId(null);
+    setAddingNew(false);
+    setSavedMsg("✓ Listing saved and sent for review.");
+    setTimeout(() => setSavedMsg(""), 4000);
+  };
+
+  if (loading) return <div style={{ color: "var(--grey)", fontSize: "0.9rem" }}>Loading…</div>;
+
   return (
-    <div style={{ maxWidth: 640 }}>
-      <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>My Store</h2>
+    <div style={{ maxWidth: 680 }}>
+      <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>My Salon</h2>
       <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
         List your salon on Umuhle to appear in Nearby Salons search results and reach new clients.
       </p>
 
-      {/* Pricing info */}
-      <div style={{ background: "var(--plum-t)", borderRadius: 16, padding: "1.25rem", marginBottom: "1.75rem", border: "1.5px solid rgba(155,127,184,0.2)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "1rem" }}>
-          <div>
-            <p style={{ fontSize: "0.75rem", fontWeight: 500, color: "var(--plum)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "0.25rem" }}>Listing fee</p>
-            <p style={{ fontFamily: "var(--font-display)", fontSize: "1.5rem", color: "var(--plum)", fontWeight: 500 }}>R35 <span style={{ fontSize: "0.85rem", fontWeight: 400, color: "var(--grey)" }}>/ year</span></p>
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <p style={{ fontSize: "0.8rem", color: "var(--grey)", lineHeight: 1.6 }}>
-              Listed in Nearby Salons search<br />
-              Salon profile &amp; map location<br />
-              Gallery images &amp; opening hours
-            </p>
-          </div>
-        </div>
+      {/* Pricing summary — price only */}
+      <div style={{ background: "var(--plum-t)", borderRadius: 16, padding: "1rem 1.25rem", marginBottom: "1.75rem", border: "1.5px solid rgba(155,127,184,0.2)", display: "inline-flex", alignItems: "baseline", gap: "0.5rem" }}>
+        <p style={{ fontFamily: "var(--font-display)", fontSize: "1.5rem", color: "var(--plum)", fontWeight: 500, margin: 0 }}>R35</p>
+        <p style={{ fontSize: "0.85rem", color: "var(--grey)", margin: 0 }}>/ year per listing</p>
       </div>
 
-      {/* Existing listing status */}
-      {listing && !showForm && (
-        <div style={{ border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 18, background: "#fff", padding: "1.5rem", marginBottom: "1.5rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "1rem", marginBottom: "1rem" }}>
-            <div>
-              <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1.15rem", marginBottom: "0.2rem" }}>{listing.salon_name}</h3>
-              <p style={{ fontSize: "0.85rem", color: "var(--grey)" }}>{listing.suburb}, {listing.city}</p>
-            </div>
-            {listing.status && (
-              <span style={{ background: statusInfo[listing.status]?.bg, color: statusInfo[listing.status]?.color, borderRadius: 100, padding: "0.3rem 0.9rem", fontSize: "0.78rem", fontWeight: 600, whiteSpace: "nowrap" }}>
-                {statusInfo[listing.status]?.label}
-              </span>
-            )}
-          </div>
-          <p style={{ fontSize: "0.82rem", color: "var(--grey)", marginBottom: "1rem", lineHeight: 1.5 }}>
-            {listing.status && statusInfo[listing.status]?.desc}
-          </p>
-          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-            <button onClick={() => setShowForm(true)} className="btn-outline" style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem" }}>Edit listing</button>
-            {listing.status !== "approved" && (
-              <button className="btn-plum" style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem" }} onClick={() => alert("PayFast payment for listing renewal coming soon!")}>
-                Pay R35 &amp; Submit
-              </button>
-            )}
-          </div>
+      {savedMsg && (
+        <div style={{ background: "#E8F5E9", borderRadius: 12, padding: "0.85rem 1.25rem", marginBottom: "1.25rem", color: "#2E7D32", fontSize: "0.88rem" }}>
+          {savedMsg}
         </div>
       )}
 
-      {saved && (
-        <div style={{ background: "#E8F5E9", borderRadius: 12, padding: "0.85rem 1.25rem", marginBottom: "1rem", color: "#2E7D32", fontSize: "0.88rem" }}>
-          ✓ Listing saved and sent to admin for review. We'll notify you once approved.
-        </div>
-      )}
-
-      {/* Add / edit form */}
-      {(!listing || showForm) && (
-        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-          <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "0" }}>
-            {listing ? "Edit your listing" : "Add your salon"}
-          </h3>
-
-          <div>
-            <label style={labelStyle}>Salon name *</label>
-            <input required value={form.salon_name} onChange={e => setForm(f => ({ ...f, salon_name: e.target.value }))} placeholder="e.g. Beauty by Thandi" style={inputStyle} />
-          </div>
-          <div>
-            <label style={labelStyle}>Description</label>
-            <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Tell clients what makes your salon special…" rows={3} style={{ ...inputStyle, resize: "vertical" }} />
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-            <div>
-              <label style={labelStyle}>Suburb *</label>
-              <input required value={form.suburb} onChange={e => setForm(f => ({ ...f, suburb: e.target.value }))} placeholder="e.g. Sandton" style={inputStyle} />
+      {/* Existing listings */}
+      {listings.map(listing => (
+        <div key={listing.id}>
+          {editingId === listing.id ? (
+            <SalonForm
+              key={listing.id}
+              initial={listing}
+              userId={user.id}
+              onSaved={handleSaved}
+              onCancel={() => setEditingId(null)}
+              isEdit
+            />
+          ) : (
+            <div style={{ border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 18, background: "#fff", padding: "1.5rem", marginBottom: "1.25rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "1rem", marginBottom: "0.75rem" }}>
+                <div>
+                  <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1.15rem", marginBottom: "0.2rem" }}>{listing.salon_name}</h3>
+                  <p style={{ fontSize: "0.85rem", color: "var(--grey)" }}>{listing.suburb}, {listing.city}</p>
+                </div>
+                {listing.status && (
+                  <span style={{ background: statusInfo[listing.status]?.bg, color: statusInfo[listing.status]?.color, borderRadius: 100, padding: "0.3rem 0.9rem", fontSize: "0.78rem", fontWeight: 600, whiteSpace: "nowrap" }}>
+                    {statusInfo[listing.status]?.label}
+                  </span>
+                )}
+              </div>
+              <p style={{ fontSize: "0.82rem", color: "var(--grey)", marginBottom: "1rem", lineHeight: 1.5 }}>
+                {listing.status && statusInfo[listing.status]?.desc}
+              </p>
+              <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                <button onClick={() => setEditingId(listing.id!)} className="btn-outline" style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem" }}>Edit listing</button>
+                {listing.status !== "approved" && (
+                  <button className="btn-plum" style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem" }} onClick={() => alert("PayFast payment coming soon!")}>
+                    Pay R35 &amp; Submit
+                  </button>
+                )}
+              </div>
             </div>
-            <div>
-              <label style={labelStyle}>City *</label>
-              <input required value={form.city} onChange={e => setForm(f => ({ ...f, city: e.target.value }))} placeholder="e.g. Johannesburg" style={inputStyle} />
-            </div>
-          </div>
-          <div>
-            <label style={labelStyle}>Street address *</label>
-            <input required value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} placeholder="123 Main Street, Sandton" style={inputStyle} />
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-            <div>
-              <label style={labelStyle}>Phone number *</label>
-              <input required type="tel" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="082 123 4567" style={inputStyle} />
-            </div>
-            <div>
-              <label style={labelStyle}>Business email</label>
-              <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="hello@yoursalon.co.za" style={inputStyle} />
-            </div>
-          </div>
-          <div>
-            <label style={labelStyle}>Opening hours</label>
-            <input value={form.opening_hours} onChange={e => setForm(f => ({ ...f, opening_hours: e.target.value }))} placeholder="e.g. Mon–Fri 8am–6pm, Sat 9am–4pm" style={inputStyle} />
-          </div>
-
-          <div style={{ background: "#FFF3E0", borderRadius: 12, padding: "1rem 1.25rem", fontSize: "0.83rem", color: "#6D4C41", lineHeight: 1.6 }}>
-            <strong>Before submitting:</strong> Your listing will be reviewed by our admin team. Once approved, it will appear in Nearby Salons. A once-off payment of <strong>R35</strong> (renewed annually) is required to publish your listing.
-          </div>
-
-          {error && <p style={{ color: "#E53935", fontSize: "0.85rem" }}>{error}</p>}
-
-          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-            <button type="submit" className="btn-plum" disabled={saving} style={{ padding: "0.75rem 2rem" }}>
-              {saving ? "Saving…" : listing ? "Save changes" : "Submit listing"}
-            </button>
-            {showForm && listing && (
-              <button type="button" onClick={() => setShowForm(false)} className="btn-outline" style={{ padding: "0.75rem 1.5rem" }}>Cancel</button>
-            )}
-          </div>
-          {!listing && (
-            <p style={{ fontSize: "0.78rem", color: "var(--light)" }}>
-              After submitting, you will be prompted to pay R35 to publish your listing. Renewal is once per year.
-            </p>
           )}
-        </form>
+        </div>
+      ))}
+
+      {/* Add new form */}
+      {addingNew && (
+        <SalonForm
+          initial={emptySalon()}
+          userId={user.id}
+          onSaved={handleSaved}
+          onCancel={() => setAddingNew(false)}
+          isEdit={false}
+        />
+      )}
+
+      {!addingNew && (
+        <button
+          type="button"
+          onClick={() => setAddingNew(true)}
+          className="btn-outline"
+          style={{ display: "flex", alignItems: "center", gap: "0.4rem", padding: "0.65rem 1.5rem", fontSize: "0.88rem" }}
+        >
+          <span style={{ fontSize: "1.1rem", lineHeight: 1 }}>+</span> Add another salon
+        </button>
       )}
     </div>
   );
 }
 
 // ─── My Services tab ───────────────────────────────────────────────────────────
+// Each service category has a repeater for style tags.
+type ServiceStyles = Record<ServiceTypeId, string[]>;
+
 function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: User; onUpdate: (p: Profile) => void }) {
   const supabase = createClient();
   const [selected, setSelected] = useState<string[]>(profile.artist_category ? [profile.artist_category] : []);
+  const [styles, setStyles] = useState<ServiceStyles>({ hair: [], nails: [], makeup: [], lashes: [] });
+  const [styleInputs, setStyleInputs] = useState<Record<ServiceTypeId, string>>({ hair: "", nails: "", makeup: "", lashes: "" });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  const [loadingStyles, setLoadingStyles] = useState(true);
+
+  // Load existing styles from DB on mount
+  useEffect(() => {
+    supabase
+      .from("artist_service_styles")
+      .select("category, style")
+      .eq("user_id", user.id)
+      .then(({ data }) => {
+        if (data) {
+          const grouped: ServiceStyles = { hair: [], nails: [], makeup: [], lashes: [] };
+          for (const row of data as { category: ServiceTypeId; style: string }[]) {
+            if (grouped[row.category]) grouped[row.category].push(row.style);
+          }
+          setStyles(grouped);
+        }
+        setLoadingStyles(false);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user.id]);
+
   const toggle = (id: string) => setSelected(prev => prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]);
+
+  const addStyle = (cat: ServiceTypeId) => {
+    const val = styleInputs[cat].trim();
+    if (!val) return;
+    if (styles[cat].includes(val)) { setStyleInputs(i => ({ ...i, [cat]: "" })); return; }
+    setStyles(s => ({ ...s, [cat]: [...s[cat], val] }));
+    setStyleInputs(i => ({ ...i, [cat]: "" }));
+  };
+
+  const removeStyle = (cat: ServiceTypeId, idx: number) => {
+    setStyles(s => ({ ...s, [cat]: s[cat].filter((_, i) => i !== idx) }));
+  };
+
   const handleSave = async () => {
     setSaving(true); setError(""); setSaved(false);
-    const primary = selected[0] ?? null;
-    const { data, error: err } = await supabase.from("profiles").update({ artist_category: primary as Profile["artist_category"], updated_at: new Date().toISOString() }).eq("id", user.id).select().single();
-    setSaving(false);
-    if (err) { setError(err.message); return; }
-    if (data) { onUpdate(data as Profile); setSaved(true); setTimeout(() => setSaved(false), 3000); }
+    try {
+      const primary = selected[0] ?? null;
+
+      // Update profile category
+      const { data, error: err } = await supabase
+        .from("profiles")
+        .update({ artist_category: primary as Profile["artist_category"], updated_at: new Date().toISOString() })
+        .eq("id", user.id)
+        .select()
+        .single();
+      if (err) throw err;
+
+      // Upsert styles: delete existing, re-insert
+      await supabase.from("artist_service_styles").delete().eq("user_id", user.id);
+      const rows: { user_id: string; category: ServiceTypeId; style: string }[] = [];
+      for (const cat of selected as ServiceTypeId[]) {
+        for (const style of styles[cat]) {
+          rows.push({ user_id: user.id, category: cat, style });
+        }
+      }
+      if (rows.length > 0) {
+        const { error: insertErr } = await supabase.from("artist_service_styles").insert(rows);
+        if (insertErr) throw insertErr;
+      }
+
+      if (data) { onUpdate(data as Profile); setSaved(true); setTimeout(() => setSaved(false), 3000); }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setSaving(false);
+    }
   };
+
+  if (loadingStyles) return <div style={{ color: "var(--grey)", fontSize: "0.9rem" }}>Loading…</div>;
+
   return (
-    <div style={{ maxWidth: 520 }}>
+    <div style={{ maxWidth: 680 }}>
       <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>My Services</h2>
-      <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "2rem" }}>Select the beauty services you offer. You can pick one or all.</p>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginBottom: "1.75rem" }}>
+      <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "2rem" }}>
+        Select the beauty services you offer and list the styles you specialise in. Clients search by style — the more specific, the better.
+      </p>
+
+      {/* 4 category sections */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
         {SERVICE_TYPES.map(s => {
           const active = selected.includes(s.id);
           return (
-            <button key={s.id} type="button" onClick={() => toggle(s.id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "0.5rem", padding: "1.5rem 1rem", background: active ? "var(--plum)" : "#fff", color: active ? "#fff" : "var(--grey)", border: `2px solid ${active ? "var(--plum)" : "rgba(155,127,184,0.2)"}`, borderRadius: 16, cursor: "pointer", transition: "all 0.18s", fontFamily: "var(--font-body)", fontSize: "0.9rem", fontWeight: active ? 600 : 400 }}>
-              <span style={{ fontSize: "1.75rem" }}>{s.icon}</span>
-              {s.label}
-              {active && <span style={{ fontSize: "0.7rem", opacity: 0.85 }}>Selected ✓</span>}
-            </button>
+            <div key={s.id} style={{ borderRadius: 20, overflow: "hidden", border: `2px solid ${active ? "var(--plum)" : "rgba(155,127,184,0.18)"}`, transition: "border-color 0.2s" }}>
+              {/* Banner */}
+              <div style={{ position: "relative", height: 110, background: "var(--plum-t)", overflow: "hidden" }}>
+                <Image
+                  src={s.banner}
+                  alt={s.label}
+                  fill
+                  style={{ objectFit: "cover", opacity: 0.6 }}
+                />
+                <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to right, rgba(155,127,184,0.55) 0%, transparent 60%)", display: "flex", alignItems: "center", padding: "0 1.5rem", gap: "0.75rem" }}>
+                  <span style={{ fontSize: "2rem" }}>{s.icon}</span>
+                  <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1.5rem", color: "#fff", margin: 0, textShadow: "0 1px 4px rgba(0,0,0,0.3)" }}>{s.label}</h2>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div style={{ padding: "1.25rem 1.5rem", background: "#fff" }}>
+                {/* Toggle */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
+                  <p style={{ fontSize: "0.85rem", color: "var(--grey)", margin: 0, maxWidth: 420, lineHeight: 1.5 }}>{s.description}</p>
+                  <button
+                    type="button"
+                    onClick={() => toggle(s.id)}
+                    style={{
+                      flexShrink: 0, marginLeft: "1rem",
+                      borderRadius: 100, border: `1.5px solid ${active ? "var(--plum)" : "rgba(155,127,184,0.3)"}`,
+                      background: active ? "var(--plum)" : "#fff",
+                      color: active ? "#fff" : "var(--grey)",
+                      padding: "0.4rem 1rem", fontSize: "0.8rem", fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap", transition: "all 0.15s",
+                    }}
+                  >
+                    {active ? "Selected ✓" : "Select"}
+                  </button>
+                </div>
+
+                {/* Styles repeater — shown when selected */}
+                {active && (
+                  <div>
+                    <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.5rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                      {s.label} styles you offer
+                    </label>
+                    {/* Tag list */}
+                    {styles[s.id].length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.75rem" }}>
+                        {styles[s.id].map((style, idx) => (
+                          <span key={idx} style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", background: "var(--plum-t)", color: "var(--plum)", borderRadius: 100, padding: "0.25rem 0.75rem", fontSize: "0.82rem", fontWeight: 500 }}>
+                            {style}
+                            <button
+                              type="button"
+                              onClick={() => removeStyle(s.id, idx)}
+                              style={{ background: "none", border: "none", color: "var(--plum)", cursor: "pointer", padding: "0 0.1rem", fontSize: "0.75rem", lineHeight: 1, display: "flex", alignItems: "center" }}
+                              aria-label={`Remove ${style}`}
+                            >✕</button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {/* Add input */}
+                    <div style={{ display: "flex", gap: "0.5rem" }}>
+                      <input
+                        value={styleInputs[s.id]}
+                        onChange={e => setStyleInputs(i => ({ ...i, [s.id]: e.target.value }))}
+                        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addStyle(s.id); } }}
+                        placeholder={`e.g. ${s.id === "hair" ? "Dreadlocks" : s.id === "nails" ? "Gel extensions" : s.id === "makeup" ? "Bridal glam" : "Volume lashes"}`}
+                        style={{ flex: 1, padding: "0.6rem 0.9rem", borderRadius: 10, border: "1.5px solid #E0E0E0", fontSize: "0.88rem" }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => addStyle(s.id)}
+                        style={{ flexShrink: 0, background: "var(--plum)", color: "#fff", border: "none", borderRadius: 10, padding: "0.6rem 1rem", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer" }}
+                      >Add</button>
+                    </div>
+                    <p style={{ fontSize: "0.73rem", color: "var(--light)", marginTop: "0.35rem" }}>Press Enter or click Add. These become searchable tags on Umuhle.</p>
+                  </div>
+                )}
+              </div>
+            </div>
           );
         })}
       </div>
-      {selected.length === 0 && <p style={{ fontSize: "0.82rem", color: "var(--nude)", marginBottom: "1rem" }}>Select at least one service you offer.</p>}
-      {error && <p style={{ color: "#E53935", fontSize: "0.85rem", marginBottom: "1rem" }}>{error}</p>}
-      {saved && <p style={{ color: "var(--forest)", fontSize: "0.85rem", marginBottom: "1rem" }}>Services saved.</p>}
-      <button onClick={handleSave} className="btn-plum" disabled={saving || selected.length === 0} style={{ padding: "0.75rem 2rem" }}>{saving ? "Saving…" : "Save services"}</button>
-      <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "1rem" }}>Your listed services help clients find you when searching on Umuhle.</p>
+
+      <div style={{ marginTop: "1.75rem" }}>
+        {selected.length === 0 && <p style={{ fontSize: "0.82rem", color: "var(--nude)", marginBottom: "1rem" }}>Select at least one service you offer.</p>}
+        {error && <p style={{ color: "#E53935", fontSize: "0.85rem", marginBottom: "1rem" }}>{error}</p>}
+        {saved && <p style={{ color: "var(--forest)", fontSize: "0.85rem", marginBottom: "1rem" }}>Services saved.</p>}
+        <button onClick={handleSave} className="btn-plum" disabled={saving || selected.length === 0} style={{ padding: "0.75rem 2rem" }}>{saving ? "Saving…" : "Save services"}</button>
+        <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "1rem" }}>Your listed services and styles help clients find you when searching on Umuhle.</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Invite tab ────────────────────────────────────────────────────────────────
+function InviteTab({ profile }: { profile: Profile }) {
+  const [copied, setCopied] = useState(false);
+  const referralLink = profile.referral_code
+    ? `https://umuhle.co.za/?referral-code=${profile.referral_code}`
+    : null;
+
+  const handleCopy = () => {
+    if (!referralLink) return;
+    navigator.clipboard.writeText(referralLink);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
+  };
+
+  const handleShare = () => {
+    if (!referralLink) return;
+    if (navigator.share) {
+      navigator.share({ title: "Join me on Umuhle", text: "Book beauty artists near you on Umuhle!", url: referralLink }).catch(() => {});
+    } else {
+      handleCopy();
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: 520 }}>
+      <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>Invite &amp; Earn</h2>
+      <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "2rem", lineHeight: 1.6 }}>
+        Share your personal invite link with friends. When they sign up and book through Umuhle, you both earn rewards.
+      </p>
+
+      {referralLink ? (
+        <>
+          {/* Link display */}
+          <div style={{ background: "var(--plum-t)", border: "1.5px solid rgba(155,127,184,0.25)", borderRadius: 16, padding: "1.25rem 1.5rem", marginBottom: "1.25rem" }}>
+            <p style={{ fontSize: "0.75rem", fontWeight: 500, color: "var(--plum)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "0.5rem" }}>Your invite link</p>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", background: "#fff", borderRadius: 12, padding: "0.65rem 0.9rem", border: "1.5px solid rgba(155,127,184,0.2)", flexWrap: "wrap" }}>
+              <span style={{ flex: 1, fontSize: "0.85rem", color: "var(--grey)", wordBreak: "break-all", fontFamily: "monospace" }}>{referralLink}</span>
+              <button
+                onClick={handleCopy}
+                style={{ flexShrink: 0, background: copied ? "var(--forest)" : "var(--plum)", color: "#fff", border: "none", borderRadius: 8, padding: "0.4rem 0.9rem", fontSize: "0.8rem", fontWeight: 500, cursor: "pointer", transition: "background 0.2s", whiteSpace: "nowrap" }}
+              >
+                {copied ? "Copied ✓" : "Copy link"}
+              </button>
+            </div>
+          </div>
+
+          {/* Referral code */}
+          <div style={{ marginBottom: "1.5rem" }}>
+            <p style={{ fontSize: "0.75rem", fontWeight: 500, color: "var(--grey)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "0.35rem" }}>Your referral code</p>
+            <span style={{ fontFamily: "var(--font-display)", fontSize: "2rem", fontWeight: 500, color: "var(--plum)", letterSpacing: "0.15em" }}>{profile.referral_code}</span>
+          </div>
+
+          {/* Share button */}
+          <button onClick={handleShare} className="btn-plum" style={{ padding: "0.75rem 2rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <span>📤</span> Share invite
+          </button>
+
+          {/* How it works */}
+          <div style={{ marginTop: "2.5rem", display: "flex", flexDirection: "column", gap: "0.85rem" }}>
+            <p style={{ fontSize: "0.8rem", fontWeight: 500, color: "var(--grey)", textTransform: "uppercase", letterSpacing: "0.08em" }}>How it works</p>
+            {[
+              { icon: "🔗", text: "Share your unique invite link with a friend." },
+              { icon: "✍️", text: "They sign up using your link." },
+              { icon: "💜", text: "When they make their first booking, you both earn rewards." },
+            ].map((step, i) => (
+              <div key={i} style={{ display: "flex", gap: "0.85rem", alignItems: "flex-start" }}>
+                <span style={{ fontSize: "1.3rem", flexShrink: 0 }}>{step.icon}</span>
+                <p style={{ fontSize: "0.88rem", color: "var(--grey)", margin: 0, lineHeight: 1.5 }}>{step.text}</p>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div style={{ background: "var(--plum-t)", borderRadius: 16, padding: "2rem", textAlign: "center" }}>
+          <p style={{ color: "var(--grey)", fontSize: "0.9rem" }}>Your referral code is being generated. Check back shortly.</p>
+        </div>
+      )}
     </div>
   );
 }
 
 // ─── Point of Contact popup ────────────────────────────────────────────────────
+// State for PoC WhatsApp acceptance flow
+type PocStatus = "idle" | "sent" | "confirmed";
+
 function PocPopup({ onSave, onDismiss }: { onSave: (name: string, phone: string) => void; onDismiss: () => void }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [saving, setSaving] = useState(false);
-  const handleSave = async () => {
+  const [pocConsentData, setPocConsentData] = useState(false);
+  const [pocConsentContact, setPocConsentContact] = useState(false);
+  const [sendingWa, setSendingWa] = useState(false);
+  const [pocStatus, setPocStatus] = useState<PocStatus>("idle");
+  const [waError, setWaError] = useState("");
+
+  const canSubmit = name.trim() && phone.trim() && pocConsentData && pocConsentContact;
+
+  const handleSendWhatsApp = async () => {
     if (!name.trim() || !phone.trim()) return;
+    setSendingWa(true); setWaError("");
+    try {
+      const res = await fetch("/api/poc/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), phone: phone.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to send WhatsApp message");
+      setPocStatus("sent");
+    } catch (err: unknown) {
+      setWaError(err instanceof Error ? err.message : "Failed to send. Please check the number and try again.");
+    } finally {
+      setSendingWa(false);
+    }
+  };
+
+  const handleConfirmAccepted = async () => {
     setSaving(true);
     await onSave(name.trim(), phone.trim());
     setSaving(false);
+    setPocStatus("confirmed");
   };
+
   return (
     <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onDismiss(); }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 420, boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 440, boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
         <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", marginBottom: "0.5rem" }}>Add Point of Contact</h3>
-        <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem", lineHeight: 1.6 }}>
-          Your Point of Contact is someone who can be reached during your appointment — for example a family member or friend. Artists may need to get in touch if there&apos;s an issue at the meeting location. This person is required before any booking can be made.
-        </p>
+
+        {/* ── Description (requirement 1) ── */}
+        <div style={{ background: "var(--plum-t)", borderRadius: 12, padding: "0.9rem 1rem", marginBottom: "1.5rem", lineHeight: 1.65 }}>
+          <p style={{ fontSize: "0.875rem", color: "var(--onyx)", margin: 0 }}>
+            <strong>A Point of Contact is required before making a booking.</strong> This is a trusted person — such as a family member or close friend — who can be reached on your behalf during your appointment. They act as your emergency contact for safety and peace of mind, and may be contacted by the artist if anything arises at the meeting location.
+          </p>
+        </div>
+
         <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
           <div>
             <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Name *</label>
@@ -630,9 +1101,72 @@ function PocPopup({ onSave, onDismiss }: { onSave: (name: string, phone: string)
             <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>WhatsApp number *</label>
             <input value={phone} onChange={e => setPhone(e.target.value)} type="tel" placeholder="e.g. 082 123 4567" style={{ width: "100%", padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", boxSizing: "border-box" }} />
           </div>
-          <button className="btn-plum" onClick={handleSave} disabled={saving || !name.trim() || !phone.trim()} style={{ width: "100%", padding: "0.75rem" }}>
-            {saving ? "Saving…" : "Save &amp; continue"}
-          </button>
+
+          {/* POPIA Consent checkboxes */}
+          <div style={{ background: "#FAFAFA", borderRadius: 12, padding: "0.9rem 1rem", display: "flex", flexDirection: "column", gap: "0.65rem", border: "1px solid #EBEBEB" }}>
+            <p style={{ fontSize: "0.73rem", fontWeight: 600, color: "var(--grey)", textTransform: "uppercase", letterSpacing: "0.07em", margin: 0 }}>POPIA Consent</p>
+            <label style={{ display: "flex", gap: "0.65rem", alignItems: "flex-start", cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={pocConsentData}
+                onChange={e => setPocConsentData(e.target.checked)}
+                style={{ marginTop: "0.15rem", accentColor: "var(--plum)", width: 16, height: 16, flexShrink: 0 }}
+              />
+              <span style={{ fontSize: "0.82rem", color: "var(--grey)", lineHeight: 1.5 }}>
+                I confirm that I have this person&apos;s permission to share their name and phone number with Umuhle.
+              </span>
+            </label>
+            <label style={{ display: "flex", gap: "0.65rem", alignItems: "flex-start", cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={pocConsentContact}
+                onChange={e => setPocConsentContact(e.target.checked)}
+                style={{ marginTop: "0.15rem", accentColor: "var(--plum)", width: 16, height: 16, flexShrink: 0 }}
+              />
+              <span style={{ fontSize: "0.82rem", color: "var(--grey)", lineHeight: 1.5 }}>
+                I confirm that Umuhle may contact this person directly via WhatsApp in relation to my bookings.
+              </span>
+            </label>
+          </div>
+
+          {/* Step 1: Send WhatsApp to PoC for acceptance */}
+          {pocStatus === "idle" && (
+            <>
+              {waError && <p style={{ color: "#E53935", fontSize: "0.8rem" }}>{waError}</p>}
+              <button
+                className="btn-plum"
+                onClick={handleSendWhatsApp}
+                disabled={sendingWa || !canSubmit}
+                style={{ width: "100%", padding: "0.75rem" }}
+              >
+                {sendingWa ? "Sending…" : "Send WhatsApp to confirm"}
+              </button>
+              <p style={{ fontSize: "0.75rem", color: "var(--light)", textAlign: "center" }}>
+                A WhatsApp message will be sent to this person asking them to accept being your Point of Contact.
+              </p>
+            </>
+          )}
+
+          {/* Step 2: Waiting for PoC to accept */}
+          {pocStatus === "sent" && (
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>💬</div>
+              <p style={{ fontSize: "0.875rem", color: "var(--grey)", marginBottom: "1rem", lineHeight: 1.6 }}>
+                A WhatsApp message has been sent to <strong>{name}</strong> at <strong>{phone}</strong>. Once they reply to accept, click the button below.
+              </p>
+              <button className="btn-plum" onClick={handleConfirmAccepted} disabled={saving} style={{ width: "100%", padding: "0.75rem", marginBottom: "0.5rem" }}>
+                {saving ? "Saving…" : "They've accepted — confirm"}
+              </button>
+              <button
+                onClick={handleSendWhatsApp}
+                disabled={sendingWa}
+                style={{ background: "none", border: "none", color: "var(--plum)", fontSize: "0.83rem", cursor: "pointer", textDecoration: "underline" }}
+              >
+                Resend WhatsApp
+              </button>
+            </div>
+          )}
+
           <button onClick={onDismiss} style={{ background: "none", border: "none", color: "var(--light)", fontSize: "0.85rem", cursor: "pointer", textAlign: "center" }}>Remind me later</button>
         </div>
       </div>
@@ -671,49 +1205,76 @@ function BookingsTab({ user, profile, onUpdateProfile }: { user: User; profile: 
 
   const handleSavePoc = async (name: string, phone: string) => {
     setPocSaving(true);
-    const { data } = await supabase.from("profiles").update({ poc_name: name, poc_phone: phone, updated_at: new Date().toISOString() }).eq("id", user.id).select().single();
+    const { data } = await supabase
+      .from("profiles")
+      .update({ poc_name: name, poc_phone: phone, updated_at: new Date().toISOString() })
+      .eq("id", user.id)
+      .select()
+      .single();
     setPocSaving(false);
     if (data) { onUpdateProfile(data as Profile); }
     setShowPocPopup(false);
   };
 
-  const inputStyle: React.CSSProperties = { padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", width: "100%", boxSizing: "border-box" };
+  const handleRemovePoc = async () => {
+    const { data } = await supabase
+      .from("profiles")
+      .update({ poc_name: null, poc_phone: null, updated_at: new Date().toISOString() })
+      .eq("id", user.id)
+      .select()
+      .single();
+    if (data) onUpdateProfile(data as Profile);
+  };
 
   return (
     <section>
       {/* ── Point of Contact section ── */}
-      <div style={{ background: hasPoc ? "#E8F5E9" : "var(--plum-t)", border: `1.5px solid ${hasPoc ? "rgba(46,125,50,0.2)" : "rgba(155,127,184,0.2)"}`, borderRadius: 18, padding: "1.25rem 1.5rem", marginBottom: "2rem" }}>
+      <div style={{
+        background: hasPoc ? "#E8F5E9" : "var(--plum-t)",
+        border: `1.5px solid ${hasPoc ? "rgba(46,125,50,0.2)" : "rgba(155,127,184,0.2)"}`,
+        borderRadius: 18, padding: "1.25rem 1.5rem", marginBottom: "2rem",
+      }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem", flexWrap: "wrap" }}>
           <div style={{ flex: 1 }}>
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.4rem" }}>
               <span style={{ fontSize: "1.1rem" }}>{hasPoc ? "✅" : "👤"}</span>
               <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1rem", margin: 0, color: hasPoc ? "#2E7D32" : "var(--onyx)" }}>Point of Contact</h3>
             </div>
-            <p style={{ fontSize: "0.83rem", color: "var(--grey)", lineHeight: 1.6, marginBottom: hasPoc ? "0.75rem" : 0 }}>
-              {hasPoc
-                ? "Your Point of Contact is saved. Artists can reach this person if needed during a booking."
-                : "A Point of Contact is required before making a booking. This is someone who can be reached on your behalf during your appointment — for safety and peace of mind."}
-            </p>
+
+            {/* Description shown only when no PoC set */}
+            {!hasPoc && (
+              <p style={{ fontSize: "0.83rem", color: "var(--grey)", lineHeight: 1.6, marginBottom: 0 }}>
+                <strong>A Point of Contact is required before making a booking.</strong> This is a trusted person — such as a family member or close friend — who can be reached on your behalf during your appointment, for safety and peace of mind.
+              </p>
+            )}
+
+            {/* PoC details shown only when confirmed */}
             {hasPoc && (
-              <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap", marginTop: "0.25rem" }}>
                 <div>
                   <p style={{ fontSize: "0.7rem", color: "var(--light)", marginBottom: "0.1rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Name</p>
-                  <p style={{ fontSize: "0.9rem", fontWeight: 500 }}>{profile.poc_name}</p>
+                  <p style={{ fontSize: "0.9rem", fontWeight: 500, margin: 0 }}>{profile.poc_name}</p>
                 </div>
                 <div>
                   <p style={{ fontSize: "0.7rem", color: "var(--light)", marginBottom: "0.1rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>WhatsApp</p>
-                  <p style={{ fontSize: "0.9rem", fontWeight: 500 }}>{profile.poc_phone}</p>
+                  <p style={{ fontSize: "0.9rem", fontWeight: 500, margin: 0 }}>{profile.poc_phone}</p>
                 </div>
               </div>
             )}
           </div>
-          <button
-            onClick={() => setShowPocPopup(true)}
-            className={hasPoc ? "btn-outline" : "btn-plum"}
-            style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem", flexShrink: 0 }}
-          >
-            {hasPoc ? "Update" : "Add now"}
-          </button>
+
+          <div style={{ display: "flex", gap: "0.5rem", flexShrink: 0, flexWrap: "wrap" }}>
+            {!hasPoc && (
+              <button onClick={() => setShowPocPopup(true)} className="btn-plum" style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem" }}>
+                Add now
+              </button>
+            )}
+            {hasPoc && (
+              <button onClick={handleRemovePoc} className="btn-outline" style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem", borderColor: "#E53935", color: "#E53935" }}>
+                Remove
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -748,7 +1309,6 @@ function BookingsTab({ user, profile, onUpdateProfile }: { user: User; profile: 
         </div>
       )}
 
-      {/* PoC popup when user clicks "Add now" or "Update" */}
       {showPocPopup && (
         <PocPopup
           onSave={handleSavePoc}
@@ -756,7 +1316,6 @@ function BookingsTab({ user, profile, onUpdateProfile }: { user: User; profile: 
         />
       )}
       {pocSaving && <div style={{ display: "none" }} />}
-      {inputStyle && null}
     </section>
   );
 }
@@ -828,10 +1387,14 @@ export default function DashboardPage() {
     { id: "bookings",    label: "My Bookings" },
     { id: "wishlist",    label: "Wishlist" },
     { id: "ads",         label: "Ads" },
-    { id: "my-store",    label: "My Store" },
+    { id: "my-salon",    label: "My Salon" },
     { id: "my-services", label: "My Services" },
+    { id: "invite",      label: "Invite" },
     { id: "profile",     label: "Profile" },
   ];
+
+  // Suppress unused-var warning — kept for potential header use
+  void handleSignOut;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh", background: "#FAFAFA" }}>
@@ -895,11 +1458,14 @@ export default function DashboardPage() {
         {/* ── Ads tab ── */}
         {tab === "ads" && <section><AdsTab /></section>}
 
-        {/* ── My Store tab ── */}
-        {tab === "my-store" && <section><MyStoreTab user={user} /></section>}
+        {/* ── My Salon tab ── */}
+        {tab === "my-salon" && <section><MySalonTab user={user} /></section>}
 
         {/* ── My Services tab ── */}
         {tab === "my-services" && <section><MyServicesTab profile={profile} user={user} onUpdate={(p) => setProfile(p)} /></section>}
+
+        {/* ── Invite tab ── */}
+        {tab === "invite" && <section><InviteTab profile={profile} /></section>}
       </main>
 
       <Footer />
