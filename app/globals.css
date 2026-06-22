@@ -145,3 +145,85 @@ select[multiple] option {
 select[multiple] {
   cursor: pointer;
 }
+
+/* ── Service Type Banners ───────────────────────── */
+
+.service-banner {
+  position: relative;
+  height: 220px;
+  border-radius: 20px;
+  overflow: hidden;
+  cursor: pointer;
+  background-size: cover;
+  background-position: center;
+  transition: transform 0.25s ease;
+}
+
+.service-banner:hover {
+  transform: translateY(-2px);
+}
+
+.service-banner::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(122, 95, 153, 0.82) 0%,
+      rgba(155, 127, 184, 0.68) 25%,
+      rgba(155, 127, 184, 0.18) 55%,
+      rgba(155, 127, 184, 0) 100%
+    );
+}
+
+.service-banner-content {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+
+  padding: 2rem 2.5rem;
+}
+
+.service-banner-title {
+  font-family: var(--font-display);
+  font-size: clamp(2.5rem, 4vw, 4.5rem);
+  font-weight: 300;
+  color: white;
+  line-height: 1;
+  margin-bottom: 0.75rem;
+}
+
+.service-banner-subtitle {
+  font-family: var(--font-body);
+  color: rgba(255,255,255,0.95);
+  font-size: 1.1rem;
+  line-height: 1.6;
+  max-width: 280px;
+}
+
+/* Mobile */
+
+@media (max-width: 768px) {
+  .service-banner {
+    height: 170px;
+    border-radius: 16px;
+  }
+
+  .service-banner-content {
+    padding: 1.5rem;
+  }
+
+  .service-banner-title {
+    font-size: 2.6rem;
+  }
+
+  .service-banner-subtitle {
+    font-size: 0.95rem;
+    max-width: 220px;
+  }
+}

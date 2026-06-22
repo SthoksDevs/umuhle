@@ -22,10 +22,10 @@ function formatDate(dateStr: string) {
 type Tab = "bookings" | "wishlist" | "profile" | "ads" | "my-salon" | "my-services" | "invite";
 
 const SERVICE_TYPES = [
-  { id: "hair",   label: "Hair",   icon: "✂",  banner: "/banners/hair.jpg",   description: "From protective styles to blowouts, braids to colour — let clients know exactly what you specialise in." },
-  { id: "nails",  label: "Nails",  icon: "◈",  banner: "/banners/nails.jpg",  description: "Gels, acrylics, nail art, manicures and more — list every nail style you offer so clients can find you." },
-  { id: "makeup", label: "Makeup", icon: "◉",  banner: "/banners/makeup.jpg", description: "Bridal, editorial, glam, natural — describe the makeup looks you create." },
-  { id: "lashes", label: "Lashes", icon: "◎",  banner: "/banners/lashes.jpg", description: "Classic, hybrid, volume, mega volume — tell clients which lash styles you do." },
+  { id: "hair",   label: "Hair",  banner: "/banners/hair.jpg",   description: "From protective styles to blowouts, braids to colour — let clients know exactly what you specialise in." },
+  { id: "nails",  label: "Nails",  banner: "/banners/nails.jpg",  description: "Gels, acrylics, nail art, manicures and more — list every nail style you offer so clients can find you." },
+  { id: "makeup", label: "Makeup",  banner: "/banners/makeup.jpg", description: "Bridal, editorial, glam, natural — describe the makeup looks you create." },
+  { id: "lashes", label: "Lashes",  banner: "/banners/lashes.jpg", description: "Classic, hybrid, volume, mega volume — tell clients which lash styles you do." },
 ] as const;
 
 type ServiceTypeId = typeof SERVICE_TYPES[number]["id"];
@@ -865,18 +865,20 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
         {SERVICE_TYPES.map(s => {
           const active = selected.includes(s.id);
           return (
-            <div key={s.id} style={{ borderRadius: 20, overflow: "hidden", border: `2px solid ${active ? "var(--plum)" : "rgba(155,127,184,0.18)"}`, transition: "border-color 0.2s" }}>
+            <div key={s.id} style={{ borderRadius: 20, overflow: "hidden", border: `2px solid ${active ? "var(--plum)" : "rgba(155,127,184,0.12)"}`, background: "#fff", boxShadow: active ? "0 8px 30px rgba(155,127,184,0.18)" : "0 4px 20px rgba(0,0,0,0.04)", transition: "all 0.2s ease" }}>
               {/* Banner */}
-              <div style={{ position: "relative", height: 110, background: "var(--plum-t)", overflow: "hidden" }}>
-                <Image
-                  src={s.banner}
-                  alt={s.label}
-                  fill
-                  style={{ objectFit: "cover", opacity: 0.6 }}
-                />
-                <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to right, rgba(155,127,184,0.55) 0%, transparent 60%)", display: "flex", alignItems: "center", padding: "0 1.5rem", gap: "0.75rem" }}>
-                  <span style={{ fontSize: "2rem" }}>{s.icon}</span>
-                  <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1.5rem", color: "#fff", margin: 0, textShadow: "0 1px 4px rgba(0,0,0,0.3)" }}>{s.label}</h2>
+              <div className="service-banner" style={{ backgroundImage: `url(${s.banner})`, }}>
+                <div className="service-banner-content">
+                  <h2 className="service-banner-title">
+                    {s.label}
+                  </h2>
+
+                  <p className="service-banner-subtitle">
+                    {s.id === "hair" && "Styles that celebrate you."}
+                    {s.id === "nails" && "Beautiful nails. Every detail."}
+                    {s.id === "makeup" && "Enhance your beauty. Express your glow."}
+                    {s.id === "lashes" && "Lashes that lift. Confidence that lasts."}
+                  </p>
                 </div>
               </div>
 
