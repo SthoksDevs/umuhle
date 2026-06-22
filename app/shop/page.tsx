@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
-import { useEffect } from "react";
 import Footer from "@/components/Footer";
+import SiteHeader from "@/components/SiteHeader";
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
@@ -25,13 +25,78 @@ const MOCK_PRODUCTS = [
 const CATEGORIES = ["All", "Hair care", "Nails", "Makeup", "Lashes"] as const;
 type Cat = typeof CATEGORIES[number];
 
+function PillNav({ active, onChange }: { active: Cat; onChange: (c: Cat) => void }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const checkScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  };
+
+  useEffect(() => {
+    checkScroll();
+    const el = scrollRef.current;
+    if (!el) return;
+    el.addEventListener("scroll", checkScroll);
+    window.addEventListener("resize", checkScroll);
+    return () => { el.removeEventListener("scroll", checkScroll); window.removeEventListener("resize", checkScroll); };
+  }, []);
+
+  return (
+    <div style={{ position: "relative", marginBottom: "2.5rem" }}>
+      <div ref={scrollRef} style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", scrollbarWidth: "none", msOverflowStyle: "none" }}>
+        <div style={{ display: "flex", gap: "0", width: "max-content", minWidth: "90vw" }}>
+          {CATEGORIES.map((cat, i) => {
+            const isActive = active === cat;
+            const isFirst = i === 0;
+            const isLast = i === CATEGORIES.length - 1;
+            return (
+              <button
+                key={cat}
+                onClick={() => onChange(cat)}
+                style={{
+                  flex: "0 0 auto",
+                  padding: "0.55rem 1.25rem",
+                  background: isActive ? "var(--plum)" : "#fff",
+                  color: isActive ? "#fff" : "var(--grey)",
+                  border: "1.5px solid",
+                  borderColor: isActive ? "var(--plum)" : "rgba(155,127,184,0.25)",
+                  borderRadius: isFirst ? "100px 0 0 100px" : isLast ? "0 100px 100px 0" : "0",
+                  borderLeft: !isFirst ? "none" : undefined,
+                  fontWeight: isActive ? 600 : 400,
+                  fontSize: "0.85rem",
+                  transition: "all 0.18s",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {cat}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      {canScrollRight && (
+        <button
+          onClick={() => scrollRef.current?.scrollBy({ left: 160, behavior: "smooth" })}
+          aria-label="Scroll categories"
+          style={{ position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)", background: "linear-gradient(to left, #fff 60%, transparent)", border: "none", cursor: "pointer", padding: "0.35rem 0.5rem 0.35rem 1.5rem", color: "var(--plum)", fontSize: "1rem", lineHeight: 1, display: "flex", alignItems: "center" }}
+        >
+          ›
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function ShopPage() {
   const supabase = createClient();
   const [user, setUser]         = useState<User | null>(null);
   const [activeCategory, setActiveCat] = useState<Cat>("All");
   const [showAuth, setShowAuth] = useState(false);
   const [added, setAdded]       = useState<string | null>(null);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => setUser(user ?? null));
@@ -50,75 +115,14 @@ export default function ShopPage() {
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--white)", fontFamily: "var(--font-body)", display: "flex", flexDirection: "column" }}>
-      {/* Nav */}
-      <nav style={{ position: "sticky", top: 0, zIndex: 100, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(155,127,184,0.15)", padding: "0 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", height: 60 }}>
-        <Link href="/" style={{ display: "flex", alignItems: "center", gap: "0.5rem", textDecoration: "none" }}>
-          <Image src={ICON} alt="Umuhle" width={32} height={32} style={{ borderRadius: "50%", objectFit: "cover" }} />
-          <span style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.2rem", letterSpacing: "0.12em", color: "var(--plum)" }}>umuhle</span>
-        </Link>
-
-        {/* Desktop nav links */}
-        <div className="nav-links-desktop" style={{ display: "flex", gap: "0.15rem" }}>
-          {[["Search", "/"], ["Shop", "/shop"], ["Earn", "/earn"]].map(([label, href]) => (
-            <Link key={label} href={href} style={{ borderRadius: 100, padding: "0.4rem 1rem", color: href === "/shop" ? "var(--plum)" : "var(--grey)", fontWeight: href === "/shop" ? 500 : 400, fontSize: "0.875rem", textDecoration: "none", background: href === "/shop" ? "var(--plum-t)" : "transparent" }}>
-              {label}
-            </Link>
-          ))}
-        </div>
-
-        {/* Desktop right */}
-        <div className="nav-actions-desktop">
-          {user ? (
-            <Link href="/dashboard" style={{ fontSize: "0.85rem", color: "var(--grey)", textDecoration: "none" }}>Dashboard</Link>
-          ) : (
-            <button className="btn-plum" style={{ padding: "0.5rem 1.25rem", fontSize: "0.875rem" }} onClick={() => setShowAuth(true)}>Sign in</button>
-          )}
-        </div>
-
-        {/* Mobile right: sign in + hamburger */}
-        <div className="nav-mobile-right" style={{ display: "none", alignItems: "center", gap: "0.5rem" }}>
-          {!user && (
-            <button className="btn-plum" style={{ padding: "0.4rem 1rem", fontSize: "0.8rem" }} onClick={() => setShowAuth(true)}>Sign in</button>
-          )}
-          <button
-            aria-label="Open menu"
-            onClick={() => setMobileMenuOpen(v => !v)}
-            style={{ background: "none", border: "none", cursor: "pointer", padding: "0.3rem", color: "var(--grey)", display: "flex", flexDirection: "column", gap: 5, alignItems: "center", justifyContent: "center" }}
-          >
-            <span style={{ display: "block", width: 22, height: 2, background: "var(--grey)", borderRadius: 2, transition: "all 0.2s", transform: mobileMenuOpen ? "rotate(45deg) translate(5px,5px)" : "none" }} />
-            <span style={{ display: "block", width: 22, height: 2, background: "var(--grey)", borderRadius: 2, transition: "all 0.2s", opacity: mobileMenuOpen ? 0 : 1 }} />
-            <span style={{ display: "block", width: 22, height: 2, background: "var(--grey)", borderRadius: 2, transition: "all 0.2s", transform: mobileMenuOpen ? "rotate(-45deg) translate(5px,-5px)" : "none" }} />
-          </button>
-        </div>
-      </nav>
-
-      {/* Mobile dropdown menu */}
-      {mobileMenuOpen && (
-        <div className="mobile-menu" style={{ position: "sticky", top: 60, zIndex: 99, background: "rgba(255,255,255,0.97)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(155,127,184,0.15)", padding: "0.75rem 1.5rem", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-          {[["Search", "/"], ["Shop", "/shop"], ["Earn", "/earn"]].map(([label, href]) => (
-            <Link key={label} href={href} onClick={() => setMobileMenuOpen(false)} style={{ borderRadius: 100, padding: "0.4rem 1rem", color: href === "/shop" ? "var(--plum)" : "var(--grey)", fontWeight: href === "/shop" ? 500 : 400, fontSize: "0.875rem", textDecoration: "none", background: href === "/shop" ? "var(--plum-t)" : "transparent", display: "inline-block" }}>
-              {label}
-            </Link>
-          ))}
-          {user && (
-            <Link href="/dashboard" onClick={() => setMobileMenuOpen(false)} style={{ borderRadius: 100, padding: "0.4rem 1rem", color: "var(--grey)", fontWeight: 400, fontSize: "0.875rem", textDecoration: "none", display: "inline-block" }}>Dashboard</Link>
-          )}
-        </div>
-      )}
+      <SiteHeader initialUser={user} />
 
       <main style={{ maxWidth: 960, margin: "0 auto", padding: "3rem 1.5rem 4rem", flex: 1, width: "100%", boxSizing: "border-box" }}>
         <p style={{ fontFamily: "var(--font-display)", fontSize: "0.8rem", letterSpacing: "0.35em", color: "var(--nude)", textTransform: "uppercase", marginBottom: "0.5rem" }}>curated for you</p>
         <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "2.5rem", color: "var(--onyx)", marginBottom: "0.5rem" }}>Beauty Shop</h1>
         <p style={{ color: "var(--grey)", marginBottom: "2.5rem" }}>Professional beauty products, sourced by our artists.</p>
 
-        {/* Category filter */}
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "2.5rem" }}>
-          {CATEGORIES.map(cat => (
-            <button key={cat} onClick={() => setActiveCat(cat)} style={{ borderRadius: 100, padding: "0.5rem 1.25rem", background: activeCategory === cat ? "var(--plum)" : "var(--plum-t)", color: activeCategory === cat ? "#fff" : "var(--plum)", border: "none", fontWeight: 500, fontSize: "0.875rem", cursor: "pointer", transition: "all 0.2s" }}>
-              {cat}
-            </button>
-          ))}
-        </div>
+        <PillNav active={activeCategory} onChange={setActiveCat} />
 
         {/* Out-of-stock notice */}
         <div style={{ background: "var(--plum-t)", border: "1.5px solid rgba(155,127,184,0.3)", borderRadius: 14, padding: "1rem 1.5rem", marginBottom: "2.5rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
@@ -133,7 +137,6 @@ export default function ShopPage() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: "1.25rem" }}>
           {filtered.map(p => (
             <div key={p.id} style={{ borderRadius: 16, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.15)", background: "#fff", position: "relative" }}>
-              {/* Out of stock badge */}
               <div style={{ position: "absolute", top: 10, left: 10, zIndex: 2, background: "#888", color: "#fff", borderRadius: 100, padding: "0.2rem 0.7rem", fontSize: "0.7rem", fontWeight: 700 }}>Out of stock</div>
               <div style={{ height: 160, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <Image src={ICON} alt={p.name} width={80} height={80} style={{ objectFit: "contain", opacity: 0.7 }} />
@@ -144,12 +147,7 @@ export default function ShopPage() {
                 <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginBottom: "0.75rem", lineHeight: 1.4 }}>{p.description}</p>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span style={{ fontWeight: 700, color: "var(--plum)" }}>{fmt(p.price)}</span>
-                  <button
-                    className="btn-plum"
-                    style={{ padding: "0.4rem 1rem", fontSize: "0.8rem", opacity: 0.5, cursor: "not-allowed" }}
-                    disabled
-                    onClick={() => handleAdd(p.id)}
-                  >
+                  <button className="btn-plum" style={{ padding: "0.4rem 1rem", fontSize: "0.8rem", opacity: 0.5, cursor: "not-allowed" }} disabled onClick={() => handleAdd(p.id)}>
                     {added === p.id ? "Added ✓" : "Out of stock"}
                   </button>
                 </div>
@@ -166,15 +164,12 @@ export default function ShopPage() {
           <p style={{ color: "var(--grey)", maxWidth: 400, margin: "0 auto 1.5rem", fontSize: "0.95rem" }}>
             List your products on Umuhle and reach thousands of customers across South Africa.
           </p>
-          <Link href="/?auth=register">
-            <button className="btn-plum">Become a Partner</button>
-          </Link>
+          <Link href="/?auth=register"><button className="btn-plum">Become a Partner</button></Link>
         </div>
       </main>
 
       <Footer />
 
-      {/* Simple sign-in prompt */}
       {showAuth && (
         <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setShowAuth(false); }}>
           <div style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 380, textAlign: "center", boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>

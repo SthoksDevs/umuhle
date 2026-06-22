@@ -27,6 +27,8 @@ export interface Profile {
   referred_by: string | null;
   account_type: AccountType | null;
   artist_category: ServiceCategory | null; // set at signup when account_type = 'artist'
+  poc_name: string | null;   // point-of-contact name (required before booking)
+  poc_phone: string | null;  // point-of-contact WhatsApp number
   created_at: string;
   updated_at: string;
 }

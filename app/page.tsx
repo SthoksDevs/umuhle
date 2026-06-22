@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Artist, Profile } from "@/types";
 import Image from "next/image";
 import Link from "next/link";
 import Footer from "@/components/Footer";
+import SiteHeader from "@/components/SiteHeader";
 
 // ── Pixel helpers ─────────────────────────────────────────────────────────────
 declare global {
@@ -34,6 +35,79 @@ const CAT_ICONS: Record<string, string> = { hair: "✂", nails: "◈", makeup: "
 
 type CartItem = { id: string; name: string; price: number };
 
+// ─── Category pill nav with scroll arrow ──────────────────────────────────────
+function CategoryPillNav({ active, onChange }: { active: Category; onChange: (c: Category) => void }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const checkScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  };
+
+  useEffect(() => {
+    checkScroll();
+    const el = scrollRef.current;
+    if (!el) return;
+    el.addEventListener("scroll", checkScroll);
+    window.addEventListener("resize", checkScroll);
+    return () => { el.removeEventListener("scroll", checkScroll); window.removeEventListener("resize", checkScroll); };
+  }, []);
+
+  return (
+    <div style={{ position: "relative", padding: "0 1.5rem" }}>
+      <div ref={scrollRef} style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", scrollbarWidth: "none", msOverflowStyle: "none" }}>
+        <div style={{ display: "flex", gap: "0", width: "max-content", minWidth: "90vw" }}>
+          {CATEGORIES.map((cat, i) => {
+            const isActive = active === cat;
+            const isFirst = i === 0;
+            const isLast = i === CATEGORIES.length - 1;
+            return (
+              <button
+                key={cat}
+                onClick={() => onChange(cat)}
+                style={{
+                  flex: "0 0 auto",
+                  padding: "0.55rem 1.25rem",
+                  background: isActive ? "var(--plum)" : "#fff",
+                  color: isActive ? "#fff" : "var(--grey)",
+                  border: "1.5px solid",
+                  borderColor: isActive ? "var(--plum)" : "rgba(155,127,184,0.25)",
+                  borderRadius: isFirst ? "100px 0 0 100px" : isLast ? "0 100px 100px 0" : "0",
+                  borderLeft: !isFirst ? "none" : undefined,
+                  fontWeight: isActive ? 600 : 400,
+                  fontSize: "0.85rem",
+                  transition: "all 0.18s",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  letterSpacing: "0.01em",
+                }}
+              >
+                {cat}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      {canScrollRight && (
+        <button
+          onClick={() => scrollRef.current?.scrollBy({ left: 160, behavior: "smooth" })}
+          aria-label="Scroll categories"
+          style={{
+            position: "absolute", right: "1.5rem", top: "50%", transform: "translateY(-50%)",
+            background: "linear-gradient(to left, #fff 60%, transparent)",
+            border: "none", cursor: "pointer", padding: "0.35rem 0.5rem 0.35rem 1.5rem",
+            color: "var(--plum)", fontSize: "1.1rem", lineHeight: 1, display: "flex", alignItems: "center",
+          }}
+        >
+          ›
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 export default function Home() {
   const supabase = createClient();
@@ -55,8 +129,7 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authForm, setAuthForm]   = useState({ email: "", password: "", name: "", phone: "" });
-  // Mobile nav
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // Mobile nav - handled by SiteHeader
 
   // Booking
   const [selectedArtist, setSelectedArtist] = useState<Artist | null>(null);
@@ -142,8 +215,23 @@ export default function Home() {
     setAuthError("");
     try {
       if (authMode === "login") {
-        const { error } = await supabase.auth.signInWithPassword({ email: authForm.email, password: authForm.password });
-        if (error) throw error;
+        // Support login with email or WhatsApp (phone number → look up email)
+        const identifier = authForm.email.trim();
+        const isPhone = /^[0-9+\s()-]{7,}$/.test(identifier) && !identifier.includes("@");
+        if (isPhone) {
+          // Look up account by phone then sign in
+          const { data: profileData } = await supabase
+            .from("profiles")
+            .select("email")
+            .eq("phone", identifier.replace(/\D/g, "").replace(/^0/, "27"))
+            .maybeSingle();
+          if (!profileData?.email) throw new Error("No account found with that WhatsApp number.");
+          const { error } = await supabase.auth.signInWithPassword({ email: profileData.email, password: authForm.password });
+          if (error) throw error;
+        } else {
+          const { error } = await supabase.auth.signInWithPassword({ email: identifier, password: authForm.password });
+          if (error) throw error;
+        }
         setShowAuth(false);
         gTag("login", { method: "email" });
         fbq("Login");
@@ -173,47 +261,37 @@ export default function Home() {
     }
   };
 
-  const handleForgotPassword = async (
-  e: React.FormEvent
-) => {
-  e.preventDefault();
-
-  if (!authForm.email) {
-    setAuthError("Enter your email address.");
-    return;
-  }
-
-  setAuthLoading(true);
-  setAuthError("");
-
-  try {
-    const { error } =
-      await supabase.auth.resetPasswordForEmail(
-        authForm.email,
-        {
-          redirectTo: `${window.location.origin}/reset-password`,
-        }
-      );
-
-    if (error) throw error;
-
-    setAuthError(
-      "Password reset email sent. Check your inbox."
-    );
-  } catch (err: unknown) {
-    setAuthError(
-      err instanceof Error
-        ? err.message
-        : "Something went wrong"
-    );
-  } finally {
-    setAuthLoading(false);
-  }
-};
-
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    setProfile(null);
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const identifier = authForm.email.trim();
+    if (!identifier) {
+      setAuthError("Enter your email or WhatsApp number.");
+      return;
+    }
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      const isPhone = /^[0-9+\s()-]{7,}$/.test(identifier) && !identifier.includes("@");
+      let emailToReset = identifier;
+      if (isPhone) {
+        const { data: profileData } = await supabase
+          .from("profiles")
+          .select("email")
+          .eq("phone", identifier.replace(/\D/g, "").replace(/^0/, "27"))
+          .maybeSingle();
+        if (!profileData?.email) throw new Error("No account found with that WhatsApp number.");
+        emailToReset = profileData.email;
+      }
+      const { error } = await supabase.auth.resetPasswordForEmail(emailToReset, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (error) throw error;
+      setAuthError("Password reset link sent. Check your email.");
+    } catch (err: unknown) {
+      setAuthError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setAuthLoading(false);
+    }
   };
 
   const addToCart = (item: CartItem) => {
@@ -227,117 +305,15 @@ export default function Home() {
   const cartCount = cart.length;
   const cartTotal = cart.reduce((s, i) => s + i.price, 0);
 
-  // ── Nav button style ─────────────────────────────────────────────────────
-  const navLink = (active: boolean) => ({
-    background: active ? "var(--plum-t)" : "transparent",
-    border: "none",
-    borderRadius: 100,
-    padding: "0.4rem 1rem",
-    color: active ? "var(--plum)" : "var(--grey)",
-    fontWeight: active ? 500 : 400,
-    fontSize: "0.875rem",
-    textDecoration: "none" as const,
-    transition: "all 0.2s",
-    cursor: "pointer" as const,
-    display: "inline-block" as const,
-  });
-
   // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
 
-      {/* ── Nav ── */}
-      <nav style={{ position: "sticky", top: 0, zIndex: 100, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(155,127,184,0.15)", padding: "0 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", height: 60 }}>
-
-        <Link href="/" style={{ display: "flex", alignItems: "center", gap: "0.5rem", textDecoration: "none" }}>
-          <Image src={ICON} alt="Umuhle" width={32} height={32} style={{ borderRadius: "50%", objectFit: "cover" }} />
-          <span style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.2rem", letterSpacing: "0.12em", color: "var(--plum)" }}>umuhle</span>
-        </Link>
-
-        {/* Desktop nav links */}
-        <div className="nav-links-desktop" style={{ display: "flex", gap: "0.15rem" }}>
-          <Link href="/"     style={navLink(true)}>Search</Link>
-          <Link href="/shop" style={navLink(false)}>Shop</Link>
-          <Link href="/earn" style={navLink(false)}>Earn</Link>
-          {user && <Link href="/dashboard" style={navLink(false)}>Dashboard</Link>}
-        </div>
-
-        {/* Desktop right actions */}
-        <div className="nav-actions-desktop" style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          {/* Cart */}
-          <button
-            onClick={() => setShowCart(true)}
-            aria-label={`Cart — ${cartCount} item${cartCount !== 1 ? "s" : ""}`}
-            style={{ position: "relative", background: "none", border: "none", cursor: "pointer", padding: "0.3rem", color: "var(--grey)", display: "flex" }}
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/>
-            </svg>
-            {cartCount > 0 && (
-              <span style={{ position: "absolute", top: -2, right: -2, background: "var(--plum)", color: "#fff", borderRadius: "50%", width: 16, height: 16, fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                {cartCount}
-              </span>
-            )}
-          </button>
-
-          {user ? (
-            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-              <span style={{ fontSize: "0.85rem", color: "var(--grey)" }}>{profile?.full_name?.split(" ")[0] ?? user.email}</span>
-              <button className="btn-outline" style={{ padding: "0.4rem 1rem", fontSize: "0.8rem" }} onClick={handleSignOut}>Sign out</button>
-            </div>
-          ) : (
-            <button className="btn-plum" style={{ padding: "0.5rem 1.25rem", fontSize: "0.875rem" }} onClick={() => { setShowAuth(true); setAuthMode("login"); }}>Sign in</button>
-          )}
-        </div>
-
-        {/* Mobile right: cart + sign in + hamburger */}
-        <div className="nav-mobile-right" style={{ display: "none", alignItems: "center", gap: "0.5rem" }}>
-          {/* Cart icon */}
-          <button
-            onClick={() => setShowCart(true)}
-            aria-label={`Cart — ${cartCount} item${cartCount !== 1 ? "s" : ""}`}
-            style={{ position: "relative", background: "none", border: "none", cursor: "pointer", padding: "0.3rem", color: "var(--grey)", display: "flex" }}
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/>
-            </svg>
-            {cartCount > 0 && (
-              <span style={{ position: "absolute", top: -2, right: -2, background: "var(--plum)", color: "#fff", borderRadius: "50%", width: 16, height: 16, fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                {cartCount}
-              </span>
-            )}
-          </button>
-
-          {/* Sign in button (only when not logged in) */}
-          {!user && (
-            <button className="btn-plum" style={{ padding: "0.4rem 1rem", fontSize: "0.8rem" }} onClick={() => { setShowAuth(true); setAuthMode("login"); }}>Sign in</button>
-          )}
-
-          {/* Hamburger */}
-          <button
-            aria-label="Open menu"
-            onClick={() => setMobileMenuOpen(v => !v)}
-            style={{ background: "none", border: "none", cursor: "pointer", padding: "0.3rem", color: "var(--grey)", display: "flex", flexDirection: "column", gap: 5, alignItems: "center", justifyContent: "center" }}
-          >
-            <span style={{ display: "block", width: 22, height: 2, background: "var(--grey)", borderRadius: 2, transition: "all 0.2s", transform: mobileMenuOpen ? "rotate(45deg) translate(5px,5px)" : "none" }} />
-            <span style={{ display: "block", width: 22, height: 2, background: "var(--grey)", borderRadius: 2, transition: "all 0.2s", opacity: mobileMenuOpen ? 0 : 1 }} />
-            <span style={{ display: "block", width: 22, height: 2, background: "var(--grey)", borderRadius: 2, transition: "all 0.2s", transform: mobileMenuOpen ? "rotate(-45deg) translate(5px,-5px)" : "none" }} />
-          </button>
-        </div>
-      </nav>
-
-      {/* ── Mobile dropdown menu ── */}
-      {mobileMenuOpen && (
-        <div className="mobile-menu" style={{ position: "sticky", top: 60, zIndex: 99, background: "rgba(255,255,255,0.97)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(155,127,184,0.15)", padding: "0.75rem 1.5rem", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-          <Link href="/" onClick={() => setMobileMenuOpen(false)} style={navLink(true)}>Search</Link>
-          <Link href="/shop" onClick={() => setMobileMenuOpen(false)} style={navLink(false)}>Shop</Link>
-          <Link href="/earn" onClick={() => setMobileMenuOpen(false)} style={navLink(false)}>Earn</Link>
-          {user && <Link href="/dashboard" onClick={() => setMobileMenuOpen(false)} style={navLink(false)}>Dashboard</Link>}
-          {user && (
-            <button className="btn-outline" style={{ padding: "0.5rem 1rem", fontSize: "0.85rem", marginTop: "0.5rem", textAlign: "left" }} onClick={() => { setMobileMenuOpen(false); handleSignOut(); }}>Sign out</button>
-          )}
-        </div>
-      )}
+      <SiteHeader
+        initialUser={user}
+        initialProfile={profile}
+        onSignInClick={() => { setShowAuth(true); setAuthMode("login"); }}
+      />
 
       {/* ── Page ── */}
       <div style={{ flex: 1 }}>
@@ -354,44 +330,9 @@ export default function Home() {
             </p>
           </section>
 
-          {/* Category filter — horizontal scroll strip */}
+          {/* Category filter — horizontal scroll strip with arrow indicator */}
           <section style={{ padding: "2rem 0 0", maxWidth: 900, margin: "0 auto" }}>
-            <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", scrollbarWidth: "none", msOverflowStyle: "none" }}>
-              <div style={{ display: "flex", gap: "0", padding: "0 1.5rem", width: "max-content", minWidth: "100%" }}>
-                {CATEGORIES.map((cat, i) => {
-                  const isActive = activeCategory === cat;
-                  const isFirst = i === 0;
-                  const isLast = i === CATEGORIES.length - 1;
-                  const catIcon: Record<string, string> = { All: "✦", Hair: "✂", Nails: "◈", Makeup: "◉", Lashes: "◎" };
-                  return (
-                    <button
-                      key={cat}
-                      onClick={() => setActiveCategory(cat)}
-                      style={{
-                        flex: "0 0 auto",
-                        display: "flex", alignItems: "center", gap: "0.35rem",
-                        padding: "0.55rem 1.1rem",
-                        background: isActive ? "var(--plum)" : "#fff",
-                        color: isActive ? "#fff" : "var(--grey)",
-                        border: "1.5px solid",
-                        borderColor: isActive ? "var(--plum)" : "rgba(155,127,184,0.25)",
-                        borderRadius: isFirst ? "100px 0 0 100px" : isLast ? "0 100px 100px 0" : "0",
-                        borderLeft: !isFirst ? "none" : undefined,
-                        fontWeight: isActive ? 600 : 400,
-                        fontSize: "0.85rem",
-                        transition: "all 0.18s",
-                        cursor: "pointer",
-                        whiteSpace: "nowrap",
-                        letterSpacing: "0.01em",
-                      }}
-                    >
-                      <span style={{ fontSize: "0.8rem", opacity: isActive ? 1 : 0.7 }}>{catIcon[cat]}</span>
-                      {cat}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            <CategoryPillNav active={activeCategory} onChange={setActiveCategory} />
           </section>
 
           {/* Search */}
@@ -495,13 +436,14 @@ export default function Home() {
         <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) { setShowAuth(false); setAuthError(""); } }}>
           <div style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 420, boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
             <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.6rem", marginBottom: "0.25rem" }}>
-              {authMode === "login" ? "Welcome back" : "Create account"}
+              {authMode === "login" ? "Welcome back" : authMode === "forgot" ? "Reset password" : "Create account"}
             </h2>
             <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-              {authMode === "login" ? "Sign in to book your next appointment." : "Join Umuhle — it's free."}
+              {authMode === "login" ? "Sign in to book your next appointment." : authMode === "forgot" ? "Enter your email or WhatsApp number to receive a reset link." : "Join Umuhle — it's free."}
             </p>
 
             {/* OAuth */}
+            {authMode !== "forgot" && (
             <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1.5rem" }}>
               <button onClick={() => handleOAuth("google")} disabled={authLoading} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "1.5px solid #E0E0E0", background: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}>
                 <svg width="20" height="20" viewBox="0 0 48 48">
@@ -519,12 +461,15 @@ export default function Home() {
                 Continue with Facebook
               </button>
             </div>
+            )}
 
+            {authMode !== "forgot" && (
             <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1.5rem" }}>
               <div style={{ flex: 1, height: 1, background: "#E0E0E0" }} />
               <span style={{ fontSize: "0.8rem", color: "var(--light)" }}>or</span>
               <div style={{ flex: 1, height: 1, background: "#E0E0E0" }} />
             </div>
+            )}
 
             <form
               onSubmit={
@@ -579,8 +524,8 @@ export default function Home() {
               )}
 
               <input
-                type="email"
-                placeholder="Email address"
+                type={authMode === "register" ? "email" : "text"}
+                placeholder={authMode === "register" ? "Email address" : "Email or WhatsApp number"}
                 value={authForm.email}
                 onChange={e =>
                   setAuthForm(f => ({
@@ -673,9 +618,9 @@ export default function Home() {
             </form>
 
             <p style={{ textAlign: "center", marginTop: "1.25rem", fontSize: "0.875rem", color: "var(--grey)" }}>
-              {authMode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
-              <button onClick={() => { setAuthMode(authMode === "login" ? "register" : "login"); setAuthError(""); }} style={{ background: "none", border: "none", color: "var(--plum)", fontWeight: 500, cursor: "pointer" }}>
-                {authMode === "login" ? "Sign up" : "Sign in"}
+              {authMode === "forgot" ? "Remember your password?" : authMode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
+              <button onClick={() => { setAuthMode(authMode === "register" ? "login" : authMode === "forgot" ? "login" : "register"); setAuthError(""); }} style={{ background: "none", border: "none", color: "var(--plum)", fontWeight: 500, cursor: "pointer" }}>
+                {authMode === "forgot" ? "Sign in" : authMode === "login" ? "Sign up" : "Sign in"}
               </button>
             </p>
 

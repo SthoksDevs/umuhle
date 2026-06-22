@@ -1,13 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import Footer from "@/components/Footer";
-
-const ICON = "/umuhle-icon.png";
+import SiteHeader from "@/components/SiteHeader";
 
 const AD_PACKAGES = [
   { id: "starter",  name: "Starter",  price: "R20",  ads: 1,  duration: "6 weeks",  featured: false },
@@ -48,25 +46,7 @@ export default function EarnPage() {
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--white)", fontFamily: "var(--font-body)", display: "flex", flexDirection: "column" }}>
-      {/* Nav */}
-      <nav style={{ position: "sticky", top: 0, zIndex: 100, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(155,127,184,0.15)", padding: "0 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", height: 60 }}>
-        <Link href="/" style={{ display: "flex", alignItems: "center", gap: "0.5rem", textDecoration: "none" }}>
-          <Image src={ICON} alt="Umuhle" width={32} height={32} style={{ borderRadius: "50%", objectFit: "cover" }} />
-          <span style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.2rem", letterSpacing: "0.12em", color: "var(--plum)" }}>umuhle</span>
-        </Link>
-        <div style={{ display: "flex", gap: "0.15rem" }}>
-          {[["Search", "/"], ["Shop", "/shop"], ["Earn", "/earn"]].map(([label, href]) => (
-            <Link key={label} href={href} style={{ borderRadius: 100, padding: "0.4rem 1rem", color: href === "/earn" ? "var(--plum)" : "var(--grey)", fontWeight: href === "/earn" ? 500 : 400, fontSize: "0.875rem", textDecoration: "none", background: href === "/earn" ? "var(--plum-t)" : "transparent" }}>
-              {label}
-            </Link>
-          ))}
-        </div>
-        {user ? (
-          <Link href="/dashboard" style={{ fontSize: "0.85rem", color: "var(--grey)", textDecoration: "none" }}>Dashboard</Link>
-        ) : (
-          <Link href="/?auth=login"><button className="btn-plum" style={{ padding: "0.5rem 1.25rem", fontSize: "0.875rem" }}>Sign in</button></Link>
-        )}
-      </nav>
+      <SiteHeader initialUser={user} />
 
       <main style={{ maxWidth: 900, margin: "0 auto", padding: "3rem 1.5rem 4rem", flex: 1, width: "100%", boxSizing: "border-box" }}>
         {/* Hero */}

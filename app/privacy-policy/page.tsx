@@ -1,4 +1,6 @@
 import Link from "next/link";
+import SiteHeader from "@/components/SiteHeader";
+import Footer from "@/components/Footer";
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <section className="rounded-3xl border border-[#e8e0f0] bg-white p-6 shadow-sm">
@@ -9,8 +11,9 @@ const Section = ({ title, children }: { title: string; children: React.ReactNode
 
 export default function PrivacyPage() {
   return (
-    <div className="min-h-screen bg-[linear-gradient(135deg,#f4eff8_0%,#ffffff_60%)]">
-      <main className="mx-auto max-w-5xl px-6 py-12">
+    <div className="min-h-screen bg-[linear-gradient(135deg,#f4eff8_0%,#ffffff_60%)]" style={{ display: "flex", flexDirection: "column" }}>
+      <SiteHeader />
+      <main className="mx-auto max-w-5xl px-6 py-12" style={{ flex: 1 }}>
         <Link href="/" className="text-sm text-[#9b7fb8]">← Back to Umuhle</Link>
 
         <div className="mt-8 mb-10">
@@ -54,6 +57,7 @@ export default function PrivacyPage() {
           </Section>
         </div>
       </main>
+      <Footer />
     </div>
   );
 }
