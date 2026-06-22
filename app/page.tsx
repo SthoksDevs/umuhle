@@ -194,7 +194,7 @@ export default function Home() {
       await supabase.auth.resetPasswordForEmail(
         authForm.email,
         {
-          redirectTo: window.location.origin,
+          redirectTo: `${window.location.origin}/reset-password`,
         }
       );
 
