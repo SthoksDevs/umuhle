@@ -5,10 +5,10 @@ import Link from "next/link";
 const ICON = "/umuhle-icon.png";
 
 const SOCIALS = [
-  { label: "Facebook",  href: "[web.facebook.com](https://web.facebook.com/umuhlebeautiful)" },
-  { label: "Instagram", href: "[instagram.com](https://www.instagram.com/umuhle_beautiful/)" },
-  { label: "TikTok",    href: "[tiktok.com](http://tiktok.com/@umuhle_beautiful)" },
-  { label: "WhatsApp",  href: "[wa.me](https://wa.me/27733014819)" },
+  { label: "Facebook",  href: "https://web.facebook.com/umuhlebeautiful" },
+  { label: "Instagram", href: "https://www.instagram.com/umuhle_beautiful/" },
+  { label: "TikTok",    href: "http://tiktok.com/@umuhle_beautiful" },
+  { label: "WhatsApp",  href: "https://wa.me/27733014819" },
 ];
 
 export default function Footer() {
@@ -24,8 +24,8 @@ export default function Footer() {
 
         {/* Social + legal links */}
         <div className="footer-links" style={{ display: "flex", gap: "1.25rem", alignItems: "center", flexWrap: "wrap" }}>
-          {/* Social row — visible on desktop and mobile */}
-          <div className="footer-socials" style={{ display: "flex", gap: "1.25rem", alignItems: "center", flexWrap: "wrap" }}>
+          {/* Social row */}
+          <div style={{ display: "flex", gap: "1.25rem", alignItems: "center", flexWrap: "wrap" }}>
             {SOCIALS.map(s => (
               <a key={s.label} href={s.href} target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>
                 {s.label}
@@ -34,7 +34,7 @@ export default function Footer() {
           </div>
 
           {/* Legal links */}
-          <div className="footer-legal" style={{ display: "flex", gap: "1.25rem", alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: "1.25rem", alignItems: "center", flexWrap: "wrap" }}>
             <Link href="/privacy-policy" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>Privacy Policy</Link>
             <Link href="/terms-and-conditions" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>Terms</Link>
           </div>

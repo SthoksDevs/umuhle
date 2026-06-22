@@ -3,8 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
-import type { Artist, Profile, AccountType } from "@/types";
-import { ACCOUNT_TYPES, ARTIST_CATEGORIES } from "@/types";
+import type { Artist, Profile } from "@/types";
 import Image from "next/image";
 import Link from "next/link";
 import Footer from "@/components/Footer";
@@ -56,9 +55,6 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authForm, setAuthForm]   = useState({ email: "", password: "", name: "", phone: "" });
-  const [accountType, setAccountType] = useState<AccountType>("customer");
-  const [artistCategory, setArtistCategory] = useState<string>("hair");
-
   // Mobile nav
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -71,20 +67,22 @@ export default function Home() {
       setUser(user ?? null);
       if (user) fetchProfile(user.id);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => { setUser(session?.user ?? null);
-    if (session?.user) {
-      fetchProfile(session.user.id);
-
-      if (
-        window.location.pathname === "/" ||
-        window.location.pathname === "/auth/callback"
-      ) {
-        window.location.href = "/dashboard";
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        fetchProfile(session.user.id);
+        // Only redirect on a fresh sign-in or OAuth callback — not on INITIAL_SESSION
+        // (which fires for already-logged-in users visiting the homepage)
+        if (
+          (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") &&
+          window.location.pathname === "/auth/callback"
+        ) {
+          window.location.href = "/dashboard";
+        }
+      } else {
+        setProfile(null);
       }
-    } else {
-      setProfile(null);
-    }
-  });
+    });
     return () => subscription.unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -157,8 +155,7 @@ export default function Home() {
             data: {
               full_name: authForm.name,
               phone: authForm.phone,
-              account_type: accountType,
-              artist_category: accountType === "artist" ? artistCategory : null,
+              account_type: "customer",
             },
             emailRedirectTo: `${window.location.origin}/auth/callback`,
           },
@@ -357,18 +354,43 @@ export default function Home() {
             </p>
           </section>
 
-          {/* Category pills */}
-          <section style={{ padding: "2rem 1.5rem 0", maxWidth: 900, margin: "0 auto" }}>
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", paddingBottom: "0.5rem" }}>
-              {CATEGORIES.map(cat => (
-                <button
-                  key={cat}
-                  onClick={() => setActiveCategory(cat)}
-                  style={{ borderRadius: 100, padding: "0.5rem 1.25rem", background: activeCategory === cat ? "var(--plum)" : "var(--plum-t)", color: activeCategory === cat ? "#fff" : "var(--plum)", border: "none", fontWeight: 500, fontSize: "0.875rem", transition: "all 0.2s", cursor: "pointer" }}
-                >
-                  {cat}
-                </button>
-              ))}
+          {/* Category filter — horizontal scroll strip */}
+          <section style={{ padding: "2rem 0 0", maxWidth: 900, margin: "0 auto" }}>
+            <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", scrollbarWidth: "none", msOverflowStyle: "none" }}>
+              <div style={{ display: "flex", gap: "0", padding: "0 1.5rem", width: "max-content", minWidth: "100%" }}>
+                {CATEGORIES.map((cat, i) => {
+                  const isActive = activeCategory === cat;
+                  const isFirst = i === 0;
+                  const isLast = i === CATEGORIES.length - 1;
+                  const catIcon: Record<string, string> = { All: "✦", Hair: "✂", Nails: "◈", Makeup: "◉", Lashes: "◎" };
+                  return (
+                    <button
+                      key={cat}
+                      onClick={() => setActiveCategory(cat)}
+                      style={{
+                        flex: "0 0 auto",
+                        display: "flex", alignItems: "center", gap: "0.35rem",
+                        padding: "0.55rem 1.1rem",
+                        background: isActive ? "var(--plum)" : "#fff",
+                        color: isActive ? "#fff" : "var(--grey)",
+                        border: "1.5px solid",
+                        borderColor: isActive ? "var(--plum)" : "rgba(155,127,184,0.25)",
+                        borderRadius: isFirst ? "100px 0 0 100px" : isLast ? "0 100px 100px 0" : "0",
+                        borderLeft: !isFirst ? "none" : undefined,
+                        fontWeight: isActive ? 600 : 400,
+                        fontSize: "0.85rem",
+                        transition: "all 0.18s",
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                        letterSpacing: "0.01em",
+                      }}
+                    >
+                      <span style={{ fontSize: "0.8rem", opacity: isActive ? 1 : 0.7 }}>{catIcon[cat]}</span>
+                      {cat}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </section>
 
@@ -553,107 +575,6 @@ export default function Home() {
                     }}
                   />
 
-                  <div>
-                    <label
-                      style={{
-                        display: "block",
-                        fontSize: "0.78rem",
-                        fontWeight: 500,
-                        color: "var(--grey)",
-                        marginBottom: "0.5rem",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.05em",
-                      }}
-                    >
-                      I am signing up as
-                    </label>
-
-                    <select
-                      multiple
-                      value={[accountType]}
-                      onChange={e => {
-                        const selected = Array.from(e.target.selectedOptions).map(o => o.value as AccountType);
-                        if (selected.length > 0) setAccountType(selected[selected.length - 1] as AccountType);
-                      }}
-                      style={{
-                        width: "100%",
-                        borderRadius: 12,
-                        border: "1.5px solid #E0E0E0",
-                        fontSize: "0.9rem",
-                        background: "#fff",
-                        padding: "0.25rem",
-                        minHeight: 96,
-                        outline: "none",
-                      }}
-                    >
-                      {ACCOUNT_TYPES.map(t => (
-                        <option
-                          key={t.id}
-                          value={t.id}
-                          style={{
-                            padding: "0.55rem 0.75rem",
-                            borderRadius: 8,
-                            cursor: "pointer",
-                          }}
-                        >
-                          {t.label} — {t.blurb}
-                        </option>
-                      ))}
-                    </select>
-                    <p style={{ fontSize: "0.72rem", color: "var(--light)", margin: "0.35rem 0 0" }}>
-                      Tap to select your account type
-                    </p>
-                  </div>
-
-                  {accountType === "artist" && (
-                    <>
-                      <label
-                        style={{
-                          display: "block",
-                          fontSize: "0.78rem",
-                          fontWeight: 500,
-                          color: "var(--grey)",
-                          marginBottom: "0.4rem",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.05em",
-                        }}
-                      >
-                        Artist specialisation
-                      </label>
-                      <select
-                        multiple
-                        value={[artistCategory]}
-                        onChange={e => {
-                          const selected = Array.from(e.target.selectedOptions).map(o => o.value);
-                          if (selected.length > 0) setArtistCategory(selected[selected.length - 1]);
-                        }}
-                        style={{
-                          width: "100%",
-                          borderRadius: 12,
-                          border: "1.5px solid #E0E0E0",
-                          fontSize: "0.9rem",
-                          background: "#fff",
-                          padding: "0.25rem",
-                          minHeight: 108,
-                          outline: "none",
-                        }}
-                      >
-                        {ARTIST_CATEGORIES.map(c => (
-                          <option
-                            key={c.id}
-                            value={c.id}
-                            style={{ padding: "0.55rem 0.75rem", cursor: "pointer" }}
-                          >
-                            {c.label}
-                          </option>
-                        ))}
-                        <option value="all" style={{ padding: "0.55rem 0.75rem", cursor: "pointer" }}>All of the above</option>
-                      </select>
-                      <p style={{ fontSize: "0.72rem", color: "var(--light)", margin: "0.35rem 0 0" }}>
-                        Tap to select your specialisation
-                      </p>
-                    </>
-                  )}
                 </>
               )}
 
