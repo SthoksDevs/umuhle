@@ -4,13 +4,18 @@ import { createClient } from "@/lib/supabase/server";
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
+  console.log("AUTH CALLBACK HIT");
   const code = searchParams.get("code");
+  console.log("CODE EXISTS:", !!code);
+
   const next = searchParams.get("next") ?? "/";
 
   if (code) {
     const supabase = await createClient();
     const { error } = await supabase.auth.exchangeCodeForSession(code);
+    console.log("EXCHANGE ERROR:", error);
     if (!error) {
+      console.log("SESSION CREATED");
       // Always redirect to dashboard after email confirmation or OAuth
       const redirectTo = next === "/" ? "/dashboard" : next;
 
@@ -27,6 +32,6 @@ export async function GET(request: Request) {
       return NextResponse.redirect(`${origin}${redirectTo}`);
     }
   }
-
+  console.log("AUTH FAILED");
   return NextResponse.redirect(`${origin}/?auth=error`);
 }
