@@ -12,19 +12,18 @@ import { useCart } from "@/lib/cart-context";
 
 const ICON = "/umuhle-icon.png";
 
+// ── CHANGE: added Stores link ─────────────────────────────────────────────────
 const NAV_LINKS = [
-  { label: "Search",    href: "/" },
-  { label: "Shop",      href: "/shop" },
-  { label: "Earn",      href: "/earn" },
+  { label: "Search",  href: "/" },
+  { label: "Stores",  href: "/stores" },
+  { label: "Shop",    href: "/shop" },
+  { label: "Earn",    href: "/earn" },
 ];
 
 interface SiteHeaderProps {
-  /** Pass if the parent already has the user (avoids double fetch). */
   initialUser?: User | null;
   initialProfile?: Profile | null;
-  /** Called when sign-in button is clicked on pages that own the auth modal */
   onSignInClick?: () => void;
-  /** Active page override so parent doesn't need to pass it (auto-detected from pathname) */
   activePath?: string;
 }
 
@@ -42,9 +41,8 @@ export default function SiteHeader({
   const [profile, setProfile] = useState<Profile | null>(initialProfile ?? null);
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // Sync auth state
   useEffect(() => {
-    if (initialUser !== undefined) return; // parent is managing auth
+    if (initialUser !== undefined) return;
     supabase.auth.getUser().then(({ data: { user } }) => {
       setUser(user ?? null);
       if (user) fetchProfile(user.id);
@@ -58,7 +56,6 @@ export default function SiteHeader({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Keep in sync when parent updates
   useEffect(() => { if (initialUser !== undefined) setUser(initialUser ?? null); }, [initialUser]);
   useEffect(() => { if (initialProfile !== undefined) setProfile(initialProfile ?? null); }, [initialProfile]);
 
@@ -75,21 +72,21 @@ export default function SiteHeader({
 
   const handleSignInClick = () => {
     setMenuOpen(false);
-    if (onSignInClick) {
-      onSignInClick();
-    } else {
-      router.push("/?auth=login");
-    }
+    if (onSignInClick) { onSignInClick(); } else { router.push("/?auth=login"); }
   };
+
+  // Active check: /stores/[id] should also highlight the Stores link
+  const isActive = (href: string) =>
+    href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(href + "/");
 
   const navStyle = (href: string): React.CSSProperties => ({
     borderRadius: 100,
     padding: "0.4rem 1rem",
-    color: pathname === href ? "var(--plum)" : "var(--grey)",
-    fontWeight: pathname === href ? 500 : 400,
+    color: isActive(href) ? "var(--plum)" : "var(--grey)",
+    fontWeight: isActive(href) ? 500 : 400,
     fontSize: "0.875rem",
     textDecoration: "none",
-    background: pathname === href ? "var(--plum-t)" : "transparent",
+    background: isActive(href) ? "var(--plum-t)" : "transparent",
     display: "inline-block",
     transition: "all 0.15s",
   });
@@ -114,23 +111,18 @@ export default function SiteHeader({
   return (
     <>
       <nav style={{ position: "sticky", top: 0, zIndex: 100, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(155,127,184,0.15)", padding: "0 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", height: 60 }}>
-        {/* Logo */}
         <Link href="/" style={{ display: "flex", alignItems: "center", gap: "0.5rem", textDecoration: "none" }}>
           <Image src={ICON} alt="Umuhle" width={32} height={32} style={{ borderRadius: "50%", objectFit: "cover" }} />
           <span style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.2rem", letterSpacing: "0.12em", color: "var(--plum)" }}>umuhle</span>
         </Link>
 
-        {/* Desktop centre links */}
         <div className="nav-links-desktop" style={{ display: "flex", gap: "0.15rem" }}>
           {NAV_LINKS.map(({ label, href }) => (
             <Link key={href} href={href} style={navStyle(href)}>{label}</Link>
           ))}
-          {user && (
-            <Link href="/dashboard" style={navStyle("/dashboard")}>Dashboard</Link>
-          )}
+          {user && <Link href="/dashboard" style={navStyle("/dashboard")}>Dashboard</Link>}
         </div>
 
-        {/* Desktop right */}
         <div className="nav-actions-desktop" style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
           <CartIcon />
           {user ? (
@@ -145,13 +137,11 @@ export default function SiteHeader({
           )}
         </div>
 
-        {/* Mobile right */}
         <div className="nav-mobile-right" style={{ display: "none", alignItems: "center", gap: "0.5rem" }}>
           <CartIcon />
           {!user && (
             <button className="btn-plum" style={{ padding: "0.4rem 1rem", fontSize: "0.8rem" }} onClick={handleSignInClick}>Sign in</button>
           )}
-          {/* Hamburger */}
           <button
             aria-label="Open menu"
             onClick={() => setMenuOpen(v => !v)}
@@ -164,7 +154,6 @@ export default function SiteHeader({
         </div>
       </nav>
 
-      {/* Mobile dropdown */}
       {menuOpen && (
         <div className="mobile-menu" style={{ position: "sticky", top: 60, zIndex: 99, background: "rgba(255,255,255,0.97)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(155,127,184,0.15)", padding: "0.75rem 1.5rem", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
           {NAV_LINKS.map(({ label, href }) => (

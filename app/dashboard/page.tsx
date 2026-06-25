@@ -396,6 +396,60 @@ const emptySalon = (): SalonListing => ({
   gallery_urls: [],
 });
 
+
+type OpeningHours = {
+  days: string[];   // ["Monday","Tuesday",...]
+  open: string;     // "08:00"
+  close: string;    // "17:00"
+};
+ 
+type SalonListing = {
+  id?: string;
+  name: string;
+  description: string;
+  address: string;
+  suburb: string;
+  city: string;
+  phone: string;
+  email: string;
+  website: string;
+  opening_hours: OpeningHours;
+  gallery_urls: string[];
+  instagram_username: string;
+  youtube_url: string;
+  services: string[];
+  status?: "pending" | "approved" | "rejected";
+};
+ 
+type StoreBooking = {
+  id: string;
+  client_name: string;
+  client_phone: string;
+  service: string;
+  booking_date: string;
+  booking_time: string;
+  notes: string | null;
+  status: string;
+  created_at: string;
+};
+ 
+type GalleryFile = { file: File; preview: string };
+ 
+const WEEK_DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+const ALL_SERVICES = ["hair","nails","makeup","lashes"];
+ 
+const emptySalon = (): SalonListing => ({
+  name: "", description: "", address: "", suburb: "", city: "",
+  phone: "", email: "", website: "",
+  opening_hours: { days: [], open: "08:00", close: "17:00" },
+  gallery_urls: [],
+  instagram_username: "",
+  youtube_url: "",
+  services: [],
+});
+ 
+// ── SalonForm ─────────────────────────────────────────────────────────────────
+ 
 function SalonForm({
   initial,
   userId,
@@ -415,95 +469,141 @@ function SalonForm({
   const [galleryError, setGalleryError] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const dragRef = useRef<HTMLDivElement>(null);
-
-  const inputStyle: React.CSSProperties = { width: "100%", padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", boxSizing: "border-box" };
-  const labelStyle: React.CSSProperties = { display: "block", fontSize: "0.8rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" };
-
+  // How many photos will incur R5 charges
+  const chargeableCount = gallery.length; // all new uploads cost R5 each
+ 
+  const inputStyle: React.CSSProperties = {
+    width: "100%", padding: "0.75rem 1rem", borderRadius: 12,
+    border: "1.5px solid #E0E0E0", fontSize: "0.9rem", outline: "none",
+  };
+  const labelStyle: React.CSSProperties = {
+    fontSize: "0.8rem", fontWeight: 600, color: "#888",
+    display: "block", marginBottom: "0.3rem", marginTop: "0.85rem",
+  };
+ 
   const toggleDay = (day: string) => {
     setForm(f => ({
       ...f,
-      business_days: f.business_days.includes(day)
-        ? f.business_days.filter(d => d !== day)
-        : [...f.business_days, day],
+      opening_hours: {
+        ...f.opening_hours,
+        days: f.opening_hours.days.includes(day)
+          ? f.opening_hours.days.filter(d => d !== day)
+          : [...f.opening_hours.days, day],
+      },
     }));
   };
-
-  const handleGalleryFiles = (files: FileList | null) => {
-    if (!files) return;
-    setGalleryError("");
-    const incoming = Array.from(files);
-    const allowed = ["image/jpeg", "image/png", "image/webp"];
-    const valid: GalleryFile[] = [];
-    for (const f of incoming) {
-      if (!allowed.includes(f.type)) { setGalleryError("Only JPG, PNG or WEBP files are allowed."); continue; }
-      if (f.size > 5 * 1024 * 1024) { setGalleryError("Each image must be under 5MB."); continue; }
-      if (gallery.length + valid.length >= 5) { setGalleryError("Maximum 5 images allowed."); break; }
-      valid.push({ file: f, preview: URL.createObjectURL(f) });
+ 
+  const toggleService = (svc: string) => {
+    setForm(f => ({
+      ...f,
+      services: f.services.includes(svc)
+        ? f.services.filter(s => s !== svc)
+        : [...f.services, svc],
+    }));
+  };
+ 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    const valid = files.filter(f => f.type.startsWith("image/"));
+    // Max 10 total (5 existing + 5 new as a soft limit — each costs R5)
+    const remaining = 10 - form.gallery_urls.length;
+    if (gallery.length + valid.length > remaining) {
+      setGalleryError(`Maximum ${remaining} new images allowed.`);
+      return;
     }
-    setGallery(prev => [...prev, ...valid].slice(0, 5));
+    setGalleryError("");
+    const newFiles = valid.slice(0, remaining - gallery.length).map(f => ({
+      file: f,
+      preview: URL.createObjectURL(f),
+    }));
+    setGallery(prev => [...prev, ...newFiles]);
   };
-
-  const removeGalleryItem = (idx: number) => {
-    setGallery(prev => prev.filter((_, i) => i !== idx));
-  };
-
-  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); };
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    handleGalleryFiles(e.dataTransfer.files);
-  };
-
+ 
+  /** Upload gallery images to Supabase Storage and record R5 charges */
   const uploadGallery = async (): Promise<string[]> => {
     const urls: string[] = [...form.gallery_urls];
     for (const item of gallery) {
       const ext = item.file.name.split(".").pop();
       const path = `salons/${userId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-      const { error: uploadErr } = await supabase.storage.from("salon-gallery").upload(path, item.file, { upsert: false });
+      const { error: uploadErr } = await supabase.storage
+        .from("salon-gallery")
+        .upload(path, item.file, { upsert: false });
       if (uploadErr) throw uploadErr;
       const { data: { publicUrl } } = supabase.storage.from("salon-gallery").getPublicUrl(path);
       urls.push(publicUrl);
+ 
+      // Record R5 charge (status = pending until PayFast confirms)
+      // In practice you'd initiate PayFast here; for now just log the intent
+      await supabase.from("photo_upload_charges").insert({
+        owner_id: userId,
+        salon_id: form.id ?? null,
+        image_url: publicUrl,
+        amount_cents: 500,
+        status: "pending",
+      });
     }
-    return urls.slice(0, 5);
+    return urls;
   };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true); setError("");
+ 
+  const handleSubmit = async () => {
+    setError("");
+    if (!form.name.trim()) { setError("Salon name is required."); return; }
+    if (!form.address.trim()) { setError("Address is required."); return; }
+    if (form.opening_hours.days.length === 0) { setError("Select at least one business day."); return; }
+    if (form.services.length === 0) { setError("Select at least one service."); return; }
+ 
+    setSaving(true);
     try {
       const galleryUrls = await uploadGallery();
-      const payload = { ...form, gallery_urls: galleryUrls, owner_id: userId, status: "pending" };
+      const payload = {
+        name: form.name,
+        description: form.description,
+        address: form.address,
+        suburb: form.suburb,
+        city: form.city,
+        phone: form.phone,
+        email: form.email,
+        website: form.website || null,
+        opening_hours: form.opening_hours,
+        gallery_urls: galleryUrls,
+        instagram_username: form.instagram_username || null,
+        youtube_url: form.youtube_url || null,
+        services: form.services,
+        partner_id: userId,
+        status: "pending",
+      };
+ 
       let data, err;
       if (form.id) {
-        ({ data, error: err } = await supabase.from("store_listings").update(payload).eq("id", form.id).select().single());
+        ({ data, error: err } = await supabase
+          .from("partner_salons").update(payload).eq("id", form.id).select().single());
       } else {
-        ({ data, error: err } = await supabase.from("store_listings").insert(payload).select().single());
+        ({ data, error: err } = await supabase
+          .from("partner_salons").insert(payload).select().single());
       }
       if (err) throw err;
       setGallery([]);
       onSaved(data as SalonListing);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
       setSaving(false);
     }
   };
-
+ 
   return (
-    <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "1.25rem", marginBottom: "2rem", background: "#fff", borderRadius: 20, padding: "1.5rem", border: "1.5px solid rgba(155,127,184,0.15)" }}>
-      <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", margin: 0 }}>
+    <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.5rem" }}>
+      <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.2rem", marginBottom: "1rem" }}>
         {isEdit ? "Edit listing" : "Add a salon"}
       </h3>
-
-      <div>
-        <label style={labelStyle}>Salon name *</label>
-        <input required value={form.salon_name} onChange={e => setForm(f => ({ ...f, salon_name: e.target.value }))} placeholder="e.g. Beauty by Thandi" style={inputStyle} />
-      </div>
-      <div>
-        <label style={labelStyle}>Description</label>
-        <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Tell clients what makes your salon special…" rows={3} style={{ ...inputStyle, resize: "vertical" }} />
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+ 
+      <label style={labelStyle}>Salon name *</label>
+      <input required value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Beauty by Thandi" style={inputStyle} />
+ 
+      <label style={labelStyle}>Description</label>
+      <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Tell clients what makes your salon special…" rows={3} style={{ ...inputStyle, resize: "vertical" }} />
+ 
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 1rem" }}>
         <div>
           <label style={labelStyle}>Suburb *</label>
           <input required value={form.suburb} onChange={e => setForm(f => ({ ...f, suburb: e.target.value }))} placeholder="e.g. Sandton" style={inputStyle} />
@@ -513,257 +613,392 @@ function SalonForm({
           <input required value={form.city} onChange={e => setForm(f => ({ ...f, city: e.target.value }))} placeholder="e.g. Johannesburg" style={inputStyle} />
         </div>
       </div>
-      <div>
-        <label style={labelStyle}>Street address *</label>
-        <input required value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} placeholder="123 Main Street, Sandton" style={inputStyle} />
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+ 
+      <label style={labelStyle}>Full address *</label>
+      <input required value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} placeholder="123 Main Street, Sandton" style={inputStyle} />
+ 
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 1rem" }}>
         <div>
-          <label style={labelStyle}>Phone number *</label>
+          <label style={labelStyle}>Phone *</label>
           <input required type="tel" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="082 123 4567" style={inputStyle} />
         </div>
         <div>
-          <label style={labelStyle}>Business email</label>
+          <label style={labelStyle}>Email</label>
           <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="hello@yoursalon.co.za" style={inputStyle} />
         </div>
       </div>
-
-      {/* Business hours */}
-      <div>
-        <label style={labelStyle}>Business hours — days open</label>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-          {DAYS_OF_WEEK.map(day => {
-            const active = form.business_days.includes(day);
-            return (
-              <button
-                key={day}
-                type="button"
-                onClick={() => toggleDay(day)}
-                style={{
-                  borderRadius: 100, border: `1.5px solid ${active ? "var(--plum)" : "rgba(155,127,184,0.25)"}`,
-                  background: active ? "var(--plum)" : "#fff",
-                  color: active ? "#fff" : "var(--grey)",
-                  padding: "0.35rem 0.85rem", fontSize: "0.8rem", fontWeight: active ? 500 : 400,
-                  cursor: "pointer", transition: "all 0.15s",
-                }}
-              >
-                {day.slice(0, 3)}
-              </button>
-            );
-          })}
-        </div>
-        {form.business_days.length === 0 && (
-          <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "0.35rem" }}>Select at least one day.</p>
-        )}
+ 
+      <label style={labelStyle}>Website</label>
+      <input type="url" value={form.website} onChange={e => setForm(f => ({ ...f, website: e.target.value }))} placeholder="https://yoursalon.co.za" style={inputStyle} />
+ 
+      {/* Services */}
+      <label style={labelStyle}>Services offered *</label>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
+        {ALL_SERVICES.map(svc => {
+          const on = form.services.includes(svc);
+          return (
+            <button key={svc} type="button" onClick={() => toggleService(svc)} style={{
+              padding: "0.4rem 1rem", borderRadius: 100, fontSize: "0.85rem", cursor: "pointer",
+              border: "1.5px solid", borderColor: on ? "var(--plum)" : "rgba(155,127,184,0.25)",
+              background: on ? "var(--plum)" : "#fff", color: on ? "#fff" : "var(--grey)",
+              fontWeight: on ? 600 : 400, textTransform: "capitalize",
+            }}>{svc}</button>
+          );
+        })}
       </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+ 
+      {/* Business hours */}
+      <label style={labelStyle}>Days open *</label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+        {WEEK_DAYS.map(day => {
+          const active = form.opening_hours.days.includes(day);
+          return (
+            <button key={day} type="button" onClick={() => toggleDay(day)} style={{
+              padding: "0.35rem 0.85rem", borderRadius: 100, fontSize: "0.8rem", cursor: "pointer",
+              border: "1.5px solid", borderColor: active ? "var(--plum)" : "rgba(155,127,184,0.2)",
+              background: active ? "var(--plum)" : "#fff", color: active ? "#fff" : "var(--grey)",
+              fontWeight: active ? 600 : 400,
+            }}>{day.slice(0,3)}</button>
+          );
+        })}
+      </div>
+      {form.opening_hours.days.length === 0 && (
+        <p style={{ color: "#E53935", fontSize: "0.78rem", marginTop: "0.25rem" }}>Select at least one day.</p>
+      )}
+ 
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 1rem", marginTop: "0.5rem" }}>
         <div>
           <label style={labelStyle}>Opening time</label>
-          <input type="time" value={form.hours_open} onChange={e => setForm(f => ({ ...f, hours_open: e.target.value }))} style={inputStyle} />
+          <input type="time" value={form.opening_hours.open}
+            onChange={e => setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, open: e.target.value } }))}
+            style={inputStyle} />
         </div>
         <div>
           <label style={labelStyle}>Closing time</label>
-          <input type="time" value={form.hours_close} onChange={e => setForm(f => ({ ...f, hours_close: e.target.value }))} style={inputStyle} />
+          <input type="time" value={form.opening_hours.close}
+            onChange={e => setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, close: e.target.value } }))}
+            style={inputStyle} />
         </div>
       </div>
-
-      {/* Gallery upload */}
-      <div>
-        <label style={labelStyle}>Gallery images (up to 5 · JPG, PNG, WEBP · max 5MB each)</label>
-        <div
-          ref={dragRef}
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
-          onClick={() => document.getElementById(`gallery-input-${form.id ?? "new"}`)?.click()}
-          style={{
-            border: "2px dashed rgba(155,127,184,0.35)", borderRadius: 14,
-            background: "var(--plum-t)", padding: "1.5rem",
-            textAlign: "center", cursor: "pointer", transition: "background 0.2s",
-          }}
-          onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = "#ede6f5"}
-          onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = "var(--plum-t)"}
-        >
-          <div style={{ fontSize: "1.75rem", marginBottom: "0.35rem" }}>🖼️</div>
-          <p style={{ fontSize: "0.85rem", color: "var(--grey)" }}>Drag &amp; drop images here, or <span style={{ color: "var(--plum)", fontWeight: 500 }}>click to browse</span></p>
-          <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "0.25rem" }}>{gallery.length}/5 added</p>
-          <input
-            id={`gallery-input-${form.id ?? "new"}`}
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            multiple
-            onChange={e => handleGalleryFiles(e.target.files)}
-            style={{ display: "none" }}
-          />
+ 
+      {/* Instagram — FREE */}
+      <label style={labelStyle}>
+        Instagram username
+        <span style={{ marginLeft: 8, background: "#E1F5EE", color: "#0F6E56", borderRadius: 100, padding: "1px 8px", fontSize: "0.72rem", fontWeight: 600 }}>FREE</span>
+      </label>
+      <div style={{ position: "relative" }}>
+        <span style={{ position: "absolute", left: "1rem", top: "50%", transform: "translateY(-50%)", color: "#C13584", fontSize: "0.9rem", pointerEvents: "none" }}>@</span>
+        <input value={form.instagram_username}
+          onChange={e => setForm(f => ({ ...f, instagram_username: e.target.value.replace(/^@/, "") }))}
+          placeholder="yoursalonhandle" style={{ ...inputStyle, paddingLeft: "2rem" }} />
+      </div>
+      <p style={{ fontSize: "0.75rem", color: "#888", marginTop: "0.25rem" }}>
+        Your latest Instagram posts will appear on your store page automatically — free of charge.
+      </p>
+ 
+      {/* YouTube */}
+      <label style={labelStyle}>YouTube video URL</label>
+      <input type="url" value={form.youtube_url}
+        onChange={e => setForm(f => ({ ...f, youtube_url: e.target.value }))}
+        placeholder="https://youtube.com/watch?v=..." style={inputStyle} />
+      <p style={{ fontSize: "0.75rem", color: "#888", marginTop: "0.25rem" }}>
+        Paste any YouTube video URL — it will be embedded on your store page.
+      </p>
+ 
+      {/* Gallery — R5 per image */}
+      <label style={labelStyle}>
+        Gallery photos
+        <span style={{ marginLeft: 8, background: "#FAEEDA", color: "#854F0B", borderRadius: 100, padding: "1px 8px", fontSize: "0.72rem", fontWeight: 600 }}>R5 each</span>
+      </label>
+      <div style={{ background: "#FFFBF0", border: "1.5px solid #F5D99A", borderRadius: 12, padding: "0.75rem 1rem", marginBottom: "0.75rem", fontSize: "0.82rem", color: "#6B4C00" }}>
+        💡 <strong>Tip:</strong> Connect your Instagram above — it&apos;s free and keeps your gallery fresh automatically. Direct photo uploads are charged at <strong>R5 per image</strong> to manage storage costs.
+      </div>
+ 
+      {chargeableCount > 0 && (
+        <div style={{ background: "#E6F1FB", border: "1.5px solid #B3D4F5", borderRadius: 12, padding: "0.65rem 1rem", marginBottom: "0.75rem", fontSize: "0.82rem", color: "#185FA5" }}>
+          You are adding <strong>{chargeableCount}</strong> image{chargeableCount !== 1 ? "s" : ""} — a charge of <strong>R{chargeableCount * 5}</strong> will be logged. Our team will process the payment separately.
         </div>
-        {galleryError && <p style={{ color: "#E53935", fontSize: "0.8rem", marginTop: "0.35rem" }}>{galleryError}</p>}
-        {gallery.length > 0 && (
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
-            {gallery.map((g, i) => (
-              <div key={i} style={{ position: "relative" }}>
+      )}
+ 
+      <button type="button"
+        onClick={() => document.getElementById(`gallery-input-${form.id ?? "new"}`)?.click()}
+        style={{ padding: "0.65rem 1.25rem", borderRadius: 12, border: "1.5px dashed rgba(155,127,184,0.4)", background: "#fafaf8", fontSize: "0.85rem", color: "var(--plum)", cursor: "pointer", width: "100%" }}>
+        + Add photos (R5 each)
+      </button>
+      <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "0.25rem" }}>{gallery.length} new · {form.gallery_urls.length} existing</p>
+      <input id={`gallery-input-${form.id ?? "new"}`} type="file" accept="image/*" multiple
+        style={{ display: "none" }} onChange={handleFileChange} />
+      {galleryError && <p style={{ color: "#E53935", fontSize: "0.8rem", marginTop: "0.35rem" }}>{galleryError}</p>}
+ 
+      {/* Previews */}
+      {gallery.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginTop: "0.75rem" }}>
+          {gallery.map((g, i) => (
+            <div key={i} style={{ position: "relative", aspectRatio: "1", borderRadius: 8, overflow: "hidden" }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={g.preview} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              <button onClick={() => setGallery(prev => prev.filter((_, idx) => idx !== i))}
+                style={{ position: "absolute", top: 3, right: 3, background: "rgba(0,0,0,0.55)", border: "none", color: "#fff", borderRadius: "50%", width: 20, height: 20, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+ 
+      {form.gallery_urls.length > 0 && (
+        <div style={{ marginTop: "0.5rem" }}>
+          <p style={{ fontSize: "0.75rem", color: "var(--grey)", marginBottom: 4 }}>Existing photos:</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6 }}>
+            {form.gallery_urls.map((url, i) => (
+              <div key={i} style={{ position: "relative", aspectRatio: "1", borderRadius: 8, overflow: "hidden" }}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={g.preview} alt={`Gallery ${i + 1}`} style={{ width: 72, height: 72, borderRadius: 10, objectFit: "cover", border: "1.5px solid rgba(155,127,184,0.25)" }} />
-                <button
-                  type="button"
-                  onClick={() => removeGalleryItem(i)}
-                  style={{ position: "absolute", top: -6, right: -6, background: "#E53935", border: "none", borderRadius: "50%", width: 20, height: 20, color: "#fff", fontSize: "0.7rem", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
-                >✕</button>
+                <img src={url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                <button onClick={() => setForm(f => ({ ...f, gallery_urls: f.gallery_urls.filter((_, idx) => idx !== i) }))}
+                  style={{ position: "absolute", top: 3, right: 3, background: "rgba(0,0,0,0.55)", border: "none", color: "#fff", borderRadius: "50%", width: 20, height: 20, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
               </div>
             ))}
           </div>
-        )}
-        {form.gallery_urls.length > 0 && (
-          <div>
-            <p style={{ fontSize: "0.75rem", color: "var(--light)", margin: "0.5rem 0 0.35rem" }}>Existing images:</p>
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              {form.gallery_urls.map((url, i) => (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img key={i} src={url} alt={`Gallery ${i + 1}`} style={{ width: 72, height: 72, borderRadius: 10, objectFit: "cover", border: "1.5px solid rgba(155,127,184,0.25)" }} />
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {error && <p style={{ color: "#E53935", fontSize: "0.85rem" }}>{error}</p>}
-
-      <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-        <button type="submit" className="btn-plum" disabled={saving} style={{ padding: "0.75rem 2rem" }}>
-          {saving ? "Saving…" : isEdit ? "Save changes" : "Add to cart — R35"}
-        </button>
+        </div>
+      )}
+ 
+      {error && <p style={{ color: "#E53935", fontSize: "0.85rem", marginTop: "0.75rem" }}>{error}</p>}
+ 
+      <div style={{ display: "flex", gap: 10, marginTop: "1.25rem" }}>
         {onCancel && (
-          <button type="button" onClick={onCancel} className="btn-outline" style={{ padding: "0.75rem 1.5rem" }}>Cancel</button>
+          <button onClick={onCancel} style={{ flex: 1, padding: "0.75rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "#fff", color: "var(--grey)", fontSize: "0.9rem", cursor: "pointer" }}>
+            Cancel
+          </button>
         )}
+        <button onClick={handleSubmit} disabled={saving} className="btn-plum" style={{ flex: 2, padding: "0.75rem", borderRadius: 100, fontSize: "0.9rem", fontWeight: 600, cursor: saving ? "not-allowed" : "pointer", opacity: saving ? 0.7 : 1 }}>
+          {saving ? "Saving…" : isEdit ? "Save changes" : "Submit for review"}
+        </button>
       </div>
       {!isEdit && (
-        <p style={{ fontSize: "0.78rem", color: "var(--light)" }}>
-          After submitting, you will be prompted to pay R35 to publish your listing. Renewal is once per year.
+        <p style={{ fontSize: "0.75rem", color: "#bbb", textAlign: "center", marginTop: "0.75rem" }}>
+          Your listing will be reviewed before going live (usually within 24 hours).
         </p>
       )}
-    </form>
+    </div>
   );
 }
-
-function MySalonTab({ user }: { user: User }) {
+ 
+// ── Booking inbox for salon owners ────────────────────────────────────────────
+ 
+function SalonBookingsInbox({ salonId }: { salonId: string }) {
+  const supabase = createClient();
+  const [bookings, setBookings] = useState<StoreBooking[]>([]);
+  const [loading, setLoading] = useState(true);
+ 
+  useEffect(() => {
+    supabase
+      .from("store_bookings")
+      .select("*")
+      .eq("salon_id", salonId)
+      .order("booking_date", { ascending: true })
+      .then(({ data }) => {
+        setBookings((data as StoreBooking[]) ?? []);
+        setLoading(false);
+      });
+  }, [salonId]);
+ 
+  const updateStatus = async (id: string, status: string) => {
+    await supabase.from("store_bookings").update({ status }).eq("id", id);
+    setBookings(prev => prev.map(b => b.id === id ? { ...b, status } : b));
+  };
+ 
+  const statusColors: Record<string, { bg: string; color: string }> = {
+    pending:   { bg: "#FAEEDA", color: "#854F0B" },
+    confirmed: { bg: "#E1F5EE", color: "#0F6E56" },
+    completed: { bg: "#E6F1FB", color: "#185FA5" },
+    cancelled: { bg: "#FCEBEB", color: "#A32D2D" },
+  };
+ 
+  if (loading) return <p style={{ color: "var(--grey)", fontSize: "0.9rem" }}>Loading bookings…</p>;
+  if (!bookings.length) return (
+    <div style={{ textAlign: "center", padding: "2rem", color: "var(--grey)" }}>
+      <p style={{ fontSize: "1.1rem", marginBottom: "0.5rem" }}>No bookings yet.</p>
+      <p style={{ fontSize: "0.85rem" }}>When clients book via your store page, requests appear here.</p>
+    </div>
+  );
+ 
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+      {bookings.map(b => {
+        const sc = statusColors[b.status] ?? statusColors.pending;
+        return (
+          <div key={b.id} style={{ background: "#fff", borderRadius: 14, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1rem 1.25rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.5rem" }}>
+              <div>
+                <p style={{ fontWeight: 600, fontSize: "0.95rem", margin: 0 }}>{b.client_name}</p>
+                <p style={{ fontSize: "0.8rem", color: "var(--grey)", margin: "2px 0 0" }}>
+                  {b.booking_date} at {b.booking_time} · <span style={{ textTransform: "capitalize" }}>{b.service}</span>
+                </p>
+              </div>
+              <span style={{ background: sc.bg, color: sc.color, borderRadius: 100, padding: "0.2rem 0.7rem", fontSize: "0.72rem", fontWeight: 600, textTransform: "capitalize", whiteSpace: "nowrap" }}>
+                {b.status}
+              </span>
+            </div>
+            <p style={{ fontSize: "0.82rem", color: "var(--grey)", margin: "0 0 0.65rem" }}>
+              📞 <a href={`tel:${b.client_phone}`} style={{ color: "var(--plum)" }}>{b.client_phone}</a>
+              {" · "}
+              <a href={`https://wa.me/${b.client_phone.replace(/\D/g,"")}`} target="_blank" rel="noopener noreferrer" style={{ color: "#25D366" }}>WhatsApp</a>
+            </p>
+            {b.notes && <p style={{ fontSize: "0.82rem", color: "#666", fontStyle: "italic", margin: "0 0 0.65rem" }}>&quot;{b.notes}&quot;</p>}
+            {b.status === "pending" && (
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => updateStatus(b.id, "confirmed")}
+                  style={{ padding: "0.4rem 1rem", borderRadius: 100, border: "none", background: "#E1F5EE", color: "#0F6E56", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer" }}>
+                  Confirm
+                </button>
+                <button onClick={() => updateStatus(b.id, "cancelled")}
+                  style={{ padding: "0.4rem 1rem", borderRadius: 100, border: "none", background: "#FCEBEB", color: "#A32D2D", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer" }}>
+                  Cancel
+                </button>
+              </div>
+            )}
+            {b.status === "confirmed" && (
+              <button onClick={() => updateStatus(b.id, "completed")}
+                style={{ padding: "0.4rem 1rem", borderRadius: 100, border: "none", background: "#E6F1FB", color: "#185FA5", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer" }}>
+                Mark completed
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+ 
+// ── MySalonTab ────────────────────────────────────────────────────────────────
+// This replaces the MySalonTab function in your dashboard/page.tsx
+ 
+function MySalonTab({ user }: { user: { id: string } }) {
   const supabase = createClient();
   const [listings, setListings] = useState<SalonListing[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [addingNew, setAddingNew] = useState(false);
-  const [savedMsg, setSavedMsg] = useState("");
-
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<SalonListing | null>(null);
+  const [innerTab, setInnerTab] = useState<"listing" | "bookings">("listing");
+ 
   useEffect(() => {
     supabase
-      .from("store_listings")
+      .from("partner_salons")
       .select("*")
-      .eq("owner_id", user.id)
+      .eq("partner_id", user.id)
       .then(({ data }) => {
         if (data) setListings(data as SalonListing[]);
         setLoading(false);
       });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.id]);
-
-  const statusInfo: Record<string, { bg: string; color: string; label: string; desc: string }> = {
-    pending:  { bg: "#FFF3E0", color: "#E65100", label: "Under review",  desc: "Your listing has been submitted and is being reviewed by our team." },
-    approved: { bg: "#E8F5E9", color: "#2E7D32", label: "Live",          desc: "Your salon is listed on Umuhle and visible in Nearby Salons search." },
-    rejected: { bg: "#FBE9E7", color: "#BF360C", label: "Not approved",  desc: "Your listing was not approved. Please update the details and resubmit." },
-  };
-
+ 
   const handleSaved = (saved: SalonListing) => {
     setListings(prev => {
       const idx = prev.findIndex(l => l.id === saved.id);
-      if (idx >= 0) { const next = [...prev]; next[idx] = saved; return next; }
+      if (idx >= 0) { const n = [...prev]; n[idx] = saved; return n; }
       return [...prev, saved];
     });
-    setEditingId(null);
-    setAddingNew(false);
-    setSavedMsg("✓ Listing saved and sent for review.");
-    setTimeout(() => setSavedMsg(""), 4000);
+    setShowForm(false);
+    setEditing(null);
   };
-
-  if (loading) return <div style={{ color: "var(--grey)", fontSize: "0.9rem" }}>Loading…</div>;
-
-  return (
-    <div style={{ maxWidth: 680 }}>
-      <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>My Salon</h2>
-      <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-        List your salon on Umuhle to appear in Nearby Salons search results and reach new clients.
-      </p>
-
-      {/* Pricing summary — price only */}
-      <div style={{ background: "var(--plum-t)", borderRadius: 16, padding: "1rem 1.25rem", marginBottom: "1.75rem", border: "1.5px solid rgba(155,127,184,0.2)", display: "inline-flex", alignItems: "baseline", gap: "0.5rem" }}>
-        <p style={{ fontFamily: "var(--font-display)", fontSize: "1.5rem", color: "var(--plum)", fontWeight: 500, margin: 0 }}>R35</p>
-        <p style={{ fontSize: "0.85rem", color: "var(--grey)", margin: 0 }}>/ year per listing</p>
+ 
+  const statusMeta: Record<string, { bg: string; color: string; label: string; desc: string }> = {
+    pending:  { bg: "#FAEEDA", color: "#854F0B", label: "Under review",  desc: "We'll review your listing within 24 hours." },
+    approved: { bg: "#E1F5EE", color: "#0F6E56", label: "Live",          desc: "Your salon is visible in Stores and can receive bookings." },
+    rejected: { bg: "#FCEBEB", color: "#A32D2D", label: "Not approved",  desc: "Please edit your listing and resubmit." },
+  };
+ 
+  if (loading) return <p style={{ color: "var(--grey)" }}>Loading…</p>;
+ 
+  // ── Add form (no existing listing) ──
+  if (listings.length === 0 && (showForm || true)) {
+    if (showForm) return (
+      <SalonForm initial={emptySalon()} userId={user.id} onSaved={handleSaved}
+        onCancel={() => setShowForm(false)} isEdit={false} />
+    );
+    return (
+      <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "2rem", textAlign: "center" }}>
+        <p style={{ fontFamily: "var(--font-display)", fontSize: "1.1rem", marginBottom: "0.5rem" }}>List your salon on Umuhle</p>
+        <p style={{ color: "var(--grey)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
+          Appear in the Stores page and receive appointment bookings directly.
+        </p>
+        <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.75rem 2rem", borderRadius: 100, fontWeight: 600 }}>
+          Add your salon
+        </button>
       </div>
-
-      {savedMsg && (
-        <div style={{ background: "#E8F5E9", borderRadius: 12, padding: "0.85rem 1.25rem", marginBottom: "1.25rem", color: "#2E7D32", fontSize: "0.88rem" }}>
-          {savedMsg}
+    );
+  }
+ 
+  // ── Existing listing view ──
+  const listing = listings[0];
+  const sm = statusMeta[listing.status ?? "pending"] ?? statusMeta.pending;
+ 
+  if (editing) {
+    return (
+      <SalonForm initial={editing} userId={user.id} onSaved={handleSaved}
+        onCancel={() => setEditing(null)} isEdit />
+    );
+  }
+ 
+  return (
+    <div>
+      {/* Status banner */}
+      <div style={{ background: sm.bg, color: sm.color, borderRadius: 14, padding: "0.85rem 1.25rem", marginBottom: "1.25rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <p style={{ fontWeight: 700, margin: 0, fontSize: "0.9rem" }}>{sm.label}</p>
+          <p style={{ margin: 0, fontSize: "0.8rem", opacity: 0.9 }}>{sm.desc}</p>
         </div>
-      )}
-
-      {/* Existing listings */}
-      {listings.map(listing => (
-        <div key={listing.id}>
-          {editingId === listing.id ? (
-            <SalonForm
-              key={listing.id}
-              initial={listing}
-              userId={user.id}
-              onSaved={handleSaved}
-              onCancel={() => setEditingId(null)}
-              isEdit
-            />
-          ) : (
-            <div style={{ border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 18, background: "#fff", padding: "1.5rem", marginBottom: "1.25rem" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "1rem", marginBottom: "0.75rem" }}>
-                <div>
-                  <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1.15rem", marginBottom: "0.2rem" }}>{listing.salon_name}</h3>
-                  <p style={{ fontSize: "0.85rem", color: "var(--grey)" }}>{listing.suburb}, {listing.city}</p>
-                </div>
-                {listing.status && (
-                  <span style={{ background: statusInfo[listing.status]?.bg, color: statusInfo[listing.status]?.color, borderRadius: 100, padding: "0.3rem 0.9rem", fontSize: "0.78rem", fontWeight: 600, whiteSpace: "nowrap" }}>
-                    {statusInfo[listing.status]?.label}
-                  </span>
-                )}
-              </div>
-              <p style={{ fontSize: "0.82rem", color: "var(--grey)", marginBottom: "1rem", lineHeight: 1.5 }}>
-                {listing.status && statusInfo[listing.status]?.desc}
-              </p>
-              <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                <button onClick={() => setEditingId(listing.id!)} className="btn-outline" style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem" }}>Edit listing</button>
-                {listing.status !== "approved" && (
-                  <button className="btn-plum" style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem" }} onClick={() => alert("PayFast payment coming soon!")}>
-                    Pay R35 &amp; Submit
-                  </button>
-                )}
-              </div>
+        <button onClick={() => setEditing(listing)} style={{ background: "rgba(255,255,255,0.7)", border: "none", borderRadius: 100, padding: "0.4rem 1rem", fontSize: "0.8rem", fontWeight: 600, cursor: "pointer", color: sm.color }}>
+          Edit
+        </button>
+      </div>
+ 
+      {/* Inner tabs */}
+      <div style={{ display: "flex", gap: 0, marginBottom: "1.25rem", borderRadius: 100, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.2)", width: "fit-content" }}>
+        {(["listing","bookings"] as const).map((t, i) => (
+          <button key={t} onClick={() => setInnerTab(t)} style={{
+            padding: "0.5rem 1.25rem", border: "none", cursor: "pointer", fontSize: "0.85rem",
+            background: innerTab === t ? "var(--plum)" : "#fff",
+            color: innerTab === t ? "#fff" : "var(--grey)",
+            fontWeight: innerTab === t ? 600 : 400,
+            borderRight: i === 0 ? "1.5px solid rgba(155,127,184,0.2)" : "none",
+          }}>
+            {t === "listing" ? "Listing" : "Bookings"}
+          </button>
+        ))}
+      </div>
+ 
+      {innerTab === "listing" && (
+        <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.25rem" }}>
+          <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "0.75rem" }}>{listing.name}</h3>
+          <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.5rem" }}>📍 {listing.address}, {listing.suburb}</p>
+          {listing.services?.length > 0 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: "0.75rem" }}>
+              {listing.services.map(s => (
+                <span key={s} style={{ padding: "0.25rem 0.75rem", borderRadius: 100, border: "1px solid rgba(155,127,184,0.3)", fontSize: "0.75rem", color: "var(--plum)", textTransform: "capitalize" }}>{s}</span>
+              ))}
             </div>
           )}
+          {listing.instagram_username && (
+            <p style={{ fontSize: "0.82rem", color: "#C13584", marginBottom: "0.35rem" }}>
+              📸 @{listing.instagram_username} <span style={{ background: "#E1F5EE", color: "#0F6E56", borderRadius: 100, padding: "1px 6px", fontSize: "0.7rem", fontWeight: 600, marginLeft: 4 }}>free feed</span>
+            </p>
+          )}
+          {listing.youtube_url && (
+            <p style={{ fontSize: "0.82rem", color: "var(--grey)", marginBottom: "0.35rem" }}>▶ YouTube video linked</p>
+          )}
+          <p style={{ fontSize: "0.78rem", color: "#bbb", marginTop: "0.75rem" }}>
+            {listing.gallery_urls?.length ?? 0} photos uploaded
+          </p>
+          {listing.status === "approved" && (
+            <a href={`/stores/${listing.id}`} target="_blank" rel="noopener noreferrer"
+              style={{ display: "inline-block", marginTop: "0.75rem", fontSize: "0.85rem", color: "var(--plum)", fontWeight: 500 }}>
+              View live page →
+            </a>
+          )}
         </div>
-      ))}
-
-      {/* Add new form */}
-      {addingNew && (
-        <SalonForm
-          initial={emptySalon()}
-          userId={user.id}
-          onSaved={handleSaved}
-          onCancel={() => setAddingNew(false)}
-          isEdit={false}
-        />
       )}
-
-      {!addingNew && (
-        <button
-          type="button"
-          onClick={() => setAddingNew(true)}
-          className="btn-outline"
-          style={{ display: "flex", alignItems: "center", gap: "0.4rem", padding: "0.65rem 1.5rem", fontSize: "0.88rem" }}
-        >
-          <span style={{ fontSize: "1.1rem", lineHeight: 1 }}>+</span> Add another salon
-        </button>
+ 
+      {innerTab === "bookings" && listing.id && (
+        <SalonBookingsInbox salonId={listing.id} />
       )}
     </div>
   );
