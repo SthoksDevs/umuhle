@@ -365,10 +365,33 @@ function AdsTab() {
 }
 
 // ─── My Salon tab ──────────────────────────────────────────────────────────────
+type DayHours = {
+  closed: boolean;
+  open: string;
+  close: string;
+};
+
+type SpecialDay = {
+  date: string;
+  closed: boolean;
+  open?: string;
+  close?: string;
+};
+
 type OpeningHours = {
-  days: string[];   // ["Monday","Tuesday",...]
-  open: string;     // "08:00"
-  close: string;    // "17:00"
+  weekly: {
+    sunday: DayHours;
+    monday: DayHours;
+    tuesday: DayHours;
+    wednesday: DayHours;
+    thursday: DayHours;
+    friday: DayHours;
+    saturday: DayHours;
+  };
+
+  public_holidays: DayHours;
+
+  special_days: SpecialDay[];
 };
  
 type SalonListing = {
@@ -403,13 +426,55 @@ type StoreBooking = {
  
 type GalleryFile = { file: File; preview: string };
  
-const WEEK_DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+const WEEK_DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const ALL_SERVICES = ["hair","nails","makeup","lashes"];
  
+const defaultDay: DayHours = {
+  closed: false,
+  open: "08:00",
+  close: "17:00",
+};
+
 const emptySalon = (): SalonListing => ({
-  name: "", description: "", address: "", suburb: "", city: "",
-  phone: "", email: "", website: "",
-  opening_hours: { days: [], open: "08:00", close: "17:00" },
+  name: "",
+  description: "",
+  address: "",
+  suburb: "",
+  city: "",
+  phone: "",
+  email: "",
+  website: "",
+
+  opening_hours: {
+    weekly: {
+      sunday: {
+        closed: true,
+        open: "",
+        close: "",
+      },
+
+      monday: { ...defaultDay },
+      tuesday: { ...defaultDay },
+      wednesday: { ...defaultDay },
+      thursday: { ...defaultDay },
+      friday: { ...defaultDay },
+
+      saturday: {
+        closed: false,
+        open: "08:00",
+        close: "13:00",
+      },
+    },
+
+    public_holidays: {
+      closed: true,
+      open: "",
+      close: "",
+    },
+
+    special_days: [],
+  },
+
   gallery_urls: [],
   instagram_username: "",
   youtube_url: "",
@@ -449,7 +514,7 @@ function SalonForm({
     display: "block", marginBottom: "0.3rem", marginTop: "0.85rem",
   };
  
-  const toggleDay = (day: string) => {
+  /*const toggleDay = (day: string) => {
     setForm(f => ({
       ...f,
       opening_hours: {
@@ -459,7 +524,7 @@ function SalonForm({
           : [...f.opening_hours.days, day],
       },
     }));
-  };
+  };*/
  
   const toggleService = (svc: string) => {
     setForm(f => ({
@@ -517,7 +582,14 @@ function SalonForm({
     setError("");
     if (!form.name.trim()) { setError("Salon name is required."); return; }
     if (!form.address.trim()) { setError("Address is required."); return; }
-    if (form.opening_hours.days.length === 0) { setError("Select at least one business day."); return; }
+const openDays = Object.values(
+  form.opening_hours.weekly
+).filter((d) => !d.closed);
+
+if (openDays.length === 0) {
+  setError("Select at least one business day.");
+  return;
+}
     if (form.services.length === 0) { setError("Select at least one service."); return; }
  
     setSaving(true);
@@ -616,38 +688,375 @@ function SalonForm({
       </div>
  
       {/* Business hours */}
-      <label style={labelStyle}>Days open *</label>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-        {WEEK_DAYS.map(day => {
-          const active = form.opening_hours.days.includes(day);
-          return (
-            <button key={day} type="button" onClick={() => toggleDay(day)} style={{
-              padding: "0.35rem 0.85rem", borderRadius: 100, fontSize: "0.8rem", cursor: "pointer",
-              border: "1.5px solid", borderColor: active ? "var(--plum)" : "rgba(155,127,184,0.2)",
-              background: active ? "var(--plum)" : "#fff", color: active ? "#fff" : "var(--grey)",
-              fontWeight: active ? 600 : 400,
-            }}>{day.slice(0,3)}</button>
-          );
-        })}
-      </div>
-      {form.opening_hours.days.length === 0 && (
-        <p style={{ color: "#E53935", fontSize: "0.78rem", marginTop: "0.25rem" }}>Select at least one day.</p>
-      )}
- 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 1rem", marginTop: "0.5rem" }}>
-        <div>
-          <label style={labelStyle}>Opening time</label>
-          <input type="time" value={form.opening_hours.open}
-            onChange={e => setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, open: e.target.value } }))}
-            style={inputStyle} />
-        </div>
-        <div>
-          <label style={labelStyle}>Closing time</label>
-          <input type="time" value={form.opening_hours.close}
-            onChange={e => setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, close: e.target.value } }))}
-            style={inputStyle} />
-        </div>
-      </div>
+<label style={labelStyle}>Business hours *</label>
+
+<div
+  style={{
+    border: "1.5px solid #E0E0E0",
+    borderRadius: 12,
+    overflow: "hidden",
+    marginTop: 4,
+  }}
+>
+  <table
+    style={{
+      width: "100%",
+      borderCollapse: "collapse",
+      fontSize: "0.85rem",
+    }}
+  >
+    <thead>
+      <tr style={{ background: "#fafaf8" }}>
+        <th style={{ padding: "0.75rem", textAlign: "left" }}>Day</th>
+        <th style={{ padding: "0.75rem", textAlign: "center" }}>Closed</th>
+        <th style={{ padding: "0.75rem", textAlign: "left" }}>Open</th>
+        <th style={{ padding: "0.75rem", textAlign: "left" }}>Close</th>
+      </tr>
+    </thead>
+
+    <tbody>
+      {(
+        [
+          "sunday",
+          "monday",
+          "tuesday",
+          "wednesday",
+          "thursday",
+          "friday",
+          "saturday",
+        ] as const
+      ).map((day) => {
+        const hours = form.opening_hours.weekly[day];
+
+        return (
+          <tr
+            key={day}
+            style={{
+              borderTop: "1px solid #f0f0f0",
+            }}
+          >
+            <td style={{ padding: "0.75rem", textTransform: "capitalize" }}>
+              {day}
+            </td>
+
+            <td style={{ padding: "0.75rem", textAlign: "center" }}>
+              <input
+                type="checkbox"
+                checked={hours.closed}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    opening_hours: {
+                      ...f.opening_hours,
+                      weekly: {
+                        ...f.opening_hours.weekly,
+                        [day]: {
+                          ...hours,
+                          closed: e.target.checked,
+                        },
+                      },
+                    },
+                  }))
+                }
+              />
+            </td>
+
+            <td style={{ padding: "0.75rem" }}>
+              <input
+                type="time"
+                disabled={hours.closed}
+                value={hours.open}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    opening_hours: {
+                      ...f.opening_hours,
+                      weekly: {
+                        ...f.opening_hours.weekly,
+                        [day]: {
+                          ...hours,
+                          open: e.target.value,
+                        },
+                      },
+                    },
+                  }))
+                }
+                style={{
+                  ...inputStyle,
+                  opacity: hours.closed ? 0.5 : 1,
+                }}
+              />
+            </td>
+
+            <td style={{ padding: "0.75rem" }}>
+              <input
+                type="time"
+                disabled={hours.closed}
+                value={hours.close}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    opening_hours: {
+                      ...f.opening_hours,
+                      weekly: {
+                        ...f.opening_hours.weekly,
+                        [day]: {
+                          ...hours,
+                          close: e.target.value,
+                        },
+                      },
+                    },
+                  }))
+                }
+                style={{
+                  ...inputStyle,
+                  opacity: hours.closed ? 0.5 : 1,
+                }}
+              />
+            </td>
+          </tr>
+        );
+      })}
+    </tbody>
+  </table>
+</div>
+
+{/* Public holidays */}
+
+<label style={{ ...labelStyle, marginTop: "1rem" }}>
+  Public holidays
+</label>
+
+<div
+  style={{
+    border: "1.5px solid #E0E0E0",
+    borderRadius: 12,
+    padding: "1rem",
+  }}
+>
+  <div
+    style={{
+      display: "grid",
+      gridTemplateColumns: "120px 1fr 1fr",
+      gap: "0.75rem",
+      alignItems: "center",
+    }}
+  >
+    <label>
+      <input
+        type="checkbox"
+        checked={form.opening_hours.public_holidays.closed}
+        onChange={(e) =>
+          setForm((f) => ({
+            ...f,
+            opening_hours: {
+              ...f.opening_hours,
+              public_holidays: {
+                ...f.opening_hours.public_holidays,
+                closed: e.target.checked,
+              },
+            },
+          }))
+        }
+      />
+      {" "}Closed
+    </label>
+
+    <input
+      type="time"
+      disabled={form.opening_hours.public_holidays.closed}
+      value={form.opening_hours.public_holidays.open}
+      onChange={(e) =>
+        setForm((f) => ({
+          ...f,
+          opening_hours: {
+            ...f.opening_hours,
+            public_holidays: {
+              ...f.opening_hours.public_holidays,
+              open: e.target.value,
+            },
+          },
+        }))
+      }
+      style={inputStyle}
+    />
+
+    <input
+      type="time"
+      disabled={form.opening_hours.public_holidays.closed}
+      value={form.opening_hours.public_holidays.close}
+      onChange={(e) =>
+        setForm((f) => ({
+          ...f,
+          opening_hours: {
+            ...f.opening_hours,
+            public_holidays: {
+              ...f.opening_hours.public_holidays,
+              close: e.target.value,
+            },
+          },
+        }))
+      }
+      style={inputStyle}
+    />
+  </div>
+</div>
+
+{/* Special days */}
+
+<label style={{ ...labelStyle, marginTop: "1rem" }}>
+  Special days
+</label>
+
+<div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+  {form.opening_hours.special_days.map((sd, idx) => (
+    <div
+      key={idx}
+      style={{
+        border: "1.5px solid #E0E0E0",
+        borderRadius: 12,
+        padding: "0.75rem",
+        display: "grid",
+        gridTemplateColumns: "1.2fr auto 1fr 1fr auto",
+        gap: "0.5rem",
+        alignItems: "center",
+      }}
+    >
+      <input
+        type="date"
+        value={sd.date}
+        onChange={(e) => {
+          const next = [...form.opening_hours.special_days];
+          next[idx].date = e.target.value;
+
+          setForm((f) => ({
+            ...f,
+            opening_hours: {
+              ...f.opening_hours,
+              special_days: next,
+            },
+          }));
+        }}
+        style={inputStyle}
+      />
+
+      <label>
+        <input
+          type="checkbox"
+          checked={sd.closed}
+          onChange={(e) => {
+            const next = [...form.opening_hours.special_days];
+            next[idx].closed = e.target.checked;
+
+            setForm((f) => ({
+              ...f,
+              opening_hours: {
+                ...f.opening_hours,
+                special_days: next,
+              },
+            }));
+          }}
+        />
+        {" "}Closed
+      </label>
+
+      <input
+        type="time"
+        disabled={sd.closed}
+        value={sd.open ?? ""}
+        onChange={(e) => {
+          const next = [...form.opening_hours.special_days];
+          next[idx].open = e.target.value;
+
+          setForm((f) => ({
+            ...f,
+            opening_hours: {
+              ...f.opening_hours,
+              special_days: next,
+            },
+          }));
+        }}
+        style={inputStyle}
+      />
+
+      <input
+        type="time"
+        disabled={sd.closed}
+        value={sd.close ?? ""}
+        onChange={(e) => {
+          const next = [...form.opening_hours.special_days];
+          next[idx].close = e.target.value;
+
+          setForm((f) => ({
+            ...f,
+            opening_hours: {
+              ...f.opening_hours,
+              special_days: next,
+            },
+          }));
+        }}
+        style={inputStyle}
+      />
+
+      <button
+        type="button"
+        onClick={() =>
+          setForm((f) => ({
+            ...f,
+            opening_hours: {
+              ...f.opening_hours,
+              special_days:
+                f.opening_hours.special_days.filter(
+                  (_, i) => i !== idx
+                ),
+            },
+          }))
+        }
+        style={{
+          border: "none",
+          background: "#FCEBEB",
+          color: "#A32D2D",
+          borderRadius: 8,
+          padding: "0.5rem",
+          cursor: "pointer",
+        }}
+      >
+        Remove
+      </button>
+    </div>
+  ))}
+
+  <button
+    type="button"
+    onClick={() =>
+      setForm((f) => ({
+        ...f,
+        opening_hours: {
+          ...f.opening_hours,
+          special_days: [
+            ...f.opening_hours.special_days,
+            {
+              date: "",
+              closed: true,
+              open: "",
+              close: "",
+            },
+          ],
+        },
+      }))
+    }
+    style={{
+      padding: "0.75rem",
+      borderRadius: 12,
+      border: "1.5px dashed rgba(155,127,184,0.3)",
+      background: "#fafaf8",
+      cursor: "pointer",
+      color: "var(--plum)",
+    }}
+  >
+    + Add special day
+  </button>
+</div>
  
       {/* Instagram — FREE */}
       <label style={labelStyle}>
@@ -853,7 +1262,48 @@ function MySalonTab({ user }: { user: { id: string } }) {
       .select("*")
       .eq("partner_id", user.id)
       .then(({ data }) => {
-        if (data) setListings(data as SalonListing[]);
+        if (data) {
+  const converted = (data as SalonListing[]).map((salon) => {
+    const oh = salon.opening_hours as any;
+
+    if (oh?.weekly) {
+      return salon;
+    }
+
+    const days = oh?.days ?? [];
+
+    const buildDay = (name: string): DayHours => ({
+      closed: !days.includes(name),
+      open: oh?.open ?? "08:00",
+      close: oh?.close ?? "17:00",
+    });
+
+    return {
+      ...salon,
+      opening_hours: {
+        weekly: {
+          sunday: buildDay("Sunday"),
+          monday: buildDay("Monday"),
+          tuesday: buildDay("Tuesday"),
+          wednesday: buildDay("Wednesday"),
+          thursday: buildDay("Thursday"),
+          friday: buildDay("Friday"),
+          saturday: buildDay("Saturday"),
+        },
+
+        public_holidays: {
+          closed: true,
+          open: "",
+          close: "",
+        },
+
+        special_days: [],
+      },
+    };
+  });
+
+  setListings(converted);
+}
         setLoading(false);
       });
   }, [user.id]);
