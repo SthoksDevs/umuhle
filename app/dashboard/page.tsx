@@ -365,38 +365,6 @@ function AdsTab() {
 }
 
 // ─── My Salon tab ──────────────────────────────────────────────────────────────
-const DAYS_OF_WEEK = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-type GalleryFile = {
-  file: File;
-  preview: string;
-};
-
-type SalonListing = {
-  id?: string;
-  salon_name: string;
-  description: string;
-  address: string;
-  suburb: string;
-  city: string;
-  phone: string;
-  email: string;
-  // Business hours
-  business_days: string[];      // e.g. ["Monday","Tuesday",...]
-  hours_open: string;           // "08:00"
-  hours_close: string;          // "17:00"
-  // Gallery
-  gallery_urls: string[];
-  status?: "pending" | "approved" | "rejected";
-};
-
-const emptySalon = (): SalonListing => ({
-  salon_name: "", description: "", address: "", suburb: "", city: "",
-  phone: "", email: "", business_days: [], hours_open: "08:00", hours_close: "17:00",
-  gallery_urls: [],
-});
-
-
 type OpeningHours = {
   days: string[];   // ["Monday","Tuesday",...]
   open: string;     // "08:00"
