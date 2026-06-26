@@ -55,7 +55,7 @@ function PillNav<T extends string>({
   active,
   onChange,
 }: {
-  tabs: { id: T; label: string }[];
+  tabs: { id: T; label: string; icon?: string }[];
   active: T;
   onChange: (id: T) => void;
 }) {
@@ -1990,6 +1990,7 @@ export default function DashboardPage() {
   const [wishlistLoading, setWishlistLoading] = useState(false);
 
   const [showWhatsAppNudge, setShowWhatsAppNudge] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -2039,18 +2040,22 @@ export default function DashboardPage() {
 
   if (!user || !profile) return null;
 
-  const TAB_CONFIG: { id: Tab; label: string }[] = [
-    { id: "bookings",    label: "My Bookings" },
-    { id: "wishlist",    label: "Wishlist" },
-    { id: "ads",         label: "Ads" },
-    { id: "my-salon",    label: "My Salon" },
-    { id: "my-services", label: "My Services" },
-    { id: "invite",      label: "Invite" },
-    { id: "profile",     label: "Profile" },
+  const TAB_CONFIG: { id: Tab; label: string; icon: string }[] = [
+    { id: "bookings",    label: "Bookings",   icon: "📅" },
+    { id: "wishlist",    label: "Wishlist",   icon: "💜" },
+    { id: "my-salon",    label: "My Salon",   icon: "✂️" },
+    { id: "my-services", label: "Services",   icon: "💅" },
+    { id: "invite",      label: "Invite",     icon: "🎁" },
+    { id: "ads",         label: "Ads",        icon: "📣" },
+    { id: "profile",     label: "Profile",    icon: "👤" },
   ];
 
   // Suppress unused-var warning — kept for potential header use
   void handleSignOut;
+
+  // Primary tabs shown in bottom action bar (mobile) — most used
+  const PRIMARY_TABS: Tab[] = ["bookings", "wishlist", "my-salon", "my-services", "profile"];
+  const MORE_TABS = TAB_CONFIG.filter(t => !PRIMARY_TABS.includes(t.id));
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh", background: "#FAFAFA" }}>
@@ -2071,7 +2076,24 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <main style={{ flex: 1, maxWidth: 900, margin: "0 auto", padding: "2rem 1.5rem", width: "100%", boxSizing: "border-box" }}>
+      {/* ── More menu overlay (mobile) ── */}
+      {showMoreMenu && (
+        <div className="modal-overlay" onClick={() => setShowMoreMenu(false)} style={{ alignItems: "flex-end", padding: 0 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: "20px 20px 0 0", padding: "1.25rem 1rem 2rem", width: "100%", maxWidth: 480, boxShadow: "0 -8px 40px rgba(0,0,0,0.12)" }}>
+            <div style={{ width: 40, height: 4, background: "#E0E0E0", borderRadius: 2, margin: "0 auto 1.25rem" }} />
+            <p style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--grey)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "0.75rem", paddingLeft: "0.5rem" }}>More</p>
+            {MORE_TABS.map(t => (
+              <button key={t.id} onClick={() => { setTab(t.id); setShowMoreMenu(false); }}
+                style={{ width: "100%", display: "flex", alignItems: "center", gap: "1rem", padding: "0.85rem 0.75rem", borderRadius: 14, border: "none", background: tab === t.id ? "var(--plum-t)" : "transparent", cursor: "pointer", textAlign: "left", transition: "background 0.15s" }}>
+                <span style={{ fontSize: "1.3rem", width: 28 }}>{t.icon}</span>
+                <span style={{ fontSize: "0.95rem", fontWeight: tab === t.id ? 600 : 400, color: tab === t.id ? "var(--plum)" : "var(--onyx)" }}>{t.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <main style={{ flex: 1, maxWidth: 900, margin: "0 auto", padding: "2rem 1.5rem 6rem", width: "100%", boxSizing: "border-box" }}>
         {/* ── Header ── */}
         <div style={{ marginBottom: "2rem" }}>
           <p style={{ fontFamily: "var(--font-display)", fontSize: "0.75rem", letterSpacing: "0.3em", color: "var(--nude)", textTransform: "uppercase", marginBottom: "0.5rem" }}>Welcome back</p>
@@ -2079,8 +2101,10 @@ export default function DashboardPage() {
           <p style={{ color: "var(--grey)", fontSize: "0.9rem" }}>{user.email}</p>
         </div>
 
-        {/* ── Tabs ── */}
-        <PillNav tabs={TAB_CONFIG} active={tab} onChange={setTab} />
+        {/* ── Desktop Tabs (hidden on mobile) ── */}
+        <div className="dashboard-desktop-tabs">
+          <PillNav tabs={TAB_CONFIG} active={tab} onChange={setTab} />
+        </div>
 
         {/* ── Bookings tab ── */}
         {tab === "bookings" && <BookingsTab user={user} profile={profile} onUpdateProfile={p => { setProfile(p); if (p.phone) setShowWhatsAppNudge(false); }} />}
@@ -2123,6 +2147,33 @@ export default function DashboardPage() {
         {/* ── Invite tab ── */}
         {tab === "invite" && <section><InviteTab profile={profile} /></section>}
       </main>
+
+      {/* ── Mobile Bottom Action Bar ── */}
+      <nav className="dashboard-bottom-bar">
+        {PRIMARY_TABS.map(id => {
+          const t = TAB_CONFIG.find(x => x.id === id)!;
+          const isActive = tab === t.id;
+          return (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{
+              flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+              gap: "0.2rem", padding: "0.6rem 0.25rem", border: "none", background: "transparent",
+              cursor: "pointer", borderRadius: 12, transition: "background 0.15s",
+            }}>
+              <span style={{ fontSize: "1.35rem", lineHeight: 1 }}>{t.icon}</span>
+              <span style={{ fontSize: "0.68rem", fontWeight: isActive ? 600 : 400, color: isActive ? "var(--plum)" : "var(--grey)", letterSpacing: "0.01em" }}>{t.label}</span>
+              {isActive && <div style={{ width: 4, height: 4, borderRadius: "50%", background: "var(--plum)", marginTop: "0.1rem" }} />}
+            </button>
+          );
+        })}
+        {/* More button */}
+        <button onClick={() => setShowMoreMenu(true)} style={{
+          flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+          gap: "0.2rem", padding: "0.6rem 0.25rem", border: "none", background: "transparent", cursor: "pointer", borderRadius: 12,
+        }}>
+          <span style={{ fontSize: "1.35rem", lineHeight: 1 }}>⋯</span>
+          <span style={{ fontSize: "0.68rem", fontWeight: 400, color: "var(--grey)" }}>More</span>
+        </button>
+      </nav>
 
       <Footer />
     </div>

@@ -108,6 +108,125 @@ function CategoryPillNav({ active, onChange }: { active: Category; onChange: (c:
   );
 }
 
+// ─── Merged search + filter bar ───────────────────────────────────────────────
+function SearchWithFilter<T extends string>({
+  searchValue,
+  onSearchChange,
+  activeCategories,
+  onCategoryChange,
+  categories,
+  placeholder = "Search…",
+}: {
+  searchValue: string;
+  onSearchChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  activeCategories: T[];
+  onCategoryChange: (cats: T[]) => void;
+  categories: readonly T[];
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const dropRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (dropRef.current && !dropRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const toggleCat = (cat: T) => {
+    const next = activeCategories.includes(cat)
+      ? activeCategories.filter(c => c !== cat)
+      : [...activeCategories, cat];
+    onCategoryChange(next);
+  };
+
+  const activeCount = activeCategories.length;
+
+  return (
+    <div ref={dropRef} style={{ maxWidth: 600, margin: "0 auto", position: "relative" }}>
+      <div style={{
+        display: "flex", alignItems: "center", background: "#fff",
+        borderRadius: 100, border: "2px solid rgba(255,255,255,0.4)",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.18)", overflow: "hidden",
+        backdropFilter: "blur(8px)",
+      }}>
+        {/* Search icon */}
+        <span style={{ paddingLeft: "1.1rem", color: "var(--grey)", fontSize: "1rem", flexShrink: 0 }}>🔍</span>
+
+        {/* Text input */}
+        <input
+          type="text"
+          placeholder={placeholder}
+          value={searchValue}
+          onChange={onSearchChange}
+          style={{
+            flex: 1, border: "none", outline: "none", padding: "0.85rem 0.75rem",
+            fontSize: "0.95rem", color: "var(--onyx)", background: "transparent",
+            minWidth: 0,
+          }}
+        />
+
+        {/* Divider */}
+        <div style={{ width: 1, height: 24, background: "rgba(155,127,184,0.2)", flexShrink: 0 }} />
+
+        {/* Filter button */}
+        <button
+          onClick={() => setOpen(o => !o)}
+          style={{
+            display: "flex", alignItems: "center", gap: "0.4rem",
+            padding: "0.7rem 1.1rem", border: "none", background: "transparent",
+            cursor: "pointer", color: activeCount > 0 ? "var(--plum)" : "var(--grey)",
+            fontSize: "0.875rem", fontWeight: 500, flexShrink: 0, whiteSpace: "nowrap",
+          }}
+        >
+          <svg width="15" height="13" viewBox="0 0 15 13" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M0 1h15M3 6.5h9M6 12h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+          </svg>
+          Filter{activeCount > 0 ? ` (${activeCount})` : ""}
+        </button>
+      </div>
+
+      {/* Dropdown */}
+      {open && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 8px)", left: "50%", transform: "translateX(-50%)",
+          background: "#fff", borderRadius: 16, border: "1.5px solid rgba(155,127,184,0.2)",
+          boxShadow: "0 16px 48px rgba(0,0,0,0.14)", padding: "1rem", minWidth: 220,
+          zIndex: 100,
+        }}>
+          <p style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--grey)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.75rem" }}>Filter by category</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.1rem" }}>
+            {categories.map(cat => {
+              const checked = activeCategories.includes(cat);
+              return (
+                <label key={cat} style={{ display: "flex", alignItems: "center", gap: "0.65rem", padding: "0.5rem 0.4rem", borderRadius: 10, cursor: "pointer", background: checked ? "var(--plum-t)" : "transparent", transition: "background 0.15s" }}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleCat(cat)}
+                    style={{ accentColor: "var(--plum)", width: 16, height: 16, cursor: "pointer" }}
+                  />
+                  <span style={{ fontSize: "0.9rem", color: checked ? "var(--plum)" : "var(--onyx)", fontWeight: checked ? 500 : 400 }}>{cat}</span>
+                </label>
+              );
+            })}
+          </div>
+          {activeCount > 0 && (
+            <button
+              onClick={() => { onCategoryChange([]); }}
+              style={{ marginTop: "0.75rem", width: "100%", padding: "0.45rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "transparent", color: "var(--grey)", fontSize: "0.82rem", cursor: "pointer" }}
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 export default function Home() {
   const supabase = createClient();
@@ -320,37 +439,34 @@ export default function Home() {
         <main style={{ minHeight: "80vh", background: "var(--white)" }}>
 
           {/* Hero */}
-          <section style={{ background: "linear-gradient(135deg, var(--plum-t) 0%, #fff 60%)", padding: "5rem 1.5rem 3rem", textAlign: "center" }}>
-            <p style={{ fontFamily: "var(--font-display)", fontSize: "0.8rem", letterSpacing: "0.35em", color: "var(--nude)", textTransform: "uppercase", marginBottom: "1rem" }}>beauty, near you</p>
-            <h1 style={{ fontFamily: "var(--font-display)", fontSize: "clamp(2.5rem,6vw,4.5rem)", fontWeight: 300, color: "var(--onyx)", lineHeight: 1.1, marginBottom: "1.25rem" }}>
-              You are <em style={{ color: "var(--plum)", fontStyle: "italic" }}>beautiful</em>
-            </h1>
-            <p style={{ fontSize: "1.1rem", color: "var(--grey)", maxWidth: 480, margin: "0 auto" }}>
-              Book trusted hair stylists, nail techs &amp; makeup artists — right in your neighbourhood.
-            </p>
-          </section>
+          <section style={{ background: "linear-gradient(135deg, #6B4F8A 0%, #9B7FB8 40%, #C28070 80%, #D4956B 100%)", padding: "5rem 1.5rem 3.5rem", textAlign: "center", position: "relative", overflow: "hidden" }}>
+            <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.18)", pointerEvents: "none" }} />
+            <div style={{ position: "relative", zIndex: 1 }}>
+              <p style={{ fontFamily: "var(--font-display)", fontSize: "0.8rem", letterSpacing: "0.35em", color: "rgba(255,255,255,0.8)", textTransform: "uppercase", marginBottom: "1rem" }}>beauty, near you</p>
+              <h1 style={{ fontFamily: "var(--font-display)", fontSize: "clamp(2.5rem,6vw,4.5rem)", fontWeight: 300, color: "#fff", lineHeight: 1.1, marginBottom: "1.25rem" }}>
+                You are <em style={{ color: "rgba(255,255,255,0.9)", fontStyle: "italic", fontWeight: 400 }}>beautiful</em>
+              </h1>
+              <p style={{ fontSize: "1.05rem", color: "rgba(255,255,255,0.85)", maxWidth: 480, margin: "0 auto 2rem" }}>
+                Book trusted hair stylists, nail techs &amp; makeup artists — right in your neighbourhood.
+              </p>
 
-          {/* Category filter — horizontal scroll strip with arrow indicator */}
-          <section style={{ padding: "2rem 0 0", maxWidth: 900, margin: "0 auto" }}>
-            <CategoryPillNav active={activeCategory} onChange={setActiveCategory} />
-          </section>
-
-          {/* Search */}
-          <section style={{ padding: "1.25rem 1.5rem 0", maxWidth: 900, margin: "0 auto" }}>
-            <input
-              type="text"
-              placeholder="Search by name or area…"
-              value={searchQuery}
-              onChange={e => {
-                setSearchQuery(e.target.value);
-                if (e.target.value.length > 2) {
-                  ttq("Search", { search_string: e.target.value });
-                  fbq("Search", { search_string: e.target.value });
-                  gTag("search", { search_term: e.target.value });
-                }
-              }}
-              style={{ width: "100%", padding: "0.75rem 1.25rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", fontSize: "0.95rem", color: "var(--onyx)", background: "var(--plum-t)", boxSizing: "border-box" }}
-            />
+              {/* Merged search + filter bar */}
+              <SearchWithFilter
+                searchValue={searchQuery}
+                onSearchChange={e => {
+                  setSearchQuery(e.target.value);
+                  if (e.target.value.length > 2) {
+                    ttq("Search", { search_string: e.target.value });
+                    fbq("Search", { search_string: e.target.value });
+                    gTag("search", { search_term: e.target.value });
+                  }
+                }}
+                activeCategories={activeCategory === "All" ? [] : [activeCategory]}
+                onCategoryChange={(cats: Category[]) => setActiveCategory(cats.length === 0 ? "All" : cats[cats.length - 1])}
+                categories={CATEGORIES.filter(c => c !== "All")}
+                placeholder="Search by name or area…"
+              />
+            </div>
           </section>
 
           {/* Artist grid */}

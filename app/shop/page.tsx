@@ -22,70 +22,100 @@ const MOCK_PRODUCTS = [
   { id: "p8", name: "Mink Lash Collection",     price: 19900, category: "Lashes",    description: "Reusable mink lashes in 6 gorgeous styles." },
 ];
 
-const CATEGORIES = ["All", "Hair care", "Nails", "Makeup", "Lashes"] as const;
-type Cat = typeof CATEGORIES[number];
+const SHOP_CATS = ["Hair care", "Nails", "Makeup", "Lashes"] as const;
+type ShopCat = typeof SHOP_CATS[number];
 
-function PillNav({ active, onChange }: { active: Cat; onChange: (c: Cat) => void }) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [canScrollRight, setCanScrollRight] = useState(false);
-
-  const checkScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
-  };
+// ── Merged search + filter bar ─────────────────────────────────────────────────
+function SearchWithFilter({
+  searchValue,
+  onSearchChange,
+  activeFilters,
+  onFiltersChange,
+  placeholder = "Search…",
+}: {
+  searchValue: string;
+  onSearchChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  activeFilters: ShopCat[];
+  onFiltersChange: (filters: ShopCat[]) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const dropRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    checkScroll();
-    const el = scrollRef.current;
-    if (!el) return;
-    el.addEventListener("scroll", checkScroll);
-    window.addEventListener("resize", checkScroll);
-    return () => { el.removeEventListener("scroll", checkScroll); window.removeEventListener("resize", checkScroll); };
+    const handler = (e: MouseEvent) => {
+      if (dropRef.current && !dropRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  const toggle = (cat: ShopCat) => {
+    const next = activeFilters.includes(cat)
+      ? activeFilters.filter(c => c !== cat)
+      : [...activeFilters, cat];
+    onFiltersChange(next);
+  };
+
+  const activeCount = activeFilters.length;
+
   return (
-    <div style={{ position: "relative", marginBottom: "2.5rem" }}>
-      <div ref={scrollRef} style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", scrollbarWidth: "none", msOverflowStyle: "none" }}>
-        <div style={{ display: "flex", gap: "0", width: "max-content", minWidth: "90vw" }}>
-          {CATEGORIES.map((cat, i) => {
-            const isActive = active === cat;
-            const isFirst = i === 0;
-            const isLast = i === CATEGORIES.length - 1;
-            return (
-              <button
-                key={cat}
-                onClick={() => onChange(cat)}
-                style={{
-                  flex: "0 0 auto",
-                  padding: "0.55rem 1.25rem",
-                  background: isActive ? "var(--plum)" : "#fff",
-                  color: isActive ? "#fff" : "var(--grey)",
-                  border: "1.5px solid",
-                  borderColor: isActive ? "var(--plum)" : "rgba(155,127,184,0.25)",
-                  borderRadius: isFirst ? "100px 0 0 100px" : isLast ? "0 100px 100px 0" : "0",
-                  borderLeft: !isFirst ? "none" : undefined,
-                  fontWeight: isActive ? 600 : 400,
-                  fontSize: "0.85rem",
-                  transition: "all 0.18s",
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {cat}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      {canScrollRight && (
+    <div ref={dropRef} style={{ maxWidth: 600, margin: "0 auto", position: "relative" }}>
+      <div style={{
+        display: "flex", alignItems: "center", background: "#fff",
+        borderRadius: 100, border: "2px solid rgba(255,255,255,0.4)",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.18)", overflow: "hidden",
+      }}>
+        <span style={{ paddingLeft: "1.1rem", color: "var(--grey)", fontSize: "1rem", flexShrink: 0 }}>🔍</span>
+        <input
+          type="text"
+          placeholder={placeholder}
+          value={searchValue}
+          onChange={onSearchChange}
+          style={{
+            flex: 1, border: "none", outline: "none", padding: "0.85rem 0.75rem",
+            fontSize: "0.95rem", color: "var(--onyx)", background: "transparent", minWidth: 0,
+          }}
+        />
+        <div style={{ width: 1, height: 24, background: "rgba(155,127,184,0.2)", flexShrink: 0 }} />
         <button
-          onClick={() => scrollRef.current?.scrollBy({ left: 160, behavior: "smooth" })}
-          aria-label="Scroll categories"
-          style={{ position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)", background: "linear-gradient(to left, #fff 60%, transparent)", border: "none", cursor: "pointer", padding: "0.35rem 0.5rem 0.35rem 1.5rem", color: "var(--plum)", fontSize: "1rem", lineHeight: 1, display: "flex", alignItems: "center" }}
+          onClick={() => setOpen(o => !o)}
+          style={{
+            display: "flex", alignItems: "center", gap: "0.4rem",
+            padding: "0.7rem 1.1rem", border: "none", background: "transparent",
+            cursor: "pointer", color: activeCount > 0 ? "var(--plum)" : "var(--grey)",
+            fontSize: "0.875rem", fontWeight: 500, flexShrink: 0, whiteSpace: "nowrap",
+          }}
         >
-          ›
+          <svg width="15" height="13" viewBox="0 0 15 13" fill="none"><path d="M0 1h15M3 6.5h9M6 12h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+          Filter{activeCount > 0 ? ` (${activeCount})` : ""}
         </button>
+      </div>
+
+      {open && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 8px)", right: 0,
+          background: "#fff", borderRadius: 16, border: "1.5px solid rgba(155,127,184,0.2)",
+          boxShadow: "0 16px 48px rgba(0,0,0,0.14)", padding: "1rem", minWidth: 220, zIndex: 100,
+        }}>
+          <p style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--grey)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.75rem" }}>Filter by category</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.1rem" }}>
+            {SHOP_CATS.map(cat => {
+              const checked = activeFilters.includes(cat);
+              return (
+                <label key={cat} style={{ display: "flex", alignItems: "center", gap: "0.65rem", padding: "0.5rem 0.4rem", borderRadius: 10, cursor: "pointer", background: checked ? "var(--plum-t)" : "transparent", transition: "background 0.15s" }}>
+                  <input type="checkbox" checked={checked} onChange={() => toggle(cat)} style={{ accentColor: "var(--plum)", width: 16, height: 16, cursor: "pointer" }} />
+                  <span style={{ fontSize: "0.9rem", color: checked ? "var(--plum)" : "var(--onyx)", fontWeight: checked ? 500 : 400 }}>{cat}</span>
+                </label>
+              );
+            })}
+          </div>
+          {activeCount > 0 && (
+            <button onClick={() => onFiltersChange([])} style={{ marginTop: "0.75rem", width: "100%", padding: "0.45rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "transparent", color: "var(--grey)", fontSize: "0.82rem", cursor: "pointer" }}>
+              Clear filters
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -94,7 +124,8 @@ function PillNav({ active, onChange }: { active: Cat; onChange: (c: Cat) => void
 export default function ShopPage() {
   const supabase = createClient();
   const [user, setUser]         = useState<User | null>(null);
-  const [activeCategory, setActiveCat] = useState<Cat>("All");
+  const [activeFilters, setActiveFilters] = useState<ShopCat[]>([]);
+  const [search, setSearch]     = useState("");
   const [showAuth, setShowAuth] = useState(false);
   const [added, setAdded]       = useState<string | null>(null);
 
@@ -105,7 +136,11 @@ export default function ShopPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const filtered = activeCategory === "All" ? MOCK_PRODUCTS : MOCK_PRODUCTS.filter(p => p.category === activeCategory);
+  const filtered = MOCK_PRODUCTS.filter(p => {
+    const matchCat = activeFilters.length === 0 || activeFilters.includes(p.category as ShopCat);
+    const matchQ = !search || p.name.toLowerCase().includes(search.toLowerCase()) || p.category.toLowerCase().includes(search.toLowerCase());
+    return matchCat && matchQ;
+  });
 
   const handleAdd = (id: string) => {
     if (!user) { setShowAuth(true); return; }
@@ -117,12 +152,24 @@ export default function ShopPage() {
     <div style={{ minHeight: "100vh", background: "var(--white)", fontFamily: "var(--font-body)", display: "flex", flexDirection: "column" }}>
       <SiteHeader initialUser={user} />
 
-      <main style={{ maxWidth: 960, margin: "0 auto", padding: "3rem 1.5rem 4rem", flex: 1, width: "100%", boxSizing: "border-box" }}>
-        <p style={{ fontFamily: "var(--font-display)", fontSize: "0.8rem", letterSpacing: "0.35em", color: "var(--nude)", textTransform: "uppercase", marginBottom: "0.5rem" }}>curated for you</p>
-        <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "2.5rem", color: "var(--onyx)", marginBottom: "0.5rem" }}>Beauty Shop</h1>
-        <p style={{ color: "var(--grey)", marginBottom: "2.5rem" }}>Professional beauty products, sourced by our artists.</p>
+      {/* Gradient hero with merged search+filter */}
+      <div style={{ background: "linear-gradient(135deg, #6B4F8A 0%, #9B7FB8 40%, #C28070 80%, #D4956B 100%)", padding: "4rem 1.5rem 3rem", position: "relative", overflow: "hidden" }}>
+        <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.18)", pointerEvents: "none" }} />
+        <div style={{ maxWidth: 680, margin: "0 auto", position: "relative", zIndex: 1, textAlign: "center" }}>
+          <p style={{ fontFamily: "var(--font-display)", fontSize: "0.8rem", letterSpacing: "0.35em", color: "rgba(255,255,255,0.8)", textTransform: "uppercase", marginBottom: "0.5rem" }}>curated for you</p>
+          <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "clamp(2rem,5vw,3rem)", color: "#fff", marginBottom: "0.5rem" }}>Beauty Shop</h1>
+          <p style={{ color: "rgba(255,255,255,0.85)", marginBottom: "1.75rem", fontSize: "1rem" }}>Professional beauty products, sourced by our artists.</p>
+          <SearchWithFilter
+            searchValue={search}
+            onSearchChange={e => setSearch(e.target.value)}
+            activeFilters={activeFilters}
+            onFiltersChange={setActiveFilters}
+            placeholder="Search products…"
+          />
+        </div>
+      </div>
 
-        <PillNav active={activeCategory} onChange={setActiveCat} />
+      <main style={{ maxWidth: 960, margin: "0 auto", padding: "2.5rem 1.5rem 4rem", flex: 1, width: "100%", boxSizing: "border-box" }}>
 
         {/* Out-of-stock notice */}
         <div style={{ background: "var(--plum-t)", border: "1.5px solid rgba(155,127,184,0.3)", borderRadius: 14, padding: "1rem 1.5rem", marginBottom: "2.5rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>

@@ -98,33 +98,101 @@ function StoreCard({ salon }: { salon: Salon }) {
 }
 
 // ── Filters ───────────────────────────────────────────────────────────────────
-const FILTERS = ["All","Hair","Nails","Makeup","Lashes","Open now"] as const;
-type Filter = typeof FILTERS[number];
+const FILTER_CATS = ["Hair","Nails","Makeup","Lashes","Open now"] as const;
+type FilterCat = typeof FILTER_CATS[number];
 
-function FilterNav({ active, onChange }: { active: Filter; onChange: (f: Filter) => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [canScroll, setCanScroll] = useState(false);
+// ── Merged search + filter bar ─────────────────────────────────────────────────
+function SearchWithFilter({
+  searchValue,
+  onSearchChange,
+  activeFilters,
+  onFiltersChange,
+  placeholder = "Search…",
+}: {
+  searchValue: string;
+  onSearchChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  activeFilters: FilterCat[];
+  onFiltersChange: (filters: FilterCat[]) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const dropRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    const el = ref.current; if (!el) return;
-    const check = () => setCanScroll(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
-    check(); el.addEventListener("scroll", check); window.addEventListener("resize", check);
-    return () => { el.removeEventListener("scroll", check); window.removeEventListener("resize", check); };
+    const handler = (e: MouseEvent) => {
+      if (dropRef.current && !dropRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
   }, []);
+
+  const toggle = (cat: FilterCat) => {
+    const next = activeFilters.includes(cat)
+      ? activeFilters.filter(c => c !== cat)
+      : [...activeFilters, cat];
+    onFiltersChange(next);
+  };
+
+  const activeCount = activeFilters.length;
+
   return (
-    <div style={{ position: "relative", padding: "0 1.5rem" }}>
-      <div ref={ref} style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", scrollbarWidth: "none" }}>
-        <div style={{ display: "flex", gap: 0, width: "max-content", minWidth: "90vw" }}>
-          {FILTERS.map((f, i) => {
-            const on = active === f; const first = i === 0; const last = i === FILTERS.length - 1;
-            return (
-              <button key={f} onClick={() => onChange(f)} style={{ flex: "0 0 auto", padding: "0.55rem 1.1rem", background: on ? "var(--plum)" : "#fff", color: on ? "#fff" : "var(--grey)", border: "1.5px solid", borderColor: on ? "var(--plum)" : "rgba(155,127,184,0.25)", borderRadius: first ? "100px 0 0 100px" : last ? "0 100px 100px 0" : "0", borderLeft: !first ? "none" : undefined, fontWeight: on ? 600 : 400, fontSize: "0.85rem", cursor: "pointer", whiteSpace: "nowrap" }}>
-                {f}
-              </button>
-            );
-          })}
-        </div>
+    <div ref={dropRef} style={{ maxWidth: 600, margin: "0 auto", position: "relative" }}>
+      <div style={{
+        display: "flex", alignItems: "center", background: "#fff",
+        borderRadius: 100, border: "2px solid rgba(255,255,255,0.4)",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.18)", overflow: "hidden",
+      }}>
+        <span style={{ paddingLeft: "1.1rem", color: "var(--grey)", fontSize: "1rem", flexShrink: 0 }}>🔍</span>
+        <input
+          type="text"
+          placeholder={placeholder}
+          value={searchValue}
+          onChange={onSearchChange}
+          style={{
+            flex: 1, border: "none", outline: "none", padding: "0.85rem 0.75rem",
+            fontSize: "0.95rem", color: "var(--onyx)", background: "transparent", minWidth: 0,
+          }}
+        />
+        <div style={{ width: 1, height: 24, background: "rgba(155,127,184,0.2)", flexShrink: 0 }} />
+        <button
+          onClick={() => setOpen(o => !o)}
+          style={{
+            display: "flex", alignItems: "center", gap: "0.4rem",
+            padding: "0.7rem 1.1rem", border: "none", background: "transparent",
+            cursor: "pointer", color: activeCount > 0 ? "var(--plum)" : "var(--grey)",
+            fontSize: "0.875rem", fontWeight: 500, flexShrink: 0, whiteSpace: "nowrap",
+          }}
+        >
+          <svg width="15" height="13" viewBox="0 0 15 13" fill="none"><path d="M0 1h15M3 6.5h9M6 12h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+          Filter{activeCount > 0 ? ` (${activeCount})` : ""}
+        </button>
       </div>
-      {canScroll && <button onClick={() => ref.current?.scrollBy({ left: 160, behavior: "smooth" })} aria-label="Scroll" style={{ position: "absolute", right: "1.5rem", top: "50%", transform: "translateY(-50%)", background: "linear-gradient(to left,#fff 60%,transparent)", border: "none", cursor: "pointer", padding: "0.35rem 0.5rem 0.35rem 1.5rem", color: "var(--plum)", fontSize: "1.1rem" }}>›</button>}
+
+      {open && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 8px)", right: 0,
+          background: "#fff", borderRadius: 16, border: "1.5px solid rgba(155,127,184,0.2)",
+          boxShadow: "0 16px 48px rgba(0,0,0,0.14)", padding: "1rem", minWidth: 220, zIndex: 100,
+        }}>
+          <p style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--grey)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.75rem" }}>Filter by category</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.1rem" }}>
+            {FILTER_CATS.map(cat => {
+              const checked = activeFilters.includes(cat);
+              return (
+                <label key={cat} style={{ display: "flex", alignItems: "center", gap: "0.65rem", padding: "0.5rem 0.4rem", borderRadius: 10, cursor: "pointer", background: checked ? "var(--plum-t)" : "transparent", transition: "background 0.15s" }}>
+                  <input type="checkbox" checked={checked} onChange={() => toggle(cat)} style={{ accentColor: "var(--plum)", width: 16, height: 16, cursor: "pointer" }} />
+                  <span style={{ fontSize: "0.9rem", color: checked ? "var(--plum)" : "var(--onyx)", fontWeight: checked ? 500 : 400 }}>{cat}</span>
+                </label>
+              );
+            })}
+          </div>
+          {activeCount > 0 && (
+            <button onClick={() => onFiltersChange([])} style={{ marginTop: "0.75rem", width: "100%", padding: "0.45rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "transparent", color: "var(--grey)", fontSize: "0.82rem", cursor: "pointer" }}>
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -137,7 +205,7 @@ export default function StoresPage() {
   const [salons, setSalons] = useState<Salon[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<Filter>("All");
+  const [activeFilters, setActiveFilters] = useState<FilterCat[]>([]);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -154,26 +222,29 @@ export default function StoresPage() {
   const filtered = salons.filter(s => {
     const q = search.toLowerCase();
     const matchQ = !q || s.name.toLowerCase().includes(q) || (s.suburb ?? "").toLowerCase().includes(q) || (s.city ?? "").toLowerCase().includes(q);
-    const matchSvc = filter === "All" || filter === "Open now" || (s.services ?? []).includes(filter.toLowerCase());
-    const matchOpen = filter !== "Open now" || isOpenNow(s).open;
+    const catFilters = activeFilters.filter(f => f !== "Open now");
+    const matchSvc = catFilters.length === 0 || catFilters.some(f => (s.services ?? []).includes(f.toLowerCase()));
+    const matchOpen = !activeFilters.includes("Open now") || isOpenNow(s).open;
     return matchQ && matchSvc && matchOpen;
   });
 
   return (
     <div style={{ minHeight: "100vh", background: "#FAFAF8" }}>
       <SiteHeader initialUser={user} initialProfile={profile} />
-      <div style={{ background: "linear-gradient(135deg,rgba(155,127,184,0.12) 0%,rgba(194,128,112,0.08) 100%)", padding: "3rem 1.5rem 2rem" }}>
-        <div style={{ maxWidth: 680, margin: "0 auto" }}>
-          <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "clamp(1.75rem,5vw,2.5rem)", marginBottom: "0.4rem", color: "#1a1a1a" }}>Beauty salons near you</h1>
-          <p style={{ color: "var(--grey)", fontSize: "1rem", marginBottom: "1.5rem" }}>Book hair, nails, makeup or lashes at a verified Umuhle partner salon.</p>
-          <div style={{ position: "relative" }}>
-            <span style={{ position: "absolute", left: "1rem", top: "50%", transform: "translateY(-50%)", fontSize: "1.1rem", color: "var(--grey)", pointerEvents: "none" }}>🔍</span>
-            <input type="search" placeholder="Search by salon name or suburb…" value={search} onChange={e => setSearch(e.target.value)} style={{ width: "100%", padding: "0.85rem 1rem 0.85rem 2.75rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.25)", background: "#fff", fontSize: "0.95rem", outline: "none" }} />
-          </div>
+      {/* Gradient hero with merged search+filter */}
+      <div style={{ background: "linear-gradient(135deg, #6B4F8A 0%, #9B7FB8 40%, #C28070 80%, #D4956B 100%)", padding: "4rem 1.5rem 3rem", position: "relative", overflow: "hidden" }}>
+        <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.18)", pointerEvents: "none" }} />
+        <div style={{ maxWidth: 680, margin: "0 auto", position: "relative", zIndex: 1, textAlign: "center" }}>
+          <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "clamp(1.75rem,5vw,2.5rem)", marginBottom: "0.4rem", color: "#fff" }}>Beauty salons near you</h1>
+          <p style={{ color: "rgba(255,255,255,0.85)", fontSize: "1rem", marginBottom: "1.75rem" }}>Book hair, nails, makeup or lashes at a verified Umuhle partner salon.</p>
+          <SearchWithFilter
+            searchValue={search}
+            onSearchChange={e => setSearch(e.target.value)}
+            activeFilters={activeFilters}
+            onFiltersChange={setActiveFilters}
+            placeholder="Search by salon name or suburb…"
+          />
         </div>
-      </div>
-      <div style={{ padding: "1rem 0", background: "#fff", borderBottom: "1px solid rgba(155,127,184,0.1)" }}>
-        <FilterNav active={filter} onChange={setFilter} />
       </div>
       <main style={{ maxWidth: 1200, margin: "0 auto", padding: "2rem 1.5rem" }}>
         {loading ? (

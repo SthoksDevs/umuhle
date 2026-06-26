@@ -243,25 +243,37 @@ export default function StoreDetailPage() {
     <div style={{ minHeight:"100vh",background:"#FAFAF8" }}>
       <SiteHeader initialUser={user} initialProfile={profile} />
 
-      {/* Hero */}
-      <div style={{ height:260,position:"relative",background:"rgba(155,127,184,0.1)",overflow:"hidden" }}>
-        {salon.gallery_urls?.[0]
-          ? <Image src={salon.gallery_urls[0]} alt={salon.name} fill style={{ objectFit:"cover" }} />
-          : <div style={{ height:"100%",display:"flex",alignItems:"center",justifyContent:"center" }}><Image src="/umuhle-icon.png" alt="Umuhle" width={80} height={80} style={{ opacity:0.3 }} /></div>
-        }
-        <div style={{ position:"absolute",inset:0,background:"linear-gradient(to top,rgba(0,0,0,0.55) 0%,transparent 60%)" }} />
-        <div style={{ position:"absolute",bottom:"1.25rem",left:"1.5rem" }}>
-          <h1 style={{ color:"#fff",fontFamily:"var(--font-display)",fontWeight:500,fontSize:"clamp(1.5rem,4vw,2rem)",margin:0 }}>{salon.name}</h1>
-          <p style={{ color:"rgba(255,255,255,0.85)",fontSize:"0.9rem",margin:"0.25rem 0 0" }}>📍 {salon.address}{salon.suburb ? `, ${salon.suburb}` : ""}</p>
-        </div>
-        <div style={{ position:"absolute",top:"1rem",right:"1rem",background:open?"rgba(43,107,69,0.92)":"rgba(40,40,40,0.75)",color:"#fff",borderRadius:100,padding:"0.3rem 0.9rem",fontSize:"0.82rem",fontWeight:600,backdropFilter:"blur(4px)" }}>
+      {/* Hero — gradient plum with optional gallery photo overlay */}
+      <div style={{ position:"relative", overflow:"hidden", minHeight:280 }}>
+        {/* Gradient base */}
+        <div style={{ position:"absolute", inset:0, background:"linear-gradient(135deg, #6B4F8A 0%, #9B7FB8 40%, #C28070 80%, #D4956B 100%)" }} />
+        {/* Gallery photo overlay when available */}
+        {salon.gallery_urls?.[0] && (
+          <Image src={salon.gallery_urls[0]} alt={salon.name} fill style={{ objectFit:"cover", opacity:0.28, mixBlendMode:"overlay" }} />
+        )}
+        {/* Dark vignette */}
+        <div style={{ position:"absolute", inset:0, background:"linear-gradient(to top, rgba(0,0,0,0.52) 0%, rgba(0,0,0,0.08) 60%)" }} />
+
+        {/* Open/closed badge */}
+        <div style={{ position:"absolute", top:"1rem", right:"1rem", background:open?"rgba(43,107,69,0.92)":"rgba(30,30,30,0.72)", color:"#fff", borderRadius:100, padding:"0.3rem 0.9rem", fontSize:"0.82rem", fontWeight:600, backdropFilter:"blur(4px)", zIndex:2 }}>
           {open ? "Open now" : "Closed"}
         </div>
-      </div>
 
-      {/* Breadcrumb */}
-      <div style={{ padding:"0.75rem 1.5rem",background:"#fff",borderBottom:"1px solid rgba(155,127,184,0.1)",fontSize:"0.82rem",color:"var(--grey)" }}>
-        <Link href="/stores" style={{ color:"var(--plum)",textDecoration:"none" }}>Salons</Link> / {salon.name}
+        {/* Centred text content */}
+        <div style={{ position:"relative", zIndex:1, textAlign:"center", padding:"3.5rem 1.5rem 2.5rem", display:"flex", flexDirection:"column", alignItems:"center", gap:"0.4rem" }}>
+          <Link href="/stores" style={{ color:"rgba(255,255,255,0.7)", fontSize:"0.8rem", textDecoration:"none", marginBottom:"0.25rem", letterSpacing:"0.04em" }}>
+            ← All salons
+          </Link>
+          <h1 style={{ color:"#fff", fontFamily:"var(--font-display)", fontWeight:500, fontSize:"clamp(1.75rem,5vw,2.5rem)", margin:0, textShadow:"0 2px 12px rgba(0,0,0,0.25)" }}>{salon.name}</h1>
+          <p style={{ color:"rgba(255,255,255,0.85)", fontSize:"0.95rem", margin:0 }}>📍 {salon.address}{salon.suburb ? `, ${salon.suburb}` : ""}{salon.city ? `, ${salon.city}` : ""}</p>
+          {salon.services?.length ? (
+            <div style={{ display:"flex", flexWrap:"wrap", gap:6, justifyContent:"center", marginTop:"0.5rem" }}>
+              {salon.services.map(s => (
+                <span key={s} style={{ padding:"0.2rem 0.75rem", borderRadius:100, background:"rgba(255,255,255,0.18)", border:"1px solid rgba(255,255,255,0.35)", color:"#fff", fontSize:"0.78rem", fontWeight:500, textTransform:"capitalize", backdropFilter:"blur(4px)" }}>{s}</span>
+              ))}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <div style={{ maxWidth:900,margin:"0 auto",padding:"2rem 1.5rem" }}>
