@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useCart } from "@/lib/cart-context";
 import { createClient } from "@/lib/supabase/client";
 import GooglePayButton from "@/components/GooglePayButton";
@@ -15,17 +15,242 @@ const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
 type PayMethod = "payfast" | "happypay" | "google_pay";
 
+// ── Coupon types ──────────────────────────────────────────────────────────────
+interface Coupon {
+  id: string;
+  code: string;
+  discount_type: "percentage" | "fixed";
+  discount_value: number; // percentage (0-100) or fixed cents
+  scope: "cart" | "product";
+  product_id: string | null;
+  min_order_cents: number | null;
+  max_uses: number | null;
+  used_count: number;
+  expires_at: string | null;
+  is_active: boolean;
+}
+
+// ── Coupon section component ──────────────────────────────────────────────────
+function CouponSection({
+  subtotal,
+  items,
+  onDiscount,
+}: {
+  subtotal: number;
+  items: { product: { id: string; price: number }; quantity: number }[];
+  onDiscount: (savings: number, coupon: Coupon | null) => void;
+}) {
+  const supabase = createClient();
+  const [code, setCode] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [applied, setApplied] = useState<Coupon | null>(null);
+  const [savings, setSavings] = useState(0);
+
+  const computeDiscount = useCallback(
+    (coupon: Coupon): number => {
+      if (coupon.scope === "product" && coupon.product_id) {
+        // Apply discount only to matching products
+        const line = items.find((l) => l.product.id === coupon.product_id);
+        if (!line) return 0;
+        const lineTotal = line.product.price * line.quantity;
+        if (coupon.discount_type === "percentage") {
+          return Math.round((lineTotal * coupon.discount_value) / 100);
+        }
+        return Math.min(coupon.discount_value, lineTotal);
+      }
+      // Cart-wide
+      const base = subtotal;
+      if (coupon.discount_type === "percentage") {
+        return Math.round((base * coupon.discount_value) / 100);
+      }
+      return Math.min(coupon.discount_value, base);
+    },
+    [items, subtotal]
+  );
+
+  const apply = async () => {
+    if (!code.trim()) return;
+    setLoading(true);
+    setError("");
+    try {
+      const { data, error: dbErr } = await supabase
+        .from("coupons")
+        .select("*")
+        .eq("code", code.trim().toUpperCase())
+        .eq("is_active", true)
+        .single();
+
+      if (dbErr || !data) {
+        setError("Invalid or expired coupon code.");
+        setLoading(false);
+        return;
+      }
+
+      const coupon = data as Coupon;
+
+      // Validate expiry
+      if (coupon.expires_at && new Date(coupon.expires_at) < new Date()) {
+        setError("This coupon has expired.");
+        setLoading(false);
+        return;
+      }
+
+      // Validate use limit
+      if (coupon.max_uses !== null && coupon.used_count >= coupon.max_uses) {
+        setError("This coupon has reached its usage limit.");
+        setLoading(false);
+        return;
+      }
+
+      // Validate minimum order
+      if (coupon.min_order_cents !== null && subtotal < coupon.min_order_cents) {
+        setError(`Minimum order of ${fmt(coupon.min_order_cents)} required.`);
+        setLoading(false);
+        return;
+      }
+
+      const discount = computeDiscount(coupon);
+      if (discount <= 0) {
+        setError("This coupon doesn't apply to items in your cart.");
+        setLoading(false);
+        return;
+      }
+
+      setApplied(coupon);
+      setSavings(discount);
+      onDiscount(discount, coupon);
+    } catch {
+      setError("Could not validate coupon. Please try again.");
+    }
+    setLoading(false);
+  };
+
+  const remove = () => {
+    setApplied(null);
+    setSavings(0);
+    setCode("");
+    setError("");
+    onDiscount(0, null);
+  };
+
+  return (
+    <div
+      style={{
+        background: "#fff",
+        border: "1.5px solid rgba(155,127,184,0.15)",
+        borderRadius: 16,
+        padding: "1.5rem",
+      }}
+    >
+      <h3
+        style={{
+          fontFamily: "var(--font-display)",
+          fontWeight: 400,
+          fontSize: "1.1rem",
+          marginBottom: "1rem",
+        }}
+      >
+        Discount / Coupon
+      </h3>
+
+      {applied ? (
+        <div
+          style={{
+            background: "#E8F5E9",
+            border: "1.5px solid rgba(46,125,50,0.2)",
+            borderRadius: 12,
+            padding: "0.9rem 1.1rem",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <div>
+            <p style={{ fontWeight: 600, fontSize: "0.9rem", color: "#2E7D32", margin: "0 0 0.15rem" }}>
+              🎉 {applied.code} applied
+            </p>
+            <p style={{ fontSize: "0.8rem", color: "#388E3C", margin: 0 }}>
+              You save {fmt(savings)}{" "}
+              {applied.discount_type === "percentage"
+                ? `(${applied.discount_value}% off${applied.scope === "product" ? " selected product" : ""})`
+                : `(fixed discount${applied.scope === "product" ? " on selected product" : ""})`}
+            </p>
+          </div>
+          <button
+            onClick={remove}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#C62828",
+              cursor: "pointer",
+              fontSize: "0.85rem",
+              fontWeight: 500,
+            }}
+          >
+            Remove
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: "0.65rem" }}>
+          <input
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            onKeyDown={(e) => e.key === "Enter" && apply()}
+            placeholder="Enter coupon code…"
+            style={{
+              flex: 1,
+              padding: "0.75rem 1rem",
+              borderRadius: 12,
+              border: "1.5px solid #E0E0E0",
+              fontSize: "0.9rem",
+              letterSpacing: "0.08em",
+              fontWeight: 500,
+            }}
+          />
+          <button
+            onClick={apply}
+            disabled={loading || !code.trim()}
+            style={{
+              background: "var(--plum)",
+              color: "#fff",
+              border: "none",
+              borderRadius: 12,
+              padding: "0.75rem 1.25rem",
+              fontWeight: 600,
+              fontSize: "0.85rem",
+              cursor: loading || !code.trim() ? "not-allowed" : "pointer",
+              opacity: loading || !code.trim() ? 0.6 : 1,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {loading ? "…" : "Apply"}
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <p style={{ color: "#C62828", fontSize: "0.82rem", marginTop: "0.5rem" }}>{error}</p>
+      )}
+    </div>
+  );
+}
+
+// ── Main checkout page ────────────────────────────────────────────────────────
+
 export default function CheckoutPage() {
   const router = useRouter();
   const supabase = createClient();
   const { items, subtotal, count, clear } = useCart();
 
-  const [user, setUser]       = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [payMethod, setPayMethod] = useState<PayMethod>("payfast");
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError]     = useState("");
+  const [error, setError] = useState("");
+  const [discount, setDiscount] = useState(0);
+  const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
 
   const [form, setForm] = useState({
     name: "",
@@ -37,6 +262,8 @@ export default function CheckoutPage() {
     postalCode: "",
   });
 
+  const total = Math.max(0, subtotal - discount);
+
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) { router.replace("/?auth=login"); return; }
@@ -45,7 +272,7 @@ export default function CheckoutPage() {
         if (data) {
           const p = data as Profile;
           setProfile(p);
-          setForm(f => ({ ...f, name: p.full_name ?? "", whatsapp: p.phone ?? "" }));
+          setForm((f) => ({ ...f, name: p.full_name ?? "", whatsapp: p.phone ?? "" }));
         }
         setLoading(false);
       });
@@ -57,7 +284,18 @@ export default function CheckoutPage() {
     if (!loading && count === 0) router.replace("/shop");
   }, [loading, count, router]);
 
-  const shippingAddress = [form.address, form.suburb, form.city, form.province, form.postalCode].filter(Boolean).join(", ");
+  const shippingAddress = [form.address, form.suburb, form.city, form.province, form.postalCode]
+    .filter(Boolean)
+    .join(", ");
+
+  // Increment coupon usage count after successful payment
+  const recordCouponUsage = useCallback(async () => {
+    if (!appliedCoupon) return;
+    await supabase
+      .from("coupons")
+      .update({ used_count: appliedCoupon.used_count + 1 })
+      .eq("id", appliedCoupon.id);
+  }, [appliedCoupon, supabase]);
 
   const handlePayFast = async () => {
     setSubmitting(true); setError("");
@@ -67,14 +305,17 @@ export default function CheckoutPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           type: "order",
-          items: items.map(l => ({ productId: l.product.id, quantity: l.quantity })),
+          items: items.map((l) => ({ productId: l.product.id, quantity: l.quantity })),
           shippingAddress,
           contactName: form.name,
           contactWhatsapp: form.whatsapp,
+          discountCents: discount,
+          couponCode: appliedCoupon?.code ?? null,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Payment failed");
+      await recordCouponUsage();
       const form2 = document.createElement("form");
       form2.method = "POST"; form2.action = data.payfastUrl;
       Object.entries(data.params as Record<string, string>).forEach(([k, v]) => {
@@ -96,14 +337,17 @@ export default function CheckoutPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          items: items.map(l => ({ productId: l.product.id, quantity: l.quantity })),
+          items: items.map((l) => ({ productId: l.product.id, quantity: l.quantity })),
           shippingAddress,
           contactName: form.name,
           contactWhatsapp: form.whatsapp,
+          discountCents: discount,
+          couponCode: appliedCoupon?.code ?? null,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "HappyPay failed");
+      await recordCouponUsage();
       clear();
       window.location.href = data.redirectUrl;
     } catch (err: unknown) {
@@ -115,20 +359,22 @@ export default function CheckoutPage() {
   const handleGooglePay = async (token: string) => {
     setSubmitting(true); setError("");
     try {
-      // In test mode the token is a dummy string — we record the order as paid
       const res = await fetch("/api/orders/google-pay", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           token,
-          items: items.map(l => ({ productId: l.product.id, quantity: l.quantity })),
+          items: items.map((l) => ({ productId: l.product.id, quantity: l.quantity })),
           shippingAddress,
           contactName: form.name,
           contactWhatsapp: form.whatsapp,
+          discountCents: discount,
+          couponCode: appliedCoupon?.code ?? null,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Google Pay failed");
+      await recordCouponUsage();
       clear();
       router.push(`/payment/success?ref=${data.orderId}&method=google_pay`);
     } catch (err: unknown) {
@@ -138,8 +384,12 @@ export default function CheckoutPage() {
   };
 
   const inputStyle: React.CSSProperties = {
-    padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0",
-    fontSize: "0.9rem", width: "100%", boxSizing: "border-box",
+    padding: "0.75rem 1rem",
+    borderRadius: 12,
+    border: "1.5px solid #E0E0E0",
+    fontSize: "0.9rem",
+    width: "100%",
+    boxSizing: "border-box",
   };
 
   const isFormValid = form.name.trim() && form.whatsapp.trim() && form.address.trim() && form.city.trim();
@@ -174,9 +424,9 @@ export default function CheckoutPage() {
             <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem" }}>
               <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>Contact details</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                <input placeholder="Full name *" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} style={inputStyle} />
+                <input placeholder="Full name *" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} style={inputStyle} />
                 <div>
-                  <input placeholder="WhatsApp number * (e.g. 082 123 4567)" value={form.whatsapp} onChange={e => setForm(f => ({ ...f, whatsapp: e.target.value }))} style={inputStyle} type="tel" />
+                  <input placeholder="WhatsApp number * (e.g. 082 123 4567)" value={form.whatsapp} onChange={(e) => setForm((f) => ({ ...f, whatsapp: e.target.value }))} style={inputStyle} type="tel" />
                   <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "0.3rem" }}>Order updates will be sent to this WhatsApp number.</p>
                 </div>
                 {profile?.email && (
@@ -189,20 +439,32 @@ export default function CheckoutPage() {
             <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem" }}>
               <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>Delivery address</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                <input placeholder="Street address *" value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} style={inputStyle} />
+                <input placeholder="Street address *" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} style={inputStyle} />
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
-                  <input placeholder="Suburb" value={form.suburb} onChange={e => setForm(f => ({ ...f, suburb: e.target.value }))} style={inputStyle} />
-                  <input placeholder="City *" value={form.city} onChange={e => setForm(f => ({ ...f, city: e.target.value }))} style={inputStyle} />
+                  <input placeholder="Suburb" value={form.suburb} onChange={(e) => setForm((f) => ({ ...f, suburb: e.target.value }))} style={inputStyle} />
+                  <input placeholder="City *" value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))} style={inputStyle} />
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
-                  <select value={form.province} onChange={e => setForm(f => ({ ...f, province: e.target.value }))} style={{ ...inputStyle, background: "#fff" }}>
+                  <select value={form.province} onChange={(e) => setForm((f) => ({ ...f, province: e.target.value }))} style={{ ...inputStyle, background: "#fff" }}>
                     <option value="">Province</option>
-                    {["Gauteng","Western Cape","KwaZulu-Natal","Eastern Cape","Limpopo","Mpumalanga","North West","Free State","Northern Cape"].map(p => <option key={p} value={p}>{p}</option>)}
+                    {["Gauteng","Western Cape","KwaZulu-Natal","Eastern Cape","Limpopo","Mpumalanga","North West","Free State","Northern Cape"].map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
                   </select>
-                  <input placeholder="Postal code" value={form.postalCode} onChange={e => setForm(f => ({ ...f, postalCode: e.target.value }))} style={inputStyle} />
+                  <input placeholder="Postal code" value={form.postalCode} onChange={(e) => setForm((f) => ({ ...f, postalCode: e.target.value }))} style={inputStyle} />
                 </div>
               </div>
             </div>
+
+            {/* Coupon */}
+            <CouponSection
+              subtotal={subtotal}
+              items={items}
+              onDiscount={(savings, coupon) => {
+                setDiscount(savings);
+                setAppliedCoupon(coupon);
+              }}
+            />
 
             {/* Payment method */}
             <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem" }}>
@@ -212,7 +474,7 @@ export default function CheckoutPage() {
                   { id: "payfast" as PayMethod, label: "PayFast", sub: "Card, EFT, Instant EFT, SnapScan & more" },
                   { id: "happypay" as PayMethod, label: "HappyPay", sub: "Buy now, pay later — split into instalments" },
                   { id: "google_pay" as PayMethod, label: "Google Pay", sub: "Pay instantly with your saved Google card" },
-                ].map(opt => (
+                ].map((opt) => (
                   <button key={opt.id} onClick={() => setPayMethod(opt.id)}
                     style={{ display: "flex", alignItems: "center", gap: "1rem", padding: "1rem 1.25rem", borderRadius: 14, border: `1.5px solid ${payMethod === opt.id ? "var(--plum)" : "rgba(155,127,184,0.2)"}`, background: payMethod === opt.id ? "var(--plum-t)" : "#fff", textAlign: "left", cursor: "pointer" }}>
                     <div style={{ width: 20, height: 20, borderRadius: "50%", border: `2px solid ${payMethod === opt.id ? "var(--plum)" : "#E0E0E0"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -239,7 +501,7 @@ export default function CheckoutPage() {
             <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem", marginBottom: "1rem" }}>
               <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>Order summary</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1.25rem" }}>
-                {items.map(line => (
+                {items.map((line) => (
                   <div key={line.product.id} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.9rem" }}>
                     <span style={{ color: "var(--grey)" }}>{line.product.name} × {line.quantity}</span>
                     <span>{fmt(line.product.price * line.quantity)}</span>
@@ -247,9 +509,19 @@ export default function CheckoutPage() {
                 ))}
               </div>
               <div style={{ borderTop: "1px dashed rgba(155,127,184,0.3)", paddingTop: "1rem" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: "1rem" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.88rem", color: "var(--grey)", marginBottom: "0.5rem" }}>
+                  <span>Subtotal</span>
+                  <span>{fmt(subtotal)}</span>
+                </div>
+                {discount > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.88rem", color: "#2E7D32", marginBottom: "0.5rem" }}>
+                    <span>Discount ({appliedCoupon?.code})</span>
+                    <span>−{fmt(discount)}</span>
+                  </div>
+                )}
+                <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: "1rem", marginTop: "0.5rem", paddingTop: "0.5rem", borderTop: "1px solid rgba(155,127,184,0.15)" }}>
                   <span>Total</span>
-                  <span style={{ color: "var(--plum)" }}>{fmt(subtotal)}</span>
+                  <span style={{ color: "var(--plum)" }}>{fmt(total)}</span>
                 </div>
               </div>
             </div>
@@ -258,7 +530,7 @@ export default function CheckoutPage() {
             {payMethod === "payfast" && (
               <button className="btn-plum" style={{ width: "100%", padding: "1rem", fontSize: "1rem" }}
                 onClick={handlePayFast} disabled={submitting || !isFormValid}>
-                {submitting ? "Redirecting…" : `Pay ${fmt(subtotal)} with PayFast`}
+                {submitting ? "Redirecting…" : `Pay ${fmt(total)} with PayFast`}
               </button>
             )}
 
@@ -269,7 +541,7 @@ export default function CheckoutPage() {
                   {submitting ? "Loading HappyPay…" : `Pay later with HappyPay`}
                 </button>
                 <p style={{ fontSize: "0.75rem", color: "var(--light)", textAlign: "center", marginTop: "0.5rem" }}>
-                  Split {fmt(subtotal)} into manageable payments
+                  Split {fmt(total)} into manageable payments
                 </p>
               </div>
             )}
@@ -277,7 +549,7 @@ export default function CheckoutPage() {
             {payMethod === "google_pay" && (
               <div style={{ opacity: isFormValid ? 1 : 0.5, pointerEvents: isFormValid ? "auto" : "none" }}>
                 <GooglePayButton
-                  amountCents={subtotal}
+                  amountCents={total}
                   disabled={submitting || !isFormValid}
                   onPaymentAuthorized={handleGooglePay}
                 />

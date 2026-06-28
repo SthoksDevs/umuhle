@@ -8,7 +8,12 @@ import type { User } from "@supabase/supabase-js";
 import Footer from "@/components/Footer";
 import SiteHeader from "@/components/SiteHeader";
 
-const ICON = "/umuhle-icon.png";
+const CATEGORY_IMAGE: Record<string, string> = {
+  "Hair care": "/hair.png",
+  "Nails":     "/nails.png",
+  "Makeup":    "/makeup.png",
+  "Lashes":    "/lashes.png",
+};
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
 
 const MOCK_PRODUCTS = [
@@ -190,7 +195,7 @@ export default function ShopPage() {
             <div key={p.id} style={{ borderRadius: 16, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.15)", background: "#fff", position: "relative" }}>
               <div style={{ position: "absolute", top: 10, left: 10, zIndex: 2, background: "#888", color: "#fff", borderRadius: 100, padding: "0.2rem 0.7rem", fontSize: "0.7rem", fontWeight: 700 }}>Out of stock</div>
               <div style={{ height: 160, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <Image src={ICON} alt={p.name} width={80} height={80} style={{ objectFit: "contain", opacity: 0.7 }} />
+                <Image src={CATEGORY_IMAGE[p.category] ?? "/umuhle-icon.png"} alt={p.category} width={100} height={100} style={{ objectFit: "contain", opacity: 0.85 }} />
               </div>
               <div style={{ padding: "1rem" }}>
                 <p style={{ fontSize: "0.75rem", color: "var(--plum)", fontWeight: 500, marginBottom: "0.25rem" }}>{p.category}</p>

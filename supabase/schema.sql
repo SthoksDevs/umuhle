@@ -152,7 +152,11 @@ CREATE TABLE public.orders (
   gateway_order_id text,
   gateway_webhook_secret text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  discount_cents integer NOT NULL DEFAULT 0,
+  coupon_code text,
+  coupon_id uuid,
   CONSTRAINT orders_pkey PRIMARY KEY (id),
+  CONSTRAINT orders_coupon_id_fkey FOREIGN KEY (coupon_id) REFERENCES public.coupons(id),
   CONSTRAINT orders_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.profiles(id)
 );
 CREATE TABLE public.order_items (
@@ -326,4 +330,23 @@ CREATE TABLE public.photo_upload_charges (
   CONSTRAINT photo_upload_charges_pkey PRIMARY KEY (id),
   CONSTRAINT photo_upload_charges_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES auth.users(id),
   CONSTRAINT photo_upload_charges_salon_id_fkey FOREIGN KEY (salon_id) REFERENCES public.partner_salons(id)
+);
+CREATE TABLE public.coupons (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  code text NOT NULL UNIQUE,
+  description text,
+  discount_type text NOT NULL CHECK (discount_type = ANY (ARRAY['percentage'::text, 'fixed'::text])),
+  discount_value numeric NOT NULL,
+  scope text NOT NULL DEFAULT 'cart'::text CHECK (scope = ANY (ARRAY['cart'::text, 'product'::text])),
+  product_id uuid,
+  min_order_cents integer,
+  max_uses integer,
+  used_count integer NOT NULL DEFAULT 0,
+  expires_at timestamp with time zone,
+  is_active boolean NOT NULL DEFAULT true,
+  created_by uuid,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT coupons_pkey PRIMARY KEY (id),
+  CONSTRAINT coupons_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id),
+  CONSTRAINT coupons_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id)
 );
