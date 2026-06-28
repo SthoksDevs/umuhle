@@ -40,7 +40,7 @@ export default function Footer() {
           </div>
         </div>
 
-        <p style={{ fontSize: "0.75rem", color: "var(--light)", margin: 0 }}>© {new Date().getFullYear()} Umuhle. All rights reserved.</p>
+        <p style={{ fontSize: "0.75rem", color: "var(--light)", margin: 0 }}>© {new Date().getFullYear()} Umuhle. Operated by UMUHLE YOU ARE BEAUTIFUL (PTY) LTD. All rights reserved.</p>
       </div>
     </footer>
   );
