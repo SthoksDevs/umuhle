@@ -441,7 +441,7 @@ export default function Home() {
           {/* Hero — no overflow:hidden so filter dropdown is never clipped */}
           <section style={{ background: "linear-gradient(90deg, #9B7FB8 0%, #f4eff8 100%)", padding: "5rem 1.5rem 3.5rem", textAlign: "center", position: "relative" }}>
             <div style={{ position: "relative", zIndex: 1 }}>
-              <p style={{ fontFamily: "var(--font-display)", fontSize: "0.8rem", letterSpacing: "0.35em", color: "rgba(255,255,255,0.8)", textTransform: "uppercase", marginBottom: "1rem" }}>beauty, near you</p>
+              <p style={{ fontFamily: "var(--font-display)", fontSize: "0.8rem", letterSpacing: "0.35em", color: "rgba(255,255,255,0.8)", textTransform: "uppercase", marginBottom: "1rem" }}>Beauty. Confidence. You.</p>
               <h1 style={{ fontFamily: "var(--font-display)", fontSize: "clamp(2.5rem,6vw,4.5rem)", fontWeight: 300, color: "#fff", lineHeight: 1.1, marginBottom: "1.25rem" }}>
                 You are <em style={{ color: "rgba(255,255,255,0.9)", fontStyle: "italic", fontWeight: 400 }}>beautiful</em>
               </h1>
