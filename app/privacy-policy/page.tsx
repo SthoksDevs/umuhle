@@ -26,6 +26,8 @@ export default function PrivacyPage() {
         <div className="space-y-6">
           <Section title="Who We Are">
             <p>Umuhle is a South African beauty marketplace that connects customers with beauty professionals, business partners, products, salons and advertising opportunities.</p>
+            <p>Umuhle is operated by Umuhle You Are Beautiful (Pty) Ltd. "Umuhle" is the trading brand of "Umuhle You Are Beautiful (Pty) Ltd."</p>
+            <p>Registration Number: 2026/458231/07</p>
           </Section>
 
           <Section title="Information We Collect">
