@@ -236,7 +236,7 @@ export default function Home() {
   const [artists, setArtists]     = useState<Artist[]>([]);
   const [loading, setLoading]     = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeCategory, setActiveCategory] = useState<Category>("All");
+  const [activeCategories, setActiveCategories] = useState<Category[]>([]);
 
   // Cart
   const [cart, setCart]           = useState<CartItem[]>([]);
@@ -305,12 +305,12 @@ export default function Home() {
       .eq("moderation_status", "approved")
       .order("rating", { ascending: false })
       .limit(24);
-    if (activeCategory !== "All") query = query.eq("category", activeCategory.toLowerCase());
+    if (activeCategories.length > 0) query = query.in("category", activeCategories.map(c => c.toLowerCase()));
     if (searchQuery.trim()) query = query.ilike("display_name", `%${searchQuery.trim()}%`);
     const { data } = await query;
     setArtists((data ?? []) as Artist[]);
     setLoading(false);
-  }, [activeCategory, searchQuery]);
+  }, [activeCategories, searchQuery]);
 
   useEffect(() => {
     const t = setTimeout(fetchArtists, 300);
@@ -460,8 +460,8 @@ export default function Home() {
                     gTag("search", { search_term: e.target.value });
                   }
                 }}
-                activeCategories={activeCategory === "All" ? [] : [activeCategory]}
-                onCategoryChange={(cats: Category[]) => setActiveCategory(cats.length === 0 ? "All" : cats[cats.length - 1])}
+                activeCategories={activeCategories}
+                onCategoryChange={(cats: Category[]) => setActiveCategories(cats)}
                 categories={CATEGORIES.filter(c => c !== "All")}
                 placeholder="Search any style or area…"
               />
@@ -471,7 +471,7 @@ export default function Home() {
           {/* Artist grid */}
           <section id="artists" style={{ padding: "2rem 1.5rem 4rem", maxWidth: 900, margin: "0 auto" }}>
             <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.5rem", marginBottom: "1.5rem", color: "var(--onyx)" }}>
-              {activeCategory === "All" ? "All artists" : `${activeCategory} artists`}
+              {activeCategories.length === 0 ? "All artists" : `${activeCategories.join(" · ")} artists`}
               <span style={{ fontSize: "0.9rem", color: "var(--grey)", fontFamily: "var(--font-body)", fontWeight: 400, marginLeft: "0.5rem" }}>({artists.length})</span>
             </h2>
 
