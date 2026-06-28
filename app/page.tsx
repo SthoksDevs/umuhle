@@ -191,10 +191,10 @@ function SearchWithFilter<T extends string>({
       {/* Dropdown */}
       {open && (
         <div style={{
-          position: "absolute", top: "calc(100% + 8px)", left: "50%", transform: "translateX(-50%)",
+          position: "absolute", top: "calc(100% + 8px)", right: 0,
           background: "#fff", borderRadius: 16, border: "1.5px solid rgba(155,127,184,0.2)",
           boxShadow: "0 16px 48px rgba(0,0,0,0.14)", padding: "1rem", minWidth: 220,
-          zIndex: 100,
+          zIndex: 9999,
         }}>
           <p style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--grey)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.75rem" }}>Filter by category</p>
           <div style={{ display: "flex", flexDirection: "column", gap: "0.1rem" }}>
@@ -438,9 +438,8 @@ export default function Home() {
       <div style={{ flex: 1 }}>
         <main style={{ minHeight: "80vh", background: "var(--white)" }}>
 
-          {/* Hero */}
-          <section style={{ background: "linear-gradient(135deg, #6B4F8A 0%, #9B7FB8 40%, #C28070 80%, #D4956B 100%)", padding: "5rem 1.5rem 3.5rem", textAlign: "center", position: "relative", overflow: "hidden" }}>
-            <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.18)", pointerEvents: "none" }} />
+          {/* Hero — no overflow:hidden so filter dropdown is never clipped */}
+          <section style={{ background: "linear-gradient(90deg, #9B7FB8 0%, #f4eff8 100%)", padding: "5rem 1.5rem 3.5rem", textAlign: "center", position: "relative" }}>
             <div style={{ position: "relative", zIndex: 1 }}>
               <p style={{ fontFamily: "var(--font-display)", fontSize: "0.8rem", letterSpacing: "0.35em", color: "rgba(255,255,255,0.8)", textTransform: "uppercase", marginBottom: "1rem" }}>beauty, near you</p>
               <h1 style={{ fontFamily: "var(--font-display)", fontSize: "clamp(2.5rem,6vw,4.5rem)", fontWeight: 300, color: "#fff", lineHeight: 1.1, marginBottom: "1.25rem" }}>
@@ -464,7 +463,7 @@ export default function Home() {
                 activeCategories={activeCategory === "All" ? [] : [activeCategory]}
                 onCategoryChange={(cats: Category[]) => setActiveCategory(cats.length === 0 ? "All" : cats[cats.length - 1])}
                 categories={CATEGORIES.filter(c => c !== "All")}
-                placeholder="Search by name or area…"
+                placeholder="Search any style or area…"
               />
             </div>
           </section>

@@ -96,7 +96,7 @@ function SearchWithFilter({
         <div style={{
           position: "absolute", top: "calc(100% + 8px)", right: 0,
           background: "#fff", borderRadius: 16, border: "1.5px solid rgba(155,127,184,0.2)",
-          boxShadow: "0 16px 48px rgba(0,0,0,0.14)", padding: "1rem", minWidth: 220, zIndex: 100,
+          boxShadow: "0 16px 48px rgba(0,0,0,0.14)", padding: "1rem", minWidth: 220, zIndex: 9999,
         }}>
           <p style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--grey)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.75rem" }}>Filter by category</p>
           <div style={{ display: "flex", flexDirection: "column", gap: "0.1rem" }}>
@@ -152,9 +152,13 @@ export default function ShopPage() {
     <div style={{ minHeight: "100vh", background: "var(--white)", fontFamily: "var(--font-body)", display: "flex", flexDirection: "column" }}>
       <SiteHeader initialUser={user} />
 
-      {/* Gradient hero with merged search+filter */}
-      <div style={{ background: "linear-gradient(135deg, #6B4F8A 0%, #9B7FB8 40%, #C28070 80%, #D4956B 100%)", padding: "4rem 1.5rem 3rem", position: "relative", overflow: "hidden" }}>
-        <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.18)", pointerEvents: "none" }} />
+      {/* Hero — overflow:visible so the filter dropdown is not clipped */}
+      <div style={{
+        background: "linear-gradient(90deg, #9B7FB8 0%, #f4eff8 100%)",
+        padding: "4rem 1.5rem 3.5rem",
+        position: "relative",
+        /* NO overflow:hidden here — that was clipping the dropdown */
+      }}>
         <div style={{ maxWidth: 680, margin: "0 auto", position: "relative", zIndex: 1, textAlign: "center" }}>
           <p style={{ fontFamily: "var(--font-display)", fontSize: "0.8rem", letterSpacing: "0.35em", color: "rgba(255,255,255,0.8)", textTransform: "uppercase", marginBottom: "0.5rem" }}>curated for you</p>
           <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "clamp(2rem,5vw,3rem)", color: "#fff", marginBottom: "0.5rem" }}>Beauty Shop</h1>
