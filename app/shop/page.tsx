@@ -6,34 +6,32 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Product } from "@/types";
+import { useCart } from "@/lib/cart-context";
 import Footer from "@/components/Footer";
 import SiteHeader from "@/components/SiteHeader";
 
 const CATEGORY_IMAGE: Record<string, string> = {
-  "Hair care": "/hair.png",
   "hair":      "/hair.png",
-  "Nails":     "/nails.png",
   "nails":     "/nails.png",
-  "Makeup":    "/makeup.png",
   "makeup":    "/makeup.png",
-  "Lashes":    "/lashes.png",
   "lashes":    "/lashes.png",
+};
+const CAT_LABEL: Record<string, string> = {
+  "hair":   "Hair care",
+  "nails":  "Nails",
+  "makeup": "Makeup",
+  "lashes": "Lashes",
 };
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
 
 const SHOP_CATS = ["Hair care", "Nails", "Makeup", "Lashes"] as const;
 type ShopCat = typeof SHOP_CATS[number];
 
-// Map DB category values to display labels
-const CAT_LABEL: Record<string, ShopCat> = {
-  "hair":      "Hair care",
-  "Hair care": "Hair care",
-  "nails":     "Nails",
-  "Nails":     "Nails",
-  "makeup":    "Makeup",
-  "Makeup":    "Makeup",
-  "lashes":    "Lashes",
-  "Lashes":    "Lashes",
+const CAT_TO_DB: Record<ShopCat, string> = {
+  "Hair care": "hair",
+  "Nails":     "nails",
+  "Makeup":    "makeup",
+  "Lashes":    "lashes",
 };
 
 // ── Merged search + filter bar ─────────────────────────────────────────────────
@@ -132,11 +130,11 @@ function SearchWithFilter({
   );
 }
 
-// ── Product skeleton loader ────────────────────────────────────────────────────
+// ── Skeleton loader ────────────────────────────────────────────────────────────
 function ProductSkeleton() {
   return (
     <div style={{ borderRadius: 16, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.15)", background: "#fff" }}>
-      <div style={{ height: 160, background: "linear-gradient(90deg, #f0eaf6 25%, #e8e0f0 50%, #f0eaf6 75%)", backgroundSize: "200% 100%", animation: "shimmer 1.4s infinite" }} />
+      <div style={{ height: 160, background: "linear-gradient(90deg,#f0eaf6 25%,#e8e0f0 50%,#f0eaf6 75%)", backgroundSize: "200% 100%", animation: "shimmer 1.4s infinite" }} />
       <div style={{ padding: "1rem" }}>
         <div style={{ height: 12, background: "#f0eaf6", borderRadius: 6, width: "40%", marginBottom: "0.5rem" }} />
         <div style={{ height: 16, background: "#f0eaf6", borderRadius: 6, width: "70%", marginBottom: "0.4rem" }} />
@@ -153,6 +151,8 @@ function ProductSkeleton() {
 
 export default function ShopPage() {
   const supabase = createClient();
+  const { addItem } = useCart();
+
   const [user, setUser]           = useState<User | null>(null);
   const [products, setProducts]   = useState<Product[]>([]);
   const [loading, setLoading]     = useState(true);
@@ -170,7 +170,7 @@ export default function ShopPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fetch products from Supabase
+  // Fetch approved, active products from Supabase
   useEffect(() => {
     async function fetchProducts() {
       setLoading(true);
@@ -192,29 +192,31 @@ export default function ShopPage() {
         setLoading(false);
       }
     }
-
     fetchProducts();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const filtered = products.filter(p => {
-    const displayCat = CAT_LABEL[p.category ?? ""] ?? p.category ?? "";
-    const matchCat = activeFilters.length === 0 || activeFilters.includes(displayCat as ShopCat);
-    const matchQ = !search
-      || p.name.toLowerCase().includes(search.toLowerCase())
-      || (p.category ?? "").toLowerCase().includes(search.toLowerCase())
-      || (p.description ?? "").toLowerCase().includes(search.toLowerCase());
+    const matchCat =
+      activeFilters.length === 0 ||
+      activeFilters.some(f => CAT_TO_DB[f] === p.category);
+    const q = search.toLowerCase();
+    const matchQ = !q ||
+      p.name.toLowerCase().includes(q) ||
+      (p.category ?? "").toLowerCase().includes(q) ||
+      (p.description ?? "").toLowerCase().includes(q);
     return matchCat && matchQ;
   });
 
-  const hasProducts = !loading && !error && products.length > 0;
-  const isEmpty     = !loading && !error && products.length === 0;
-
-  const handleAdd = (id: string) => {
+  const handleAdd = (product: Product) => {
     if (!user) { setShowAuth(true); return; }
-    setAdded(id);
+    addItem(product, 1);
+    setAdded(product.id);
     setTimeout(() => setAdded(null), 1500);
   };
+
+  const hasProducts = !loading && !error && products.length > 0;
+  const isEmpty     = !loading && !error && products.length === 0;
 
   return (
     <>
@@ -229,11 +231,7 @@ export default function ShopPage() {
         <SiteHeader initialUser={user} />
 
         {/* Hero */}
-        <div style={{
-          background: "linear-gradient(90deg, #9B7FB8 0%, #f4eff8 100%)",
-          padding: "4rem 1.5rem 3.5rem",
-          position: "relative",
-        }}>
+        <div style={{ background: "linear-gradient(90deg,#9B7FB8 0%,#f4eff8 100%)", padding: "4rem 1.5rem 3.5rem", position: "relative" }}>
           <div style={{ maxWidth: 680, margin: "0 auto", position: "relative", zIndex: 1, textAlign: "center" }}>
             <p style={{ fontFamily: "var(--font-display)", fontSize: "0.8rem", letterSpacing: "0.35em", color: "rgba(255,255,255,0.8)", textTransform: "uppercase", marginBottom: "0.5rem" }}>curated for you</p>
             <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "clamp(2rem,5vw,3rem)", color: "#fff", marginBottom: "0.5rem" }}>Beauty Shop</h1>
@@ -250,23 +248,18 @@ export default function ShopPage() {
 
         <main style={{ maxWidth: 960, margin: "0 auto", padding: "2.5rem 1.5rem 4rem", flex: 1, width: "100%", boxSizing: "border-box" }}>
 
-          {/* Error state */}
+          {/* Error */}
           {error && (
             <div style={{ background: "#fff0f0", border: "1.5px solid rgba(220,50,50,0.2)", borderRadius: 14, padding: "1rem 1.5rem", marginBottom: "2rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
               <span style={{ fontSize: "1.2rem" }}>⚠️</span>
               <div>
                 <p style={{ fontWeight: 600, color: "#c0392b", margin: 0, fontSize: "0.9rem" }}>{error}</p>
-                <button
-                  onClick={() => window.location.reload()}
-                  style={{ background: "none", border: "none", color: "#c0392b", fontSize: "0.82rem", cursor: "pointer", padding: 0, textDecoration: "underline", marginTop: "0.25rem" }}
-                >
-                  Refresh page
-                </button>
+                <button onClick={() => window.location.reload()} style={{ background: "none", border: "none", color: "#c0392b", fontSize: "0.82rem", cursor: "pointer", padding: 0, textDecoration: "underline", marginTop: "0.25rem" }}>Refresh page</button>
               </div>
             </div>
           )}
 
-          {/* Empty state — no products in DB yet */}
+          {/* Coming soon */}
           {isEmpty && (
             <div style={{ background: "var(--plum-t)", border: "1.5px solid rgba(155,127,184,0.3)", borderRadius: 14, padding: "1rem 1.5rem", marginBottom: "2.5rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
               <span style={{ fontSize: "1.2rem" }}>🛍️</span>
@@ -277,16 +270,13 @@ export default function ShopPage() {
             </div>
           )}
 
-          {/* No search results */}
+          {/* No results */}
           {hasProducts && filtered.length === 0 && (
             <div style={{ textAlign: "center", padding: "3rem 1rem" }}>
               <p style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>🔍</p>
               <p style={{ fontWeight: 600, color: "var(--onyx)", marginBottom: "0.25rem" }}>No products found</p>
               <p style={{ color: "var(--grey)", fontSize: "0.875rem" }}>Try adjusting your search or filters.</p>
-              <button
-                onClick={() => { setSearch(""); setActiveFilters([]); }}
-                style={{ marginTop: "1rem", padding: "0.5rem 1.25rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.4)", background: "transparent", color: "var(--plum)", fontSize: "0.875rem", cursor: "pointer" }}
-              >
+              <button onClick={() => { setSearch(""); setActiveFilters([]); }} style={{ marginTop: "1rem", padding: "0.5rem 1.25rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.4)", background: "transparent", color: "var(--plum)", fontSize: "0.875rem", cursor: "pointer" }}>
                 Clear search & filters
               </button>
             </div>
@@ -294,72 +284,56 @@ export default function ShopPage() {
 
           {/* Product grid */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: "1.25rem" }}>
+            {loading && Array.from({ length: 8 }).map((_, i) => <ProductSkeleton key={i} />)}
 
-            {/* Skeleton loaders */}
-            {loading && Array.from({ length: 8 }).map((_, i) => (
-              <ProductSkeleton key={i} />
-            ))}
-
-            {/* Real products */}
             {!loading && filtered.map(p => {
-              const displayCat  = CAT_LABEL[p.category ?? ""] ?? p.category ?? "";
-              const inStock     = p.stock_count > 0;
-              const catImage    = CATEGORY_IMAGE[p.category ?? ""] ?? CATEGORY_IMAGE[displayCat] ?? "/umuhle-icon.png";
+              const inStock   = p.stock_count > 0;
+              const catImage  = CATEGORY_IMAGE[p.category ?? ""] ?? "/umuhle-icon.png";
+              const catLabel  = CAT_LABEL[p.category ?? ""] ?? p.category ?? "";
+              const isAdded   = added === p.id;
 
               return (
                 <div key={p.id} style={{ borderRadius: 16, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.15)", background: "#fff", position: "relative", display: "flex", flexDirection: "column" }}>
 
-                  {/* Stock badge */}
                   {!inStock && (
-                    <div style={{ position: "absolute", top: 10, left: 10, zIndex: 2, background: "#888", color: "#fff", borderRadius: 100, padding: "0.2rem 0.7rem", fontSize: "0.7rem", fontWeight: 700 }}>
-                      Out of stock
-                    </div>
+                    <div style={{ position: "absolute", top: 10, left: 10, zIndex: 2, background: "#888", color: "#fff", borderRadius: 100, padding: "0.2rem 0.7rem", fontSize: "0.7rem", fontWeight: 700 }}>Out of stock</div>
                   )}
 
-                  {/* Product image */}
-                  <div style={{ height: 160, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative", flexShrink: 0 }}>
-                    {p.image_url ? (
-                      <Image
-                        src={p.image_url}
-                        alt={p.name}
-                        fill
-                        sizes="220px"
-                        style={{ objectFit: "cover" }}
-                      />
-                    ) : (
-                      <Image
-                        src={catImage}
-                        alt={displayCat}
-                        width={100}
-                        height={100}
-                        style={{ objectFit: "contain", opacity: 0.85 }}
-                      />
-                    )}
-                  </div>
+                  {/* Clickable image area → product detail */}
+                  <Link href={`/shop/${p.id}`} style={{ textDecoration: "none", display: "block" }}>
+                    <div style={{ height: 160, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+                      {p.image_url ? (
+                        <Image src={p.image_url} alt={p.name} fill sizes="240px" style={{ objectFit: "cover" }} />
+                      ) : (
+                        <Image src={catImage} alt={catLabel} width={100} height={100} style={{ objectFit: "contain", opacity: 0.85 }} />
+                      )}
+                    </div>
+                  </Link>
 
-                  {/* Product info */}
                   <div style={{ padding: "1rem", flex: 1, display: "flex", flexDirection: "column" }}>
-                    {displayCat && (
-                      <p style={{ fontSize: "0.75rem", color: "var(--plum)", fontWeight: 500, marginBottom: "0.25rem" }}>{displayCat}</p>
-                    )}
-                    <h4 style={{ fontWeight: 500, marginBottom: "0.4rem", fontSize: "0.95rem" }}>{p.name}</h4>
+                    {catLabel && <p style={{ fontSize: "0.75rem", color: "var(--plum)", fontWeight: 500, marginBottom: "0.25rem" }}>{catLabel}</p>}
+
+                    <Link href={`/shop/${p.id}`} style={{ textDecoration: "none" }}>
+                      <h4 style={{ fontWeight: 500, marginBottom: "0.4rem", fontSize: "0.95rem", color: "var(--onyx)", cursor: "pointer" }}>{p.name}</h4>
+                    </Link>
+
                     {p.description && (
-                      <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginBottom: "0.75rem", lineHeight: 1.4, flex: 1 }}>{p.description}</p>
+                      <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginBottom: "0.75rem", lineHeight: 1.4, flex: 1,
+                        overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as const }}>
+                        {p.description}
+                      </p>
                     )}
+
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "auto" }}>
                       <span style={{ fontWeight: 700, color: "var(--plum)" }}>{fmt(p.price)}</span>
                       <button
                         className="btn-plum"
-                        style={{
-                          padding: "0.4rem 1rem",
-                          fontSize: "0.8rem",
-                          opacity: inStock ? 1 : 0.5,
-                          cursor: inStock ? "pointer" : "not-allowed",
-                        }}
+                        style={{ padding: "0.4rem 1rem", fontSize: "0.8rem", opacity: inStock ? 1 : 0.5, cursor: inStock ? "pointer" : "not-allowed",
+                          background: isAdded ? "#2E7D32" : undefined, transition: "background 0.2s" }}
                         disabled={!inStock}
-                        onClick={() => handleAdd(p.id)}
+                        onClick={() => handleAdd(p)}
                       >
-                        {added === p.id ? "Added ✓" : inStock ? "Add to cart" : "Out of stock"}
+                        {isAdded ? "Added ✓" : inStock ? "Add to cart" : "Out of stock"}
                       </button>
                     </div>
                   </div>
@@ -369,7 +343,7 @@ export default function ShopPage() {
           </div>
 
           {/* Partner CTA */}
-          <div style={{ marginTop: "4rem", background: "linear-gradient(135deg, var(--plum-t) 0%, #fff 60%)", borderRadius: 20, padding: "3rem 2rem", textAlign: "center" }}>
+          <div style={{ marginTop: "4rem", background: "linear-gradient(135deg,var(--plum-t) 0%,#fff 60%)", borderRadius: 20, padding: "3rem 2rem", textAlign: "center" }}>
             <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.8rem", color: "var(--onyx)", marginBottom: "0.75rem" }}>
               Are you a beauty <em style={{ color: "var(--plum)", fontStyle: "italic" }}>professional</em>?
             </h2>
