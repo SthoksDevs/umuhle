@@ -9,7 +9,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
-import ProductForm, { productToForm, type ProductFormData } from "@/components/ProductForm";
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
@@ -19,8 +18,8 @@ function formatDate(dateStr: string) {
   return d.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "long", year: "numeric" });
 }
 
-// ── Tab type extended with "invite" and "my-salon" (replaces "my-store") ──────
-type Tab = "bookings" | "wishlist" | "profile" | "ads" | "my-salon" | "my-services" | "invite" | "my-products";
+// ── Tab type extended with "invite" and "my-store" (replaces "my-store") ──────
+type Tab = "bookings" | "wishlist" | "profile" | "my-store" | "my-services" | "invite";
 
 const SERVICE_TYPES = [
   { id: "hair",   label: "Hair",  banner: "/banners/hair.jpg",   description: "From protective styles to blowouts, braids to colour — let clients know exactly what you specialise in." },
@@ -350,20 +349,6 @@ function ProfileTab({ profile, user, onUpdate }: { profile: Profile; user: User;
   );
 }
 
-// ─── Ads tab ───────────────────────────────────────────────────────────────────
-function AdsTab() {
-  return (
-    <div style={{ maxWidth: 600 }}>
-      <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>Ads</h2>
-      <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "2rem" }}>Promote your services or products to Umuhle users.</p>
-      <div style={{ background: "var(--plum-t)", borderRadius: 20, padding: "2.5rem", textAlign: "center", border: "1.5px dashed rgba(155,127,184,0.35)" }}>
-        <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>📣</div>
-        <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.2rem", marginBottom: "0.5rem" }}>Coming soon</h3>
-        <p style={{ color: "var(--grey)", fontSize: "0.875rem" }}>Ad placement and campaign management will be available here. Stay tuned.</p>
-      </div>
-    </div>
-  );
-}
 
 // ─── My Salon tab ──────────────────────────────────────────────────────────────
 type DayHours = {
@@ -581,7 +566,7 @@ function SalonForm({
  
   const handleSubmit = async () => {
     setError("");
-    if (!form.name.trim()) { setError("Salon name is required."); return; }
+    if (!form.name.trim()) { setError("Store name is required."); return; }
     if (!form.address.trim()) { setError("Address is required."); return; }
 const openDays = Object.values(
   form.opening_hours.weekly
@@ -635,14 +620,14 @@ if (openDays.length === 0) {
   return (
     <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.5rem" }}>
       <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.2rem", marginBottom: "1rem" }}>
-        {isEdit ? "Edit listing" : "Add a salon"}
+        {isEdit ? "Edit listing" : "Add a store"}
       </h3>
  
-      <label style={labelStyle}>Salon name *</label>
+      <label style={labelStyle}>Store name *</label>
       <input required value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Beauty by Thandi" style={inputStyle} />
  
       <label style={labelStyle}>Description</label>
-      <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Tell clients what makes your salon special…" rows={3} style={{ ...inputStyle, resize: "vertical" }} />
+      <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Tell clients what makes your store special…" rows={3} style={{ ...inputStyle, resize: "vertical" }} />
  
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 1rem" }}>
         <div>
@@ -665,12 +650,12 @@ if (openDays.length === 0) {
         </div>
         <div>
           <label style={labelStyle}>Email</label>
-          <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="hello@yoursalon.co.za" style={inputStyle} />
+          <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="hello@yourstore.co.za" style={inputStyle} />
         </div>
       </div>
  
       <label style={labelStyle}>Website</label>
-      <input type="url" value={form.website} onChange={e => setForm(f => ({ ...f, website: e.target.value }))} placeholder="https://yoursalon.co.za" style={inputStyle} />
+      <input type="url" value={form.website} onChange={e => setForm(f => ({ ...f, website: e.target.value }))} placeholder="https://yourstore.co.za" style={inputStyle} />
  
       {/* Services */}
       <label style={labelStyle}>Services offered *</label>
@@ -1068,7 +1053,7 @@ if (openDays.length === 0) {
         <span style={{ position: "absolute", left: "1rem", top: "50%", transform: "translateY(-50%)", color: "#C13584", fontSize: "0.9rem", pointerEvents: "none" }}>@</span>
         <input value={form.instagram_username}
           onChange={e => setForm(f => ({ ...f, instagram_username: e.target.value.replace(/^@/, "") }))}
-          placeholder="yoursalonhandle" style={{ ...inputStyle, paddingLeft: "2rem" }} />
+          placeholder="yourstorehandle" style={{ ...inputStyle, paddingLeft: "2rem" }} />
       </div>
       <p style={{ fontSize: "0.75rem", color: "#888", marginTop: "0.25rem" }}>
         Your latest Instagram posts will appear on your store page automatically — free of charge.
@@ -1246,176 +1231,6 @@ function SalonBookingsInbox({ salonId }: { salonId: string }) {
   );
 }
  
-// ── MyProductsTab ──────────────────────────────────────────────────────────────
-
-interface DashboardProductRow {
-  id: string;
-  name: string;
-  description: string | null;
-  price: number;
-  image_url: string | null;
-  category: string | null;
-  stock_count: number;
-  is_active: boolean;
-  moderation_status: string;
-  weight_g: number | null;
-  length_cm: number | null;
-  width_cm: number | null;
-  height_cm: number | null;
-}
-
-function MyProductsTab({ user }: { user: { id: string } }) {
-  const supabase = createClient();
-  const [products,   setProducts]   = useState<DashboardProductRow[]>([]);
-  const [loading,    setLoading]    = useState(true);
-  const [showForm,   setShowForm]   = useState(false);
-  const [editTarget, setEditTarget] = useState<DashboardProductRow | null>(null);
-
-  useEffect(() => {
-    supabase
-      .from("products")
-      .select("*")
-      .eq("partner_id", user.id)
-      .order("created_at", { ascending: false })
-      .then(({ data }) => {
-        setProducts((data ?? []) as DashboardProductRow[]);
-        setLoading(false);
-      });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user.id]);
-
-  const handleSaved = (saved: ProductFormData & { id: string }) => {
-    const normalized: DashboardProductRow = {
-      id:                saved.id,
-      name:              saved.name,
-      description:       saved.description || null,
-      price:             Math.round(Number(saved.price) * 100),
-      category:          saved.category || null,
-      stock_count:       parseInt(saved.stock_count) || 0,
-      image_url:         saved.image_url ?? null,
-      is_active:         false,
-      moderation_status: "scanning",
-      weight_g:          saved.weight_g   ? parseInt(saved.weight_g)    : null,
-      length_cm:         saved.length_cm  ? parseFloat(saved.length_cm) : null,
-      width_cm:          saved.width_cm   ? parseFloat(saved.width_cm)  : null,
-      height_cm:         saved.height_cm  ? parseFloat(saved.height_cm) : null,
-    };
-    setProducts(prev => {
-      const exists = prev.find(p => p.id === saved.id);
-      if (exists) return prev.map(p => p.id === saved.id ? { ...p, ...normalized } : p);
-      return [normalized, ...prev];
-    });
-    setShowForm(false);
-    setEditTarget(null);
-  };
-
-  const statusColor: Record<string, { bg: string; color: string; label: string }> = {
-    approved:     { bg: "#E1F5EE", color: "#0F6E56", label: "Live" },
-    scanning:     { bg: "#FFF3E0", color: "#E65100", label: "Under review" },
-    needs_review: { bg: "#FFF3E0", color: "#E65100", label: "Needs review" },
-    draft:        { bg: "#F5F5F5", color: "#757575", label: "Draft" },
-    rejected:     { bg: "#FFEBEE", color: "#C62828", label: "Rejected" },
-  };
-
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-        <div>
-          <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", margin: 0 }}>My Products</h2>
-          <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginTop: "0.25rem" }}>
-            Products are reviewed before going live in the shop.
-          </p>
-        </div>
-        {!showForm && !editTarget && (
-          <button onClick={() => setShowForm(true)} className="btn-plum"
-            style={{ padding: "0.55rem 1.25rem", fontSize: "0.85rem" }}>
-            + Add Product
-          </button>
-        )}
-      </div>
-
-      {showForm && (
-        <div style={{ marginBottom: "1.5rem" }}>
-          <ProductForm
-            partnerId={user.id}
-            supabase={supabase}
-            skipVerify={false}
-            onSaved={handleSaved}
-            onCancel={() => setShowForm(false)}
-          />
-        </div>
-      )}
-
-      {editTarget && (
-        <div style={{ marginBottom: "1.5rem" }}>
-          <ProductForm
-            initial={productToForm(editTarget)}
-            partnerId={user.id}
-            supabase={supabase}
-            skipVerify={false}
-            onSaved={handleSaved}
-            onCancel={() => setEditTarget(null)}
-          />
-        </div>
-      )}
-
-      {loading ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "1rem" }}>
-          {[...Array(3)].map((_, i) => (
-            <div key={i} style={{ height: 100, borderRadius: 14, background: "var(--plum-t)", animation: "pulse 1.5s ease-in-out infinite" }} />
-          ))}
-        </div>
-      ) : products.length === 0 ? (
-        <div style={{ textAlign: "center", padding: "3rem", background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.12)" }}>
-          <p style={{ color: "var(--grey)", marginBottom: "1rem" }}>You haven&apos;t listed any products yet.</p>
-          <button onClick={() => setShowForm(true)} className="btn-plum"
-            style={{ padding: "0.65rem 1.5rem", fontSize: "0.9rem" }}>
-            Add your first product
-          </button>
-        </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
-          {products.map(p => {
-            const s = statusColor[p.moderation_status] ?? statusColor.draft;
-            return (
-              <div key={p.id}
-                style={{ background: "#fff", borderRadius: 14, border: "1.5px solid rgba(155,127,184,0.12)", padding: "1rem 1.25rem", display: "flex", gap: "1rem", alignItems: "center" }}>
-                {p.image_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={p.image_url} alt="" style={{ width: 56, height: 56, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />
-                ) : (
-                  <div style={{ width: 56, height: 56, borderRadius: 8, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                    <span>🛍️</span>
-                  </div>
-                )}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-                    <p style={{ fontWeight: 600, fontSize: "0.9rem", margin: 0 }}>{p.name}</p>
-                    <span style={{ background: s.bg, color: s.color, borderRadius: 100, padding: "1px 8px", fontSize: "0.72rem", fontWeight: 600, whiteSpace: "nowrap" }}>{s.label}</span>
-                  </div>
-                  <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: "0.1rem 0 0" }}>
-                    R{(p.price / 100).toFixed(0)} · {p.stock_count} in stock · {p.category}
-                  </p>
-                  {!p.weight_g && (
-                    <p style={{ fontSize: "0.72rem", color: "#E65100", margin: "0.1rem 0 0" }}>
-                      ⚠️ Add weight &amp; dimensions for courier quotes
-                    </p>
-                  )}
-                </div>
-                <button
-                  onClick={() => { setEditTarget(p); setShowForm(false); }}
-                  style={{ padding: "0.35rem 0.9rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "#fff", color: "var(--plum)", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer", flexShrink: 0 }}>
-                  Edit
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── MySalonTab ────────────────────────────────────────────────────────────────
 // This replaces the MySalonTab function in your dashboard/page.tsx
  
@@ -1491,7 +1306,7 @@ function MySalonTab({ user }: { user: { id: string } }) {
  
   const statusMeta: Record<string, { bg: string; color: string; label: string; desc: string }> = {
     pending:  { bg: "#FAEEDA", color: "#854F0B", label: "Under review",  desc: "We'll review your listing within 24 hours." },
-    approved: { bg: "#E1F5EE", color: "#0F6E56", label: "Live",          desc: "Your salon is visible in Stores and can receive bookings." },
+    approved: { bg: "#E1F5EE", color: "#0F6E56", label: "Live",          desc: "Your store is visible in Stores and can receive bookings." },
     rejected: { bg: "#FCEBEB", color: "#A32D2D", label: "Not approved",  desc: "Please edit your listing and resubmit." },
   };
  
@@ -1505,12 +1320,12 @@ function MySalonTab({ user }: { user: { id: string } }) {
     );
     return (
       <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "2rem", textAlign: "center" }}>
-        <p style={{ fontFamily: "var(--font-display)", fontSize: "1.1rem", marginBottom: "0.5rem" }}>List your salon on Umuhle</p>
+        <p style={{ fontFamily: "var(--font-display)", fontSize: "1.1rem", marginBottom: "0.5rem" }}>List your store on Umuhle</p>
         <p style={{ color: "var(--grey)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
           Appear in the Stores page and receive appointment bookings directly.
         </p>
         <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.75rem 2rem", borderRadius: 100, fontWeight: 600 }}>
-          Add your salon
+          Add your store
         </button>
       </div>
     );
@@ -2214,11 +2029,9 @@ export default function DashboardPage() {
   const TAB_CONFIG: { id: Tab; label: string; icon: string }[] = [
     { id: "bookings",    label: "Bookings",   icon: "📅" },
     { id: "wishlist",    label: "Wishlist",   icon: "💜" },
-    { id: "my-salon",    label: "My Salon",    icon: "✂️" },
-    { id: "my-services", label: "Services",    icon: "💅" },
-    { id: "my-products", label: "My Products", icon: "🛍️" },
+    { id: "my-store",    label: "My Store",   icon: "✂️" },
+    { id: "my-services", label: "Services",   icon: "💅" },
     { id: "invite",      label: "Invite",     icon: "🎁" },
-    { id: "ads",         label: "Ads",        icon: "📣" },
     { id: "profile",     label: "Profile",    icon: "👤" },
   ];
 
@@ -2226,7 +2039,7 @@ export default function DashboardPage() {
   void handleSignOut;
 
   // Primary tabs shown in bottom action bar (mobile) — most used
-  const PRIMARY_TABS: Tab[] = ["bookings", "wishlist", "my-salon", "my-services", "profile"];
+  const PRIMARY_TABS: Tab[] = ["bookings", "wishlist", "my-store", "my-services", "profile"];
   const MORE_TABS = TAB_CONFIG.filter(t => !PRIMARY_TABS.includes(t.id));
 
   return (
@@ -2307,14 +2120,8 @@ export default function DashboardPage() {
         {/* ── Profile tab ── */}
         {tab === "profile" && <section><ProfileTab profile={profile} user={user} onUpdate={(p) => { setProfile(p); if (p.phone) setShowWhatsAppNudge(false); }} /></section>}
 
-        {/* ── Ads tab ── */}
-        {tab === "ads" && <section><AdsTab /></section>}
-
         {/* ── My Salon tab ── */}
-        {tab === "my-salon" && <section><MySalonTab user={user} /></section>}
-
-        {/* ── My Products tab ── */}
-        {tab === "my-products" && <section><MyProductsTab user={user} /></section>}
+        {tab === "my-store" && <section><MySalonTab user={user} /></section>}
 
         {/* ── My Services tab ── */}
         {tab === "my-services" && <section><MyServicesTab profile={profile} user={user} onUpdate={(p) => setProfile(p)} /></section>}

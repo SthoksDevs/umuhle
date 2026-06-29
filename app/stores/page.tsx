@@ -240,21 +240,21 @@ export default function StoresPage() {
         /* NO overflow:hidden here — that was clipping the dropdown */
       }}>
         <div style={{ maxWidth: 680, margin: "0 auto", position: "relative", zIndex: 1, textAlign: "center" }}>
-          <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "clamp(1.75rem,5vw,2.5rem)", marginBottom: "0.4rem", color: "#fff" }}>Beauty salons near you</h1>
-          <p style={{ color: "rgba(255,255,255,0.85)", fontSize: "1rem", marginBottom: "1.75rem" }}>Book hair, nails, makeup or lashes at a verified Umuhle partner salon.</p>
+          <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "clamp(1.75rem,5vw,2.5rem)", marginBottom: "0.4rem", color: "#fff" }}>Beauty stores near you</h1>
+          <p style={{ color: "rgba(255,255,255,0.85)", fontSize: "1rem", marginBottom: "1.75rem" }}>Book hair, nails, makeup or lashes at a verified Umuhle partner store.</p>
           <SearchWithFilter
             searchValue={search}
             onSearchChange={e => setSearch(e.target.value)}
             activeFilters={activeFilters}
             onFiltersChange={setActiveFilters}
-            placeholder="Search by salon name or suburb…"
+            placeholder="Search by store name or suburb…"
           />
         </div>
       </div>
 
       <main style={{ maxWidth: 1200, margin: "0 auto", padding: "2rem 1.5rem" }}>
         {loading ? (
-          <div style={{ textAlign: "center", padding: "4rem", color: "var(--grey)" }}>Loading salons…</div>
+          <div style={{ textAlign: "center", padding: "4rem", color: "var(--grey)" }}>Loading stores…</div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign: "center", padding: "4rem" }}>
             <p style={{ fontSize: "1.1rem", color: "var(--grey)", marginBottom: "0.5rem" }}>No salons found.</p>

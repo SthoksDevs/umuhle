@@ -9,7 +9,7 @@ import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
 import type { Profile } from "@/types";
-import ProductForm, { productToForm, type ProductFormData } from "@/components/ProductForm";
+import ProductForm, { productToForm } from "@/components/ProductForm";
 
 const ICON = "/umuhle-icon.png";
 const SUPER_ADMIN_EMAIL = "info@umuhle.co.za";
@@ -25,7 +25,8 @@ type AdminTab =
   | "products"
   | "payments"
   | "umuhle-products"
-  | "add-salon";
+  | "add-salon"
+  | "email-log";
 
 type ModerationStatus = "pending" | "approved" | "rejected";
 
@@ -284,8 +285,8 @@ function AnalyticsTab({ analytics }: { analytics: Analytics | null }) {
     { label: "Active Users (30d)", value: analytics.activeUsers.toLocaleString(), icon: "🟢", color: "#2E7D32" },
     { label: "Total Order Volume", value: fmt(analytics.totalOrderVolume), icon: "💰", color: "#E65100" },
     { label: "Total Orders", value: analytics.totalOrders.toLocaleString(), icon: "📦", color: "#1565C0" },
-    { label: "Total Salons", value: analytics.totalSalons.toLocaleString(), icon: "✂️", color: "#4A148C" },
-    { label: "Pending Salons", value: analytics.pendingSalons.toLocaleString(), icon: "⏳", color: "#E65100" },
+    { label: "Total Stores", value: analytics.totalSalons.toLocaleString(), icon: "✂️", color: "#4A148C" },
+    { label: "Pending Stores", value: analytics.pendingSalons.toLocaleString(), icon: "⏳", color: "#E65100" },
     { label: "Total Products", value: analytics.totalProducts.toLocaleString(), icon: "🛍️", color: "#0F6E56" },
     { label: "Pending Withdrawals", value: fmt(analytics.pendingWithdrawalAmount), icon: "💳", color: "#C62828" },
   ];
@@ -382,7 +383,7 @@ function SalonsTab({ supabase }: { supabase: ReturnType<typeof createClient> }) 
         Salon Publications
       </h2>
       <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-        Review and verify salon listings submitted by partners.
+        Review and verify store listings submitted by partners.
       </p>
       <div style={{ display: "flex", gap: "0.35rem", marginBottom: "1.25rem", flexWrap: "wrap" }}>
         {(["pending", "approved", "rejected", "all"] as const).map((f) => (
@@ -883,20 +884,8 @@ function ProductsReviewTab({ supabase }: { supabase: ReturnType<typeof createCli
     setActionLoading(null);
   };
 
-  const handleEdited = (saved: ProductFormData & { id: string }) => {
-    setProducts(prev => prev.map(p => p.id === saved.id ? {
-      ...p,
-      name:              saved.name,
-      description:       saved.description || null,
-      price:             Math.round(Number(saved.price) * 100),
-      category:          saved.category || null,
-      stock_count:       parseInt(saved.stock_count) || 0,
-      image_url:         saved.image_url ?? null,
-      weight_g:          saved.weight_g   ? parseInt(saved.weight_g)    : null,
-      length_cm:         saved.length_cm  ? parseFloat(saved.length_cm) : null,
-      width_cm:          saved.width_cm   ? parseFloat(saved.width_cm)  : null,
-      height_cm:         saved.height_cm  ? parseFloat(saved.height_cm) : null,
-    } : p));
+  const handleEdited = (saved: ProductRow & { id: string }) => {
+    setProducts(prev => prev.map(p => p.id === saved.id ? { ...p, ...saved } : p));
     setEditTarget(null);
   };
 
@@ -1211,23 +1200,11 @@ function UmuhleProductsTab({
   };
 
   // Called by ProductForm after a successful save
-  const handleSaved = (saved: ProductFormData & { id: string }) => {
-    const normalized: Partial<ProductRow> = {
-      name:        saved.name,
-      description: saved.description || null,
-      price:       Math.round(Number(saved.price) * 100),
-      category:    saved.category || null,
-      stock_count: parseInt(saved.stock_count) || 0,
-      image_url:   saved.image_url ?? null,
-      weight_g:    saved.weight_g   ? parseInt(saved.weight_g)    : null,
-      length_cm:   saved.length_cm  ? parseFloat(saved.length_cm) : null,
-      width_cm:    saved.width_cm   ? parseFloat(saved.width_cm)  : null,
-      height_cm:   saved.height_cm  ? parseFloat(saved.height_cm) : null,
-    };
+  const handleSaved = (saved: ProductRow & { id: string }) => {
     setProducts((prev) => {
       const exists = prev.find((p) => p.id === saved.id);
-      if (exists) return prev.map((p) => p.id === saved.id ? { ...p, ...normalized } : p);
-      return [{ id: saved.id, is_active: true, moderation_status: "approved", created_at: new Date().toISOString(), partner_id: "", ...normalized } as ProductRow, ...prev];
+      if (exists) return prev.map((p) => p.id === saved.id ? { ...p, ...saved } : p);
+      return [saved as unknown as ProductRow, ...prev];
     });
     setShowForm(false);
     setEditTarget(null);
@@ -1641,6 +1618,96 @@ function AddSalonTab({ supabase, userId }: { supabase: ReturnType<typeof createC
 }
 
 
+
+// ── EmailLogTab ───────────────────────────────────────────────────────────────
+
+interface EmailLogRow {
+  id: string;
+  to_address: string;
+  subject: string;
+  template: string;
+  reference_id: string | null;
+  status: "sent" | "failed";
+  error_msg: string | null;
+  sent_at: string;
+}
+
+function EmailLogTab({ supabase }: { supabase: ReturnType<typeof createClient> }) {
+  const [rows,    setRows]    = useState<EmailLogRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter,  setFilter]  = useState<"all" | "sent" | "failed">("all");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const q = supabase
+      .from("email_log")
+      .select("*")
+      .order("sent_at", { ascending: false })
+      .limit(200);
+    if (filter !== "all") q.eq("status", filter);
+    const { data } = await q;
+    setRows((data ?? []) as EmailLogRow[]);
+    setLoading(false);
+  }, [supabase, filter]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const fmt = (iso: string) => {
+    const d = new Date(iso);
+    return d.toLocaleString("en-ZA", { dateStyle: "short", timeStyle: "short" });
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+        <div>
+          <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", margin: 0 }}>Email log</h2>
+          <p style={{ color: "var(--grey)", fontSize: "0.85rem", marginTop: "0.25rem" }}>Last 200 emails sent from the platform.</p>
+        </div>
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          {(["all", "sent", "failed"] as const).map(f => (
+            <button key={f} onClick={() => setFilter(f)}
+              style={{ padding: "0.35rem 0.9rem", borderRadius: 100, border: `1.5px solid ${filter === f ? "var(--plum)" : "rgba(155,127,184,0.3)"}`, background: filter === f ? "var(--plum-t)" : "#fff", color: filter === f ? "var(--plum)" : "var(--grey)", fontWeight: filter === f ? 600 : 400, fontSize: "0.8rem", cursor: "pointer", textTransform: "capitalize" }}>
+              {f}
+            </button>
+          ))}
+          <button onClick={load} style={{ padding: "0.35rem 0.9rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "#fff", color: "var(--grey)", fontSize: "0.8rem", cursor: "pointer" }}>↻</button>
+        </div>
+      </div>
+
+      {loading ? (
+        <p style={{ color: "var(--grey)" }}>Loading…</p>
+      ) : rows.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "3rem", color: "var(--grey)" }}>
+          {filter === "failed" ? "No failed emails. 🎉" : "No emails logged yet."}
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+          {rows.map(r => (
+            <div key={r.id} style={{ background: "#fff", borderRadius: 12, border: `1.5px solid ${r.status === "failed" ? "#FFCDD2" : "rgba(155,127,184,0.12)"}`, padding: "0.85rem 1.1rem" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: "0.75rem" }}>
+                <span style={{ fontSize: "1.1rem", marginTop: "0.05rem", flexShrink: 0 }}>{r.status === "failed" ? "❌" : "✅"}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ fontWeight: 600, fontSize: "0.875rem", margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.subject}</p>
+                  <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: "0.15rem 0 0" }}>
+                    <span style={{ background: "#F3EEF9", color: "var(--plum)", borderRadius: 4, padding: "1px 5px", fontSize: "0.7rem", fontWeight: 600, marginRight: 6 }}>{r.template}</span>
+                    To: {r.to_address}
+                    {r.reference_id && <span style={{ color: "#bbb", marginLeft: 6, fontFamily: "monospace", fontSize: "0.72rem" }}>{r.reference_id.slice(0, 8)}…</span>}
+                  </p>
+                  {r.status === "failed" && r.error_msg && (
+                    <p style={{ fontSize: "0.75rem", color: "#C62828", background: "#FFF5F5", borderRadius: 6, padding: "0.25rem 0.5rem", marginTop: "0.35rem" }}>{r.error_msg}</p>
+                  )}
+                </div>
+                <span style={{ fontSize: "0.72rem", color: "#bbb", flexShrink: 0, whiteSpace: "nowrap" }}>{fmt(r.sent_at)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main Admin Dashboard ───────────────────────────────────────────────────────
 
 export default function AdminDashboard() {
@@ -1735,13 +1802,14 @@ export default function AdminDashboard() {
 
   const TAB_CONFIG: { id: AdminTab; label: string; icon: string; badge?: number }[] = [
     { id: "analytics", label: "Analytics", icon: "📊" },
-    { id: "salons", label: "Salons", icon: "✂️", badge: analytics?.pendingSalons },
+    { id: "salons", label: "Stores", icon: "✂️", badge: analytics?.pendingSalons },
     { id: "users", label: "Users", icon: "👥" },
     { id: "ads", label: "Ads", icon: "📣", badge: analytics?.pendingAds },
     { id: "products", label: "Products", icon: "🛍️", badge: analytics?.pendingProducts },
     { id: "payments", label: "Payments", icon: "💰", badge: analytics?.pendingWithdrawals },
     { id: "umuhle-products", label: "Umuhle Products", icon: "⭐" },
-    { id: "add-salon", label: "Add Salon", icon: "➕" },
+    { id: "add-salon", label: "Add Store", icon: "➕" },
+    { id: "email-log", label: "Emails", icon: "📧" },
   ];
 
   const PRIMARY_TABS: AdminTab[] = ["analytics", "salons", "users", "products", "payments"];
@@ -1800,6 +1868,7 @@ export default function AdminDashboard() {
         {tab === "payments" && <PaymentsTab supabase={supabase} />}
         {tab === "umuhle-products" && <UmuhleProductsTab supabase={supabase} userId={user.id} />}
         {tab === "add-salon" && <AddSalonTab supabase={supabase} userId={user.id} />}
+        {tab === "email-log" && <EmailLogTab supabase={supabase} />}
       </main>
 
       {/* Mobile Bottom Bar */}

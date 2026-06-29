@@ -1,12 +1,25 @@
 // app/api/payfast/notify/route.ts
 // PayFast Instant Transaction Notification (ITN) handler
+//
+// Flow for bookings:
+//   COMPLETE  → create real booking from booking_intent, send WhatsApp + admin email
+//   CANCELLED → mark intent cancelled, send admin failure email
+// Flow for orders:
+//   COMPLETE  → mark paid, decrement stock, send admin email
+//   CANCELLED → mark cancelled, send admin failure email
+
 import { NextRequest, NextResponse } from "next/server";
 import { validateITN } from "@/lib/payfast";
 import { createServiceClient } from "@/lib/supabase/server";
 import { notifyBookingCreated } from "@/lib/whatsapp";
+import {
+  sendBookingConfirmedEmail,
+  sendBookingFailedEmail,
+  sendOrderPaidEmail,
+  sendOrderFailedEmail,
+} from "@/lib/email";
 
 export async function POST(req: NextRequest) {
-  // Parse URL-encoded body from PayFast
   const text = await req.text();
   const params = Object.fromEntries(new URLSearchParams(text));
 
@@ -17,90 +30,217 @@ export async function POST(req: NextRequest) {
     return new NextResponse("INVALID", { status: 200 }); // Always 200 to PayFast
   }
 
-  // Only process COMPLETE payments
-  if (params.payment_status !== "COMPLETE") {
-    return new NextResponse("OK", { status: 200 });
-  }
-
-  const supabase = await createServiceClient();
-  const paymentId = params.m_payment_id;
-  const paymentType = params.custom_str1 as "booking" | "order" | "ad" | "salon" | undefined;
-  const payfastPaymentId = params.pf_payment_id;
+  const supabase       = await createServiceClient();
+  const paymentId      = params.m_payment_id;
+  const paymentType    = params.custom_str1 as "booking" | "order" | "ad" | "salon" | undefined;
+  const paymentStatus  = params.payment_status; // "COMPLETE" | "CANCELLED" | "FAILED" | "PENDING"
+  const pfPaymentId    = params.pf_payment_id;
 
   try {
     switch (paymentType) {
-      case "booking": {
-        const { data: booking } = await supabase
-          .from("bookings")
-          .update({ status: "confirmed", payfast_payment_id: payfastPaymentId })
-          .eq("id", paymentId)
-          .eq("status", "pending_payment")
-          .select(`
-            id, booking_date, booking_time, meeting_address, notes,
-            client:profiles!bookings_client_id_fkey(full_name, phone),
-            artist:artists!bookings_artist_id_fkey(
-              display_name, point_of_contact_name, point_of_contact_phone,
-              profile:profiles!artists_profile_id_fkey(phone)
-            ),
-            service:services(name, duration_minutes)
-          `)
-          .single();
 
-        if (booking) {
-          const clientRow = Array.isArray(booking.client) ? booking.client[0] : booking.client;
-          const artistRow = Array.isArray(booking.artist) ? booking.artist[0] : booking.artist;
+      // ── BOOKING ─────────────────────────────────────────────────────────────
+      case "booking": {
+        if (paymentStatus === "COMPLETE") {
+          // Fetch the intent (contains all booking data)
+          const { data: intent } = await supabase
+            .from("booking_intents")
+            .select("*")
+            .eq("id", paymentId)
+            .eq("status", "pending")
+            .single();
+
+          if (!intent) {
+            console.warn("PayFast ITN: booking intent not found or already processed", paymentId);
+            break;
+          }
+
+          // Mark intent as completed
+          await supabase
+            .from("booking_intents")
+            .update({ status: "completed" })
+            .eq("id", paymentId);
+
+          // Create the real booking now that payment is confirmed
+          const { data: booking, error: bookingErr } = await supabase
+            .from("bookings")
+            .insert({
+              client_id:        intent.client_id,
+              artist_id:        intent.artist_id,
+              service_id:       intent.service_id,
+              booking_date:     intent.booking_date,
+              booking_time:     intent.booking_time,
+              meeting_address:  intent.meeting_address,
+              status:           "confirmed",
+              total_amount:     intent.total_amount,
+              notes:            intent.notes,
+              client_poc_name:  intent.client_poc_name,
+              client_poc_phone: intent.client_poc_phone,
+              artist_poc_name:  intent.artist_poc_name,
+              artist_poc_phone: intent.artist_poc_phone,
+              payfast_payment_id: pfPaymentId,
+            })
+            .select(`
+              id, booking_date, booking_time, meeting_address, notes, total_amount,
+              client:profiles!bookings_client_id_fkey(full_name, phone, email),
+              artist:artists!bookings_artist_id_fkey(
+                display_name, point_of_contact_name, point_of_contact_phone,
+                profile:profiles!artists_profile_id_fkey(phone)
+              ),
+              service:services(name, duration_minutes)
+            `)
+            .single();
+
+          if (bookingErr || !booking) {
+            console.error("PayFast ITN: failed to create booking from intent", bookingErr);
+            break;
+          }
+
+          const clientRow  = Array.isArray(booking.client)  ? booking.client[0]  : booking.client;
+          const artistRow  = Array.isArray(booking.artist)  ? booking.artist[0]  : booking.artist;
           const serviceRow = Array.isArray(booking.service) ? booking.service[0] : booking.service;
           const artistProfileRow = Array.isArray(artistRow?.profile)
             ? artistRow.profile[0]
             : artistRow?.profile;
 
-          const clientPhone = clientRow?.phone as string | undefined;
+          const clientPhone = clientRow?.phone  as string | undefined;
           const artistPhone = artistProfileRow?.phone as string | undefined;
 
+          // WhatsApp notifications (fire-and-forget, don't block)
           if (clientPhone && artistPhone) {
-            await notifyBookingCreated({
-              clientName: clientRow.full_name as string,
+            notifyBookingCreated({
+              clientName:       clientRow.full_name as string,
               clientPhone,
-              artistName: artistRow.display_name as string,
+              artistName:       artistRow.display_name as string,
               artistPhone,
-              date: booking.booking_date,
-              time: booking.booking_time,
-              serviceName: serviceRow?.name as string,
-              meetingAddress: booking.meeting_address ?? undefined,
+              date:             booking.booking_date,
+              time:             booking.booking_time,
+              serviceName:      serviceRow?.name as string,
+              meetingAddress:   booking.meeting_address ?? undefined,
               expectedDuration: serviceRow?.duration_minutes ?? undefined,
-            });
+            }).catch(e => console.error("WhatsApp notify error:", e));
+          }
+
+          // Admin email
+          sendBookingConfirmedEmail({
+            bookingId:     booking.id,
+            clientName:    clientRow?.full_name as string ?? "Unknown",
+            clientEmail:   clientRow?.email    as string ?? "",
+            artistName:    artistRow?.display_name as string ?? "Unknown",
+            serviceName:   serviceRow?.name as string ?? "Service",
+            date:          booking.booking_date,
+            time:          booking.booking_time,
+            amount:        booking.total_amount,
+            meetingAddress: booking.meeting_address ?? undefined,
+          }).catch(e => console.error("Admin email error:", e));
+
+        } else if (paymentStatus === "CANCELLED" || paymentStatus === "FAILED") {
+          // Mark the intent as cancelled/failed — no booking was ever created
+          const reason = paymentStatus === "CANCELLED" ? "cancelled" : "failed";
+
+          const { data: intent } = await supabase
+            .from("booking_intents")
+            .update({ status: reason === "cancelled" ? "cancelled" : "failed" })
+            .eq("id", paymentId)
+            .eq("status", "pending")
+            .select(`
+              *,
+              client:profiles!booking_intents_client_id_fkey(full_name, email),
+              service:services(name)
+            `)
+            .single();
+
+          if (intent) {
+            const clientRow  = Array.isArray(intent.client)  ? intent.client[0]  : intent.client;
+            const serviceRow = Array.isArray(intent.service) ? intent.service[0] : intent.service;
+
+            sendBookingFailedEmail({
+              bookingId:   paymentId,
+              clientName:  clientRow?.full_name ?? "Unknown",
+              clientEmail: clientRow?.email     ?? "",
+              serviceName: serviceRow?.name     ?? "Service",
+              date:        intent.booking_date,
+              time:        intent.booking_time,
+              amount:      intent.total_amount,
+              reason,
+            }).catch(e => console.error("Admin failed email error:", e));
           }
         }
         break;
       }
 
+      // ── ORDER ────────────────────────────────────────────────────────────────
       case "order": {
-        // Mark order paid and decrement stock
-        const { data: orderItems } = await supabase
-          .from("order_items")
-          .select("product_id, quantity")
-          .eq("order_id", paymentId);
+        if (paymentStatus === "COMPLETE") {
+          // Fetch order items before updating (need them for email)
+          const { data: orderItems } = await supabase
+            .from("order_items")
+            .select("product_id, quantity, unit_price, product:products(name)")
+            .eq("order_id", paymentId);
 
-        await supabase
-          .from("orders")
-          .update({ status: "paid", payfast_payment_id: payfastPaymentId })
-          .eq("id", paymentId)
-          .eq("status", "pending_payment");
+          const { data: order } = await supabase
+            .from("orders")
+            .update({ status: "paid", payfast_payment_id: pfPaymentId })
+            .eq("id", paymentId)
+            .eq("status", "pending_payment")
+            .select("total_amount, shipping_address, client:profiles!orders_client_id_fkey(full_name, email)")
+            .single();
 
-        if (orderItems) {
-          for (const item of orderItems) {
-            await supabase.rpc("decrement_stock", {
-              p_product_id: item.product_id,
-              p_qty: item.quantity,
-            });
+          if (orderItems) {
+            for (const item of orderItems) {
+              await supabase.rpc("decrement_stock", {
+                p_product_id: item.product_id,
+                p_qty:        item.quantity,
+              });
+            }
+          }
+
+          if (order) {
+            const clientRow = Array.isArray(order.client) ? order.client[0] : order.client;
+            sendOrderPaidEmail({
+              orderId:         paymentId,
+              clientName:      clientRow?.full_name      ?? "Unknown",
+              clientEmail:     clientRow?.email          ?? "",
+              totalAmount:     order.total_amount,
+              shippingAddress: order.shipping_address    ?? undefined,
+              items: (orderItems ?? []).map(i => ({
+                name:       (Array.isArray(i.product) ? i.product[0] : i.product)?.name ?? "Product",
+                quantity:   i.quantity,
+                unit_price: i.unit_price,
+              })),
+            }).catch(e => console.error("Admin order email error:", e));
+          }
+
+        } else if (paymentStatus === "CANCELLED" || paymentStatus === "FAILED") {
+          const reason = paymentStatus === "CANCELLED" ? "cancelled" : "failed";
+
+          const { data: order } = await supabase
+            .from("orders")
+            .update({ status: "cancelled" })
+            .eq("id", paymentId)
+            .eq("status", "pending_payment")
+            .select("total_amount, client:profiles!orders_client_id_fkey(full_name, email)")
+            .single();
+
+          if (order) {
+            const clientRow = Array.isArray(order.client) ? order.client[0] : order.client;
+            sendOrderFailedEmail({
+              orderId:     paymentId,
+              clientName:  clientRow?.full_name ?? "Unknown",
+              clientEmail: clientRow?.email     ?? "",
+              totalAmount: order.total_amount,
+              reason,
+            }).catch(e => console.error("Admin order failed email error:", e));
           }
         }
         break;
       }
 
+      // ── AD ───────────────────────────────────────────────────────────────────
       case "ad": {
+        if (paymentStatus !== "COMPLETE") break;
+
         const now = new Date();
-        // Determine expiry from package weeks — fetched from the ad record itself
         const { data: ad } = await supabase
           .from("ads")
           .select("package")
@@ -108,21 +248,18 @@ export async function POST(req: NextRequest) {
           .single();
 
         const WEEKS: Record<string, number> = {
-          starter: 6,
-          growth: 12,
-          business: 16,
-          premium: 24,
+          starter: 6, growth: 12, business: 16, premium: 24,
         };
-        const weeks = ad ? (WEEKS[ad.package] ?? 6) : 6;
+        const weeks     = ad ? (WEEKS[ad.package] ?? 6) : 6;
         const expiresAt = new Date(now.getTime() + weeks * 7 * 24 * 60 * 60 * 1000);
 
         await supabase
           .from("ads")
           .update({
-            status: "active",
-            payfast_payment_id: payfastPaymentId,
-            starts_at: now.toISOString(),
-            expires_at: expiresAt.toISOString(),
+            status:            "active",
+            payfast_payment_id: pfPaymentId,
+            starts_at:         now.toISOString(),
+            expires_at:        expiresAt.toISOString(),
             moderation_status: "scanning",
           })
           .eq("id", paymentId)
@@ -130,15 +267,17 @@ export async function POST(req: NextRequest) {
         break;
       }
 
+      // ── SALON ─────────────────────────────────────────────────────────────────
       case "salon": {
-        const now = new Date();
+        if (paymentStatus !== "COMPLETE") break;
+
+        const now     = new Date();
         const oneYear = new Date(now);
         oneYear.setFullYear(oneYear.getFullYear() + 1);
 
-        // Update the subscription payment record
         const { data: payment } = await supabase
           .from("salon_subscription_payments")
-          .update({ status: "paid", payfast_payment_id: payfastPaymentId })
+          .update({ status: "paid", payfast_payment_id: pfPaymentId })
           .eq("id", paymentId)
           .eq("status", "pending")
           .select("salon_id")
@@ -158,7 +297,7 @@ export async function POST(req: NextRequest) {
     }
   } catch (err) {
     console.error("PayFast ITN processing error:", err);
-    // Still return 200 so PayFast doesn't keep retrying with bad data
+    // Still return 200 — PayFast will retry on non-200 forever
   }
 
   return new NextResponse("OK", { status: 200 });

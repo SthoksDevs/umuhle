@@ -28,7 +28,12 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   const type: "booking" | "order" | "ad" | "salon" = body.type ?? "booking";
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ?? `https://${req.headers.get("host")}`;
+
+  // Prefer the explicit env var; fall back to the request host so it also
+  // works on preview deployments without re-setting the env var.
+  const baseUrl =
+    process.env.NEXT_PUBLIC_BASE_URL ??
+    `https://${req.headers.get("x-forwarded-host") ?? req.headers.get("host")}`;
 
   const [firstName, ...rest] = (profile.full_name ?? "").split(" ");
   const lastName = rest.join(" ") || "User";
@@ -51,6 +56,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Failed to initiate payment" }, { status: 500 });
   }
 }
+
+// ── Booking ───────────────────────────────────────────────────────────────────
+// CHANGED: no longer inserts into `bookings` here.
+// Instead creates a `booking_intents` row. The ITN handler creates the real
+// booking only once PayFast confirms COMPLETE, preventing orphaned rows.
 
 async function initiateBooking(
   supabase: Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>,
@@ -77,39 +87,49 @@ async function initiateBooking(
     .eq("id", artistId)
     .single();
 
-  const bookingId = uuidv4();
+  // Use a fresh UUID as the payment ID — this is stored in booking_intents,
+  // NOT in the bookings table yet.
+  const intentId = uuidv4();
 
-  await supabase.from("bookings").insert({
-    id: bookingId,
-    client_id: userId,
-    artist_id: artistId,
-    service_id: serviceId,
-    booking_date: bookingDate,
-    booking_time: bookingTime,
-    meeting_address: meetingAddress || null,
-    status: "pending_payment",
-    total_amount: service.price,
-    notes: notes || null,
-    client_poc_name: clientPocName || null,
+  const { error: intentErr } = await supabase.from("booking_intents").insert({
+    id:               intentId,
+    client_id:        userId,
+    artist_id:        artistId,
+    service_id:       serviceId,
+    booking_date:     bookingDate,
+    booking_time:     bookingTime,
+    meeting_address:  meetingAddress || null,
+    total_amount:     service.price,
+    notes:            notes || null,
+    client_poc_name:  clientPocName || null,
     client_poc_phone: clientPocPhone || null,
-    artist_poc_name: artist?.point_of_contact_name || null,
+    artist_poc_name:  artist?.point_of_contact_name || null,
     artist_poc_phone: artist?.point_of_contact_phone || null,
+    status:           "pending",
   });
 
+  if (intentErr) {
+    console.error("booking_intents insert error:", intentErr);
+    return NextResponse.json({ error: "Could not create booking intent" }, { status: 500 });
+  }
+
   const params = buildPaymentParams({
-    paymentId: bookingId,
-    amount: service.price,
-    itemName: `Booking: ${service.name}`,
+    paymentId:       intentId,
+    amount:          service.price,
+    itemName:        `Booking: ${service.name}`,
     itemDescription: `${artist?.display_name ?? ""} — ${bookingDate} at ${bookingTime}`,
     firstName,
     lastName,
-    email: profile.email,
+    email:           profile.email,
     baseUrl,
-    customStr1: "booking",
+    customStr1:      "booking",
   });
 
   return NextResponse.json({ payfastUrl: PAYFAST_URL, params });
 }
+
+// ── Order ─────────────────────────────────────────────────────────────────────
+// Unchanged — orders table already uses pending_payment status correctly
 
 async function initiateOrder(
   supabase: Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>,
@@ -137,19 +157,21 @@ async function initiateOrder(
   const { orderId, totalAmount, lines } = created.result;
 
   const params = buildPaymentParams({
-    paymentId: orderId,
-    amount: totalAmount,
-    itemName: `Umuhle Shop Order`,
+    paymentId:       orderId,
+    amount:          totalAmount,
+    itemName:        `Umuhle Shop Order`,
     itemDescription: `${lines.length} item(s)`,
     firstName,
     lastName,
-    email: profile.email,
+    email:           profile.email,
     baseUrl,
-    customStr1: "order",
+    customStr1:      "order",
   });
 
   return NextResponse.json({ payfastUrl: PAYFAST_URL, params });
 }
+
+// ── Ad ────────────────────────────────────────────────────────────────────────
 
 async function initiateAd(
   supabase: Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>,
@@ -168,34 +190,36 @@ async function initiateAd(
   const adId = uuidv4();
 
   await supabase.from("ads").insert({
-    id: adId,
-    partner_id: userId,
+    id:                adId,
+    partner_id:        userId,
     title,
-    description: description || null,
-    image_url: imageUrl || null,
-    link_url: linkUrl || null,
-    category: category || "general",
-    package: packageId,
-    ads_count: pkg.ads,
-    price: pkg.price,
-    status: "pending_payment",
+    description:       description || null,
+    image_url:         imageUrl || null,
+    link_url:          linkUrl || null,
+    category:          category || "general",
+    package:           packageId,
+    ads_count:         pkg.ads,
+    price:             pkg.price,
+    status:            "pending_payment",
     moderation_status: "draft",
   });
 
   const params = buildPaymentParams({
-    paymentId: adId,
-    amount: pkg.price,
-    itemName: `Umuhle Ad — ${pkg.name} Package`,
+    paymentId:       adId,
+    amount:          pkg.price,
+    itemName:        `Umuhle Ad — ${pkg.name} Package`,
     itemDescription: `${pkg.ads} ad(s) for ${pkg.label}`,
     firstName,
     lastName,
-    email: profile.email,
+    email:           profile.email,
     baseUrl,
-    customStr1: "ad",
+    customStr1:      "ad",
   });
 
   return NextResponse.json({ payfastUrl: PAYFAST_URL, params });
 }
+
+// ── Salon ─────────────────────────────────────────────────────────────────────
 
 async function initiateSalon(
   supabase: Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>,
@@ -212,23 +236,23 @@ async function initiateSalon(
   const paymentId = uuidv4();
 
   await supabase.from("salon_subscription_payments").insert({
-    id: paymentId,
-    salon_id: salonId,
+    id:         paymentId,
+    salon_id:   salonId,
     partner_id: userId,
-    amount: SALON_PRICE,
-    status: "pending",
+    amount:     SALON_PRICE,
+    status:     "pending",
   });
 
   const params = buildPaymentParams({
     paymentId,
-    amount: SALON_PRICE,
-    itemName: "Umuhle Store Listing — Annual Subscription",
-    itemDescription: "12-month store listing on Umuhle",
+    amount:          SALON_PRICE,
+    itemName:        "Umuhle Salon Listing — Annual Subscription",
+    itemDescription: "12-month salon listing on Umuhle",
     firstName,
     lastName,
-    email: profile.email,
+    email:           profile.email,
     baseUrl,
-    customStr1: "salon",
+    customStr1:      "salon",
   });
 
   return NextResponse.json({ payfastUrl: PAYFAST_URL, params });

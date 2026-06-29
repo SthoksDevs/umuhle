@@ -59,7 +59,7 @@ function YTEmbed({ videoId }: { videoId: string }) {
   );
   return (
     <div style={{ position: "relative", paddingBottom: "56.25%", borderRadius: 14, overflow: "hidden" }}>
-      <iframe src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0`} allow="autoplay;encrypted-media;picture-in-picture" allowFullScreen title="Salon video" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none" }} />
+      <iframe src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0`} allow="autoplay;encrypted-media;picture-in-picture" allowFullScreen title="Store video" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none" }} />
     </div>
   );
 }
