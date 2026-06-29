@@ -15,19 +15,52 @@ export function generateSignature(
   params: Record<string, string>,
   passphrase?: string
 ): string {
-  const sorted = Object.keys(params)
-    .sort()
-    .filter((k) => k !== "signature" && params[k] !== "");
+  const filtered = Object.keys(params)
+    .filter(
+      (key) =>
+        key !== "signature" &&
+        params[key] !== undefined &&
+        params[key] !== null &&
+        params[key] !== ""
+    )
+    .sort();
 
-  let str = sorted
-    .map((k) => `${k}=${encodeURIComponent(params[k]).replace(/%20/g, "+")}`)
+  const data = filtered
+    .map((key) => {
+      const value = params[key];
+
+      return (
+        `${key}=` +
+        encodeURIComponent(value)
+          .replace(/!/g, "%21")
+          .replace(/'/g, "%27")
+          .replace(/\(/g, "%28")
+          .replace(/\)/g, "%29")
+          .replace(/\*/g, "%2A")
+          .replace(/%20/g, "+")
+      );
+    })
     .join("&");
 
-  if (passphrase) {
-    str += `&passphrase=${encodeURIComponent(passphrase).replace(/%20/g, "+")}`;
-  }
+  const signatureString = passphrase
+    ? `${data}&passphrase=${encodeURIComponent(passphrase).replace(/%20/g, "+")}`
+    : data;
 
-  return crypto.createHash("md5").update(str).digest("hex");
+  console.log("Signature string:");
+  console.log(signatureString);
+
+  console.log("Signature:");
+  console.log(
+    crypto
+        .createHash("md5")
+        .update(signatureString)
+        .digest("hex")
+  );
+
+  return crypto
+    .createHash("md5")
+    .update(signatureString)
+    .digest("hex");
 }
 
 export function buildPaymentParams(options: {
@@ -46,7 +79,7 @@ export function buildPaymentParams(options: {
     merchant_id: process.env.PAYFAST_MERCHANT_ID!,
     merchant_key: process.env.PAYFAST_MERCHANT_KEY!,
     return_url: `${options.baseUrl}/payment/success?ref=${options.paymentId}`,
-    cancel_url: `${options.baseUrl}/payment/cancel?ref=${options.paymentId}`,
+    cancel_url: `${options.baseUrl}/payment/cancelled?ref=${options.paymentId}`,
     notify_url: `${options.baseUrl}/api/payfast/notify`,
     name_first: options.firstName,
     name_last: options.lastName,
