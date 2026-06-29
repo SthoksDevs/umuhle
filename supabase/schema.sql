@@ -383,3 +383,36 @@ CREATE TABLE public.product_variants (
   CONSTRAINT product_variants_pkey PRIMARY KEY (id),
   CONSTRAINT product_variants_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id)
 );
+CREATE TABLE public.booking_intents (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  client_id uuid NOT NULL,
+  artist_id uuid NOT NULL,
+  service_id uuid NOT NULL,
+  booking_date date NOT NULL,
+  booking_time time without time zone NOT NULL,
+  total_amount integer NOT NULL,
+  meeting_address text,
+  notes text,
+  client_poc_name text,
+  client_poc_phone text,
+  artist_poc_name text,
+  artist_poc_phone text,
+  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'completed'::text, 'cancelled'::text, 'failed'::text])),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  expires_at timestamp with time zone NOT NULL DEFAULT (now() + '02:00:00'::interval),
+  CONSTRAINT booking_intents_pkey PRIMARY KEY (id),
+  CONSTRAINT booking_intents_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.profiles(id),
+  CONSTRAINT booking_intents_artist_id_fkey FOREIGN KEY (artist_id) REFERENCES public.artists(id),
+  CONSTRAINT booking_intents_service_id_fkey FOREIGN KEY (service_id) REFERENCES public.services(id)
+);
+CREATE TABLE public.email_log (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  to_address text NOT NULL,
+  subject text NOT NULL,
+  template text NOT NULL,
+  reference_id text,
+  status text NOT NULL DEFAULT 'sent'::text CHECK (status = ANY (ARRAY['sent'::text, 'failed'::text])),
+  error_msg text,
+  sent_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT email_log_pkey PRIMARY KEY (id)
+);

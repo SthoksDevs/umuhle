@@ -9,7 +9,7 @@ import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
 import type { Profile } from "@/types";
-import ProductForm, { productToForm } from "@/components/ProductForm";
+import ProductForm, { productToForm, type ProductFormData } from "@/components/ProductForm";
 
 const ICON = "/umuhle-icon.png";
 const SUPER_ADMIN_EMAIL = "info@umuhle.co.za";
@@ -884,8 +884,24 @@ function ProductsReviewTab({ supabase }: { supabase: ReturnType<typeof createCli
     setActionLoading(null);
   };
 
-  const handleEdited = (saved: ProductRow & { id: string }) => {
-    setProducts(prev => prev.map(p => p.id === saved.id ? { ...p, ...saved } : p));
+  const handleEdited = (saved: ProductFormData & { id: string }) => {
+    setProducts(prev => prev.map(p =>
+      p.id === saved.id
+        ? {
+            ...p,                                          // keep DB-only fields (is_active, moderation_status, created_at, partner_id, …)
+            name:        saved.name,
+            description: saved.description || null,
+            price:       Math.round(Number(saved.price) * 100),
+            category:    saved.category || null,
+            stock_count: parseInt(saved.stock_count) || 0,
+            image_url:   saved.image_url ?? p.image_url,
+            weight_g:    saved.weight_g   ? parseInt(saved.weight_g)    : null,
+            length_cm:   saved.length_cm  ? parseFloat(saved.length_cm) : null,
+            width_cm:    saved.width_cm   ? parseFloat(saved.width_cm)  : null,
+            height_cm:   saved.height_cm  ? parseFloat(saved.height_cm) : null,
+          }
+        : p
+    ));
     setEditTarget(null);
   };
 
