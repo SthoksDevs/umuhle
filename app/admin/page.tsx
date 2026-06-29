@@ -9,7 +9,7 @@ import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
 import type { Profile } from "@/types";
-import ProductForm, { productToForm } from "@/components/ProductForm";
+import ProductForm, { productToForm, type ProductFormData } from "@/components/ProductForm";
 
 const ICON = "/umuhle-icon.png";
 const SUPER_ADMIN_EMAIL = "info@umuhle.co.za";
@@ -883,8 +883,20 @@ function ProductsReviewTab({ supabase }: { supabase: ReturnType<typeof createCli
     setActionLoading(null);
   };
 
-  const handleEdited = (saved: ProductRow & { id: string }) => {
-    setProducts(prev => prev.map(p => p.id === saved.id ? { ...p, ...saved } : p));
+  const handleEdited = (saved: ProductFormData & { id: string }) => {
+    setProducts(prev => prev.map(p => p.id === saved.id ? {
+      ...p,
+      name:              saved.name,
+      description:       saved.description || null,
+      price:             Math.round(Number(saved.price) * 100),
+      category:          saved.category || null,
+      stock_count:       parseInt(saved.stock_count) || 0,
+      image_url:         saved.image_url ?? null,
+      weight_g:          saved.weight_g   ? parseInt(saved.weight_g)    : null,
+      length_cm:         saved.length_cm  ? parseFloat(saved.length_cm) : null,
+      width_cm:          saved.width_cm   ? parseFloat(saved.width_cm)  : null,
+      height_cm:         saved.height_cm  ? parseFloat(saved.height_cm) : null,
+    } : p));
     setEditTarget(null);
   };
 
@@ -1199,11 +1211,23 @@ function UmuhleProductsTab({
   };
 
   // Called by ProductForm after a successful save
-  const handleSaved = (saved: ProductRow & { id: string }) => {
+  const handleSaved = (saved: ProductFormData & { id: string }) => {
+    const normalized: Partial<ProductRow> = {
+      name:        saved.name,
+      description: saved.description || null,
+      price:       Math.round(Number(saved.price) * 100),
+      category:    saved.category || null,
+      stock_count: parseInt(saved.stock_count) || 0,
+      image_url:   saved.image_url ?? null,
+      weight_g:    saved.weight_g   ? parseInt(saved.weight_g)    : null,
+      length_cm:   saved.length_cm  ? parseFloat(saved.length_cm) : null,
+      width_cm:    saved.width_cm   ? parseFloat(saved.width_cm)  : null,
+      height_cm:   saved.height_cm  ? parseFloat(saved.height_cm) : null,
+    };
     setProducts((prev) => {
       const exists = prev.find((p) => p.id === saved.id);
-      if (exists) return prev.map((p) => p.id === saved.id ? { ...p, ...saved } : p);
-      return [saved as unknown as ProductRow, ...prev];
+      if (exists) return prev.map((p) => p.id === saved.id ? { ...p, ...normalized } : p);
+      return [{ id: saved.id, is_active: true, moderation_status: "approved", created_at: new Date().toISOString(), partner_id: "", ...normalized } as ProductRow, ...prev];
     });
     setShowForm(false);
     setEditTarget(null);

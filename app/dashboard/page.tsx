@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
+import ProductForm, { productToForm, type ProductFormData } from "@/components/ProductForm";
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
@@ -19,7 +20,7 @@ function formatDate(dateStr: string) {
 }
 
 // ── Tab type extended with "invite" and "my-salon" (replaces "my-store") ──────
-type Tab = "bookings" | "wishlist" | "profile" | "ads" | "my-salon" | "my-services" | "invite";
+type Tab = "bookings" | "wishlist" | "profile" | "ads" | "my-salon" | "my-services" | "invite" | "my-products";
 
 const SERVICE_TYPES = [
   { id: "hair",   label: "Hair",  banner: "/banners/hair.jpg",   description: "From protective styles to blowouts, braids to colour — let clients know exactly what you specialise in." },
@@ -1245,6 +1246,176 @@ function SalonBookingsInbox({ salonId }: { salonId: string }) {
   );
 }
  
+// ── MyProductsTab ──────────────────────────────────────────────────────────────
+
+interface DashboardProductRow {
+  id: string;
+  name: string;
+  description: string | null;
+  price: number;
+  image_url: string | null;
+  category: string | null;
+  stock_count: number;
+  is_active: boolean;
+  moderation_status: string;
+  weight_g: number | null;
+  length_cm: number | null;
+  width_cm: number | null;
+  height_cm: number | null;
+}
+
+function MyProductsTab({ user }: { user: { id: string } }) {
+  const supabase = createClient();
+  const [products,   setProducts]   = useState<DashboardProductRow[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [showForm,   setShowForm]   = useState(false);
+  const [editTarget, setEditTarget] = useState<DashboardProductRow | null>(null);
+
+  useEffect(() => {
+    supabase
+      .from("products")
+      .select("*")
+      .eq("partner_id", user.id)
+      .order("created_at", { ascending: false })
+      .then(({ data }) => {
+        setProducts((data ?? []) as DashboardProductRow[]);
+        setLoading(false);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user.id]);
+
+  const handleSaved = (saved: ProductFormData & { id: string }) => {
+    const normalized: DashboardProductRow = {
+      id:                saved.id,
+      name:              saved.name,
+      description:       saved.description || null,
+      price:             Math.round(Number(saved.price) * 100),
+      category:          saved.category || null,
+      stock_count:       parseInt(saved.stock_count) || 0,
+      image_url:         saved.image_url ?? null,
+      is_active:         false,
+      moderation_status: "scanning",
+      weight_g:          saved.weight_g   ? parseInt(saved.weight_g)    : null,
+      length_cm:         saved.length_cm  ? parseFloat(saved.length_cm) : null,
+      width_cm:          saved.width_cm   ? parseFloat(saved.width_cm)  : null,
+      height_cm:         saved.height_cm  ? parseFloat(saved.height_cm) : null,
+    };
+    setProducts(prev => {
+      const exists = prev.find(p => p.id === saved.id);
+      if (exists) return prev.map(p => p.id === saved.id ? { ...p, ...normalized } : p);
+      return [normalized, ...prev];
+    });
+    setShowForm(false);
+    setEditTarget(null);
+  };
+
+  const statusColor: Record<string, { bg: string; color: string; label: string }> = {
+    approved:     { bg: "#E1F5EE", color: "#0F6E56", label: "Live" },
+    scanning:     { bg: "#FFF3E0", color: "#E65100", label: "Under review" },
+    needs_review: { bg: "#FFF3E0", color: "#E65100", label: "Needs review" },
+    draft:        { bg: "#F5F5F5", color: "#757575", label: "Draft" },
+    rejected:     { bg: "#FFEBEE", color: "#C62828", label: "Rejected" },
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+        <div>
+          <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", margin: 0 }}>My Products</h2>
+          <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginTop: "0.25rem" }}>
+            Products are reviewed before going live in the shop.
+          </p>
+        </div>
+        {!showForm && !editTarget && (
+          <button onClick={() => setShowForm(true)} className="btn-plum"
+            style={{ padding: "0.55rem 1.25rem", fontSize: "0.85rem" }}>
+            + Add Product
+          </button>
+        )}
+      </div>
+
+      {showForm && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <ProductForm
+            partnerId={user.id}
+            supabase={supabase}
+            skipVerify={false}
+            onSaved={handleSaved}
+            onCancel={() => setShowForm(false)}
+          />
+        </div>
+      )}
+
+      {editTarget && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <ProductForm
+            initial={productToForm(editTarget)}
+            partnerId={user.id}
+            supabase={supabase}
+            skipVerify={false}
+            onSaved={handleSaved}
+            onCancel={() => setEditTarget(null)}
+          />
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "1rem" }}>
+          {[...Array(3)].map((_, i) => (
+            <div key={i} style={{ height: 100, borderRadius: 14, background: "var(--plum-t)", animation: "pulse 1.5s ease-in-out infinite" }} />
+          ))}
+        </div>
+      ) : products.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "3rem", background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.12)" }}>
+          <p style={{ color: "var(--grey)", marginBottom: "1rem" }}>You haven&apos;t listed any products yet.</p>
+          <button onClick={() => setShowForm(true)} className="btn-plum"
+            style={{ padding: "0.65rem 1.5rem", fontSize: "0.9rem" }}>
+            Add your first product
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+          {products.map(p => {
+            const s = statusColor[p.moderation_status] ?? statusColor.draft;
+            return (
+              <div key={p.id}
+                style={{ background: "#fff", borderRadius: 14, border: "1.5px solid rgba(155,127,184,0.12)", padding: "1rem 1.25rem", display: "flex", gap: "1rem", alignItems: "center" }}>
+                {p.image_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={p.image_url} alt="" style={{ width: 56, height: 56, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />
+                ) : (
+                  <div style={{ width: 56, height: 56, borderRadius: 8, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <span>🛍️</span>
+                  </div>
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                    <p style={{ fontWeight: 600, fontSize: "0.9rem", margin: 0 }}>{p.name}</p>
+                    <span style={{ background: s.bg, color: s.color, borderRadius: 100, padding: "1px 8px", fontSize: "0.72rem", fontWeight: 600, whiteSpace: "nowrap" }}>{s.label}</span>
+                  </div>
+                  <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: "0.1rem 0 0" }}>
+                    R{(p.price / 100).toFixed(0)} · {p.stock_count} in stock · {p.category}
+                  </p>
+                  {!p.weight_g && (
+                    <p style={{ fontSize: "0.72rem", color: "#E65100", margin: "0.1rem 0 0" }}>
+                      ⚠️ Add weight &amp; dimensions for courier quotes
+                    </p>
+                  )}
+                </div>
+                <button
+                  onClick={() => { setEditTarget(p); setShowForm(false); }}
+                  style={{ padding: "0.35rem 0.9rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "#fff", color: "var(--plum)", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer", flexShrink: 0 }}>
+                  Edit
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── MySalonTab ────────────────────────────────────────────────────────────────
 // This replaces the MySalonTab function in your dashboard/page.tsx
  
@@ -2043,8 +2214,9 @@ export default function DashboardPage() {
   const TAB_CONFIG: { id: Tab; label: string; icon: string }[] = [
     { id: "bookings",    label: "Bookings",   icon: "📅" },
     { id: "wishlist",    label: "Wishlist",   icon: "💜" },
-    { id: "my-salon",    label: "My Salon",   icon: "✂️" },
-    { id: "my-services", label: "Services",   icon: "💅" },
+    { id: "my-salon",    label: "My Salon",    icon: "✂️" },
+    { id: "my-services", label: "Services",    icon: "💅" },
+    { id: "my-products", label: "My Products", icon: "🛍️" },
     { id: "invite",      label: "Invite",     icon: "🎁" },
     { id: "ads",         label: "Ads",        icon: "📣" },
     { id: "profile",     label: "Profile",    icon: "👤" },
@@ -2140,6 +2312,9 @@ export default function DashboardPage() {
 
         {/* ── My Salon tab ── */}
         {tab === "my-salon" && <section><MySalonTab user={user} /></section>}
+
+        {/* ── My Products tab ── */}
+        {tab === "my-products" && <section><MyProductsTab user={user} /></section>}
 
         {/* ── My Services tab ── */}
         {tab === "my-services" && <section><MyServicesTab profile={profile} user={user} onUpdate={(p) => setProfile(p)} /></section>}

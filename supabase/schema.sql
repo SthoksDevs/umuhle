@@ -136,6 +136,10 @@ CREATE TABLE public.products (
   moderation_status text NOT NULL DEFAULT 'scanning'::text CHECK (moderation_status = ANY (ARRAY['draft'::text, 'scanning'::text, 'approved'::text, 'needs_review'::text, 'rejected'::text])),
   moderation_score numeric,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  weight_g integer,
+  length_cm numeric,
+  width_cm numeric,
+  height_cm numeric,
   CONSTRAINT products_pkey PRIMARY KEY (id),
   CONSTRAINT products_partner_id_fkey FOREIGN KEY (partner_id) REFERENCES public.profiles(id)
 );
@@ -349,4 +353,21 @@ CREATE TABLE public.coupons (
   CONSTRAINT coupons_pkey PRIMARY KEY (id),
   CONSTRAINT coupons_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id),
   CONSTRAINT coupons_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id)
+);
+CREATE TABLE public.site_config (
+  key text NOT NULL,
+  value text NOT NULL,
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_by uuid,
+  CONSTRAINT site_config_pkey PRIMARY KEY (key),
+  CONSTRAINT site_config_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id)
+);
+CREATE TABLE public.admin_otp (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  email text NOT NULL,
+  otp_hash text NOT NULL,
+  expires_at timestamp with time zone NOT NULL DEFAULT (now() + '00:10:00'::interval),
+  used boolean NOT NULL DEFAULT false,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT admin_otp_pkey PRIMARY KEY (id)
 );
