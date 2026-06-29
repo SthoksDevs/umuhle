@@ -154,8 +154,8 @@ export async function POST(req: NextRequest) {
         }
 
       // ── ORDER ────────────────────────────────────────────────────────────────
-      console.log("[PAYMENT] Received payment status:", paymentStatus);
       case "order": {
+        console.log("[PAYMENT] Received payment status:", paymentStatus);
         if (paymentStatus === "COMPLETE") {
           // Fetch order items before updating (need them for email)
           const { data: orderItems } = await supabase
