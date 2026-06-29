@@ -43,8 +43,8 @@ export async function POST(req: NextRequest) {
 
     console.log("======================================");
     console.log("[PAYMENT] Payment callback received");
-    console.log("[PAYMENT] Status:", payment_status);
-    console.log("[PAYMENT] Payment ID:", m_payment_id);
+    console.log("[PAYMENT] Status:", paymentStatus);
+    console.log("[PAYMENT] Payment ID:", pfPaymentId);
 
     console.log("[PAYMENT] Customer email:", booking.client_email);
     console.log("[PAYMENT] Admin email:", process.env.ADMIN_EMAIL);
