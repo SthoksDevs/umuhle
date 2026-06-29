@@ -35,7 +35,7 @@ function SuccessContent() {
           </svg>
         </div>
 
-        <Image src={ICON} alt="Umuhle" width={40} height={40} style={{ borderRadius: "50%", marginBottom: "1rem" }} />
+        <Image src={ICON} alt="Umuhle" width={100} height={100} style={{ borderRadius: "50%", marginBottom: "1rem", marginLeft: "auto", marginRight: "auto" }} />
         <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "2rem", color: "var(--onyx)", marginBottom: "0.5rem" }}>
           Payment successful!
         </h1>
