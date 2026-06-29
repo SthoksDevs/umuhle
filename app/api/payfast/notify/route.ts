@@ -46,8 +46,8 @@ export async function POST(req: NextRequest) {
     console.log("[PAYMENT] Status:", paymentStatus);
     console.log("[PAYMENT] Payment ID:", pfPaymentId);
 
-    console.log("[PAYMENT] Customer email:", booking.client_email);
-    console.log("[PAYMENT] Admin email:", process.env.ADMIN_EMAIL);
+    /*console.log("[PAYMENT] Customer email:", booking.client_email);
+    console.log("[PAYMENT] Admin email:", process.env.ADMIN_EMAIL);*/
 
     console.log("[PAYMENT] Calling sendBookingConfirmedEmail...");
     switch (paymentType) {
