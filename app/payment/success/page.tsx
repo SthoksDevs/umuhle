@@ -2,11 +2,12 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { useEffect, Suspense } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
+import { useCart } from "@/lib/cart-context";
 
 const ICON = "/umuhle-icon.png";
 
@@ -14,6 +15,10 @@ function SuccessContent() {
   const params = useSearchParams();
   const method = params.get("method") ?? "payfast";
   const ref    = params.get("ref");
+  const { clear } = useCart();
+
+  // Clear the cart as soon as the success page mounts — payment is confirmed.
+  useEffect(() => { clear(); }, [clear]);
 
   const methodLabel: Record<string, string> = {
     payfast:    "PayFast",

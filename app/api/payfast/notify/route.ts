@@ -17,6 +17,8 @@ import {
   sendBookingFailedEmail,
   sendOrderPaidEmail,
   sendOrderFailedEmail,
+  sendAdPaidEmail,
+  sendSalonPaidEmail,
 } from "@/lib/email";
 
 export async function POST(req: NextRequest) {
@@ -243,27 +245,47 @@ export async function POST(req: NextRequest) {
         const now = new Date();
         const { data: ad } = await supabase
           .from("ads")
-          .select("package")
+          .select("package, price, partner_id, partner:profiles!partner_id(full_name, email)")
           .eq("id", paymentId)
           .single();
 
         const WEEKS: Record<string, number> = {
           starter: 6, growth: 12, business: 16, premium: 24,
         };
-        const weeks     = ad ? (WEEKS[ad.package] ?? 6) : 6;
+        const AD_COUNTS: Record<string, number> = {
+          starter: 1, growth: 3, business: 6, premium: 10,
+        };
+        const DURATION_LABELS: Record<string, string> = {
+          starter: "6 weeks", growth: "3 months", business: "4 months", premium: "6 months",
+        };
+        const pkg       = ad?.package ?? "starter";
+        const weeks     = WEEKS[pkg] ?? 6;
         const expiresAt = new Date(now.getTime() + weeks * 7 * 24 * 60 * 60 * 1000);
 
         await supabase
           .from("ads")
           .update({
-            status:            "active",
+            status:             "active",
             payfast_payment_id: pfPaymentId,
-            starts_at:         now.toISOString(),
-            expires_at:        expiresAt.toISOString(),
-            moderation_status: "scanning",
+            starts_at:          now.toISOString(),
+            expires_at:         expiresAt.toISOString(),
+            moderation_status:  "scanning",
           })
           .eq("id", paymentId)
           .eq("status", "pending_payment");
+
+        if (ad) {
+          const partnerRow = Array.isArray(ad.partner) ? ad.partner[0] : ad.partner;
+          sendAdPaidEmail({
+            adId:          paymentId,
+            clientName:    (partnerRow as { full_name: string } | undefined)?.full_name ?? "Partner",
+            clientEmail:   (partnerRow as { email: string } | undefined)?.email ?? "",
+            packageName:   pkg.charAt(0).toUpperCase() + pkg.slice(1),
+            adsCount:      AD_COUNTS[pkg] ?? 1,
+            durationLabel: DURATION_LABELS[pkg] ?? `${weeks} weeks`,
+            amount:        ad.price ?? 0,
+          }).catch(e => console.error("Ad paid email error:", e));
+        }
         break;
       }
 
@@ -280,7 +302,7 @@ export async function POST(req: NextRequest) {
           .update({ status: "paid", payfast_payment_id: pfPaymentId })
           .eq("id", paymentId)
           .eq("status", "pending")
-          .select("salon_id")
+          .select("salon_id, amount, partner:profiles!partner_id(full_name, email)")
           .single();
 
         if (payment?.salon_id) {
@@ -288,6 +310,23 @@ export async function POST(req: NextRequest) {
             .from("partner_salons")
             .update({ subscription_until: oneYear.toISOString() })
             .eq("id", payment.salon_id);
+
+          // Fetch salon name for the email
+          const { data: salon } = await supabase
+            .from("partner_salons")
+            .select("name")
+            .eq("id", payment.salon_id)
+            .single();
+
+          const partnerRow = Array.isArray(payment.partner) ? payment.partner[0] : payment.partner;
+          sendSalonPaidEmail({
+            paymentId,
+            clientName:  (partnerRow as { full_name: string } | undefined)?.full_name ?? "Partner",
+            clientEmail: (partnerRow as { email: string } | undefined)?.email ?? "",
+            salonName:   salon?.name ?? "Your salon",
+            amount:      (payment as { amount?: number }).amount ?? 3500,
+            expiresAt:   oneYear.toISOString(),
+          }).catch(e => console.error("Salon paid email error:", e));
         }
         break;
       }
