@@ -69,46 +69,152 @@ async function log(opts: {
  * Throws on SMTP failure.
  */
 async function send(opts: {
-  to:           string;
-  subject:      string;
-  html:         string;
-  text:         string;
-  template:     string;
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+  template: string;
   referenceId?: string;
 }) {
-  const t = createTransport();
+  const smtpConfig = {
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT ?? 465),
+    secure: process.env.SMTP_SECURE !== "false",
+    user: process.env.SMTP_USER,
+    from: process.env.SMTP_FROM ?? ADMIN_EMAIL,
+    passwordConfigured: !!process.env.SMTP_PASS,
+  };
+
+  console.log("==================================================");
+  console.log("[EMAIL] Starting email send");
+  console.log("[EMAIL] Recipient:", opts.to);
+  console.log("[EMAIL] Subject:", opts.subject);
+  console.log("[EMAIL] Template:", opts.template);
+  console.log("[EMAIL] Reference:", opts.referenceId);
+  console.log("[EMAIL] SMTP:", smtpConfig);
+
+  const transporter = createTransport();
+
   try {
-    await t.sendMail({
-      from:    `"Umuhle" <${process.env.SMTP_FROM ?? ADMIN_EMAIL}>`,
-      to:      opts.to,
-      subject: opts.subject,
-      html:    opts.html,
-      text:    opts.text,
-    });
-    await log({ to: opts.to, subject: opts.subject, template: opts.template, referenceId: opts.referenceId, status: "sent" });
+    console.log("[EMAIL] Verifying SMTP connection...");
+
+    await transporter.verify();
+
+    console.log("[EMAIL] SMTP verification successful.");
+
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    await log({ to: opts.to, subject: opts.subject, template: opts.template, referenceId: opts.referenceId, status: "failed", errorMsg });
+
+    const message =
+      err instanceof Error ? err.message : String(err);
+
+    console.error("[EMAIL] SMTP VERIFY FAILED");
+    console.error(message);
+
+    await log({
+      to: opts.to,
+      subject: opts.subject,
+      template: opts.template,
+      referenceId: opts.referenceId,
+      status: "failed",
+      errorMsg: `SMTP verify failed: ${message}`,
+    });
+
     throw err;
   }
+
+  try {
+
+    console.log("[EMAIL] Sending email...");
+
+    const info = await transporter.sendMail({
+      from: `"Umuhle" <${process.env.SMTP_FROM ?? ADMIN_EMAIL}>`,
+      to: opts.to,
+      subject: opts.subject,
+      html: opts.html,
+      text: opts.text,
+    });
+
+    console.log("[EMAIL] Email accepted by SMTP server.");
+    console.log("[EMAIL] Message ID:", info.messageId);
+    console.log("[EMAIL] SMTP Response:", info.response);
+
+    await log({
+      to: opts.to,
+      subject: opts.subject,
+      template: opts.template,
+      referenceId: opts.referenceId,
+      status: "sent",
+    });
+
+    console.log("[EMAIL] Logged successful send.");
+
+  } catch (err) {
+
+    const message =
+      err instanceof Error ? err.message : String(err);
+
+    console.error("[EMAIL] SEND FAILED");
+    console.error(message);
+
+    await log({
+      to: opts.to,
+      subject: opts.subject,
+      template: opts.template,
+      referenceId: opts.referenceId,
+      status: "failed",
+      errorMsg: message,
+    });
+
+    throw err;
+  }
+
+  console.log("[EMAIL] Finished sending.");
+  console.log("==================================================");
 }
 
 /**
- * Send to multiple addresses, collecting errors so one failure doesn't
- * prevent the other from being attempted.
+ * Send to multiple addresses.
  */
 async function sendToAll(
   addresses: string[],
   opts: Omit<Parameters<typeof send>[0], "to">
 ) {
   const unique = Array.from(new Set(addresses.filter(Boolean)));
-  await Promise.allSettled(
-    unique.map(to =>
-      send({ ...opts, to }).catch(e =>
-        console.error(`Email send failed to ${to}:`, e)
-      )
-    )
+
+  console.log("==================================================");
+  console.log("[EMAIL] sendToAll()");
+  console.log("[EMAIL] Recipients:", unique);
+  console.log("[EMAIL] Template:", opts.template);
+  console.log("[EMAIL] Subject:", opts.subject);
+
+  const results = await Promise.allSettled(
+    unique.map(async (recipient) => {
+      console.log(`[EMAIL] Beginning send to ${recipient}`);
+
+      await send({
+        ...opts,
+        to: recipient,
+      });
+
+      console.log(`[EMAIL] Finished send to ${recipient}`);
+    })
   );
+
+  console.log("[EMAIL] Promise results:");
+
+  results.forEach((result, index) => {
+    const recipient = unique[index];
+
+    if (result.status === "fulfilled") {
+      console.log(`✓ ${recipient} SUCCESS`);
+    } else {
+      console.error(`✗ ${recipient} FAILED`);
+      console.error(result.reason);
+    }
+  });
+
+  console.log("[EMAIL] sendToAll complete.");
+  console.log("==================================================");
 }
 
 // ── Shared HTML chrome ────────────────────────────────────────────────────────

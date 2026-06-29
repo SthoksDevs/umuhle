@@ -123,55 +123,38 @@ export async function POST(req: NextRequest) {
             }).catch(e => console.error("WhatsApp notify error:", e));
           }
 
-          // Admin email
-          sendBookingConfirmedEmail({
-            bookingId:     booking.id,
-            clientName:    clientRow?.full_name as string ?? "Unknown",
-            clientEmail:   clientRow?.email    as string ?? "",
-            artistName:    artistRow?.display_name as string ?? "Unknown",
-            serviceName:   serviceRow?.name as string ?? "Service",
-            date:          booking.booking_date,
-            time:          booking.booking_time,
-            amount:        booking.total_amount,
+         console.log("======================================");
+        console.log("[PAYMENT] Payment callback received");
+        console.log("[PAYMENT] Status:", paymentStatus);
+        console.log("[PAYMENT] Payment ID:", paymentId);
+
+        console.log("[PAYMENT] Booking ID:", booking.id);
+        console.log("[PAYMENT] Customer email:", clientRow?.email);
+        console.log("[PAYMENT] Admin email:", process.env.ADMIN_EMAIL);
+
+        console.log("[PAYMENT] Calling sendBookingConfirmedEmail()...");
+
+        try {
+          await sendBookingConfirmedEmail({
+            bookingId: booking.id,
+            clientName: clientRow?.full_name as string ?? "Unknown",
+            clientEmail: clientRow?.email as string ?? "",
+            artistName: artistRow?.display_name as string ?? "Unknown",
+            serviceName: serviceRow?.name as string ?? "Service",
+            date: booking.booking_date,
+            time: booking.booking_time,
+            amount: booking.total_amount,
             meetingAddress: booking.meeting_address ?? undefined,
-          }).catch(e => console.error("Admin email error:", e));
+          });
 
-        } else if (paymentStatus === "CANCELLED" || paymentStatus === "FAILED") {
-          // Mark the intent as cancelled/failed — no booking was ever created
-          const reason = paymentStatus === "CANCELLED" ? "cancelled" : "failed";
-
-          const { data: intent } = await supabase
-            .from("booking_intents")
-            .update({ status: reason === "cancelled" ? "cancelled" : "failed" })
-            .eq("id", paymentId)
-            .eq("status", "pending")
-            .select(`
-              *,
-              client:profiles!booking_intents_client_id_fkey(full_name, email),
-              service:services(name)
-            `)
-            .single();
-
-          if (intent) {
-            const clientRow  = Array.isArray(intent.client)  ? intent.client[0]  : intent.client;
-            const serviceRow = Array.isArray(intent.service) ? intent.service[0] : intent.service;
-
-            sendBookingFailedEmail({
-              bookingId:   paymentId,
-              clientName:  clientRow?.full_name ?? "Unknown",
-              clientEmail: clientRow?.email     ?? "",
-              serviceName: serviceRow?.name     ?? "Service",
-              date:        intent.booking_date,
-              time:        intent.booking_time,
-              amount:      intent.total_amount,
-              reason,
-            }).catch(e => console.error("Admin failed email error:", e));
-          }
+          console.log("[PAYMENT] sendBookingConfirmedEmail() completed successfully.");
+        } catch (e) {
+          console.error("[PAYMENT] sendBookingConfirmedEmail() FAILED:");
+          console.error(e);
         }
-        break;
-      }
 
       // ── ORDER ────────────────────────────────────────────────────────────────
+      console.log("[PAYMENT] Received payment status:", paymentStatus);
       case "order": {
         if (paymentStatus === "COMPLETE") {
           // Fetch order items before updating (need them for email)
