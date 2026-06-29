@@ -50,7 +50,6 @@ function CouponSection({
   const computeDiscount = useCallback(
     (coupon: Coupon): number => {
       if (coupon.scope === "product" && coupon.product_id) {
-        // Apply discount only to matching products
         const line = items.find((l) => l.product.id === coupon.product_id);
         if (!line) return 0;
         const lineTotal = line.product.price * line.quantity;
@@ -59,7 +58,6 @@ function CouponSection({
         }
         return Math.min(coupon.discount_value, lineTotal);
       }
-      // Cart-wide
       const base = subtotal;
       if (coupon.discount_type === "percentage") {
         return Math.round((base * coupon.discount_value) / 100);
@@ -89,21 +87,18 @@ function CouponSection({
 
       const coupon = data as Coupon;
 
-      // Validate expiry
       if (coupon.expires_at && new Date(coupon.expires_at) < new Date()) {
         setError("This coupon has expired.");
         setLoading(false);
         return;
       }
 
-      // Validate use limit
       if (coupon.max_uses !== null && coupon.used_count >= coupon.max_uses) {
         setError("This coupon has reached its usage limit.");
         setLoading(false);
         return;
       }
 
-      // Validate minimum order
       if (coupon.min_order_cents !== null && subtotal < coupon.min_order_cents) {
         setError(`Minimum order of ${fmt(coupon.min_order_cents)} required.`);
         setLoading(false);
@@ -316,13 +311,17 @@ export default function CheckoutPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Payment failed");
       await recordCouponUsage();
+
+      // Build and submit the PayFast form.
+      // ⚠️  Do NOT call clear() here — if the user cancels on PayFast they
+      //     must land on /payment/cancel with their cart still intact.
+      //     Cart is cleared only after confirmed payment (see /payment/success).
       const form2 = document.createElement("form");
       form2.method = "POST"; form2.action = data.payfastUrl;
       Object.entries(data.params as Record<string, string>).forEach(([k, v]) => {
         const inp = document.createElement("input"); inp.type = "hidden"; inp.name = k; inp.value = v; form2.appendChild(inp);
       });
       document.body.appendChild(form2);
-      clear();
       form2.submit();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Payment failed");
@@ -348,7 +347,9 @@ export default function CheckoutPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "HappyPay failed");
       await recordCouponUsage();
-      clear();
+
+      // ⚠️  Same as PayFast — do NOT clear cart here. Cart is cleared on
+      //     /payment/success after confirmed payment.
       window.location.href = data.redirectUrl;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "HappyPay payment failed");
@@ -375,6 +376,7 @@ export default function CheckoutPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Google Pay failed");
       await recordCouponUsage();
+      // Google Pay is confirmed synchronously by the server, so clear cart here.
       clear();
       router.push(`/payment/success?ref=${data.orderId}&method=google_pay`);
     } catch (err: unknown) {

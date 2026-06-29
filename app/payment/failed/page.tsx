@@ -2,7 +2,7 @@ import Link from "next/link";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
 
-export default function PaymentSuccessPage() {
+export default function PaymentFailedPage() {
   return (
     <>
       <SiteHeader />
@@ -36,25 +36,32 @@ export default function PaymentSuccessPage() {
               fontFamily: "var(--font-display)",
             }}
           >
-            Payment Successful!
+            Payment Failed!
           </h1>
 
           <p style={{ marginTop: "1rem", lineHeight: 1.8 }}>
-            Thank you for your payment.
+            Unfortunately your payment could not be processed.
             <br />
-            Your booking has been confirmed.
+            No money has been captured.
           </p>
 
-          <Link
-            href="/"
-            className="btn-primary"
+          <div
             style={{
-              display: "inline-block",
+              display: "flex",
+              gap: "1rem",
+              justifyContent: "center",
               marginTop: "2rem",
+              flexWrap: "wrap",
             }}
           >
-            Return Home
-          </Link>
+            <Link href="/" className="btn-primary">
+              Return Home
+            </Link>
+
+            <Link href="/checkout">
+              Try Again
+            </Link>
+          </div>
         </div>
       </main>
 

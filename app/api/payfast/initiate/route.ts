@@ -222,8 +222,8 @@ async function initiateSalon(
   const params = buildPaymentParams({
     paymentId,
     amount: SALON_PRICE,
-    itemName: "Umuhle Salon Listing — Annual Subscription",
-    itemDescription: "12-month salon listing on Umuhle",
+    itemName: "Umuhle Store Listing — Annual Subscription",
+    itemDescription: "12-month store listing on Umuhle",
     firstName,
     lastName,
     email: profile.email,
