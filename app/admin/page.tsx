@@ -1216,11 +1216,29 @@ function UmuhleProductsTab({
   };
 
   // Called by ProductForm after a successful save
-  const handleSaved = (saved: ProductRow & { id: string }) => {
+  const handleSaved = (saved: ProductFormData & { id: string }) => {
+    const toRow = (base: ProductRow | undefined): ProductRow => ({
+      ...(base ?? {} as ProductRow),
+      id:          saved.id,
+      name:        saved.name,
+      description: saved.description || null,
+      price:       Math.round(Number(saved.price) * 100),
+      category:    saved.category || null,
+      stock_count: parseInt(saved.stock_count) || 0,
+      image_url:   saved.image_url ?? base?.image_url ?? null,
+      weight_g:    saved.weight_g   ? parseInt(saved.weight_g)    : null,
+      length_cm:   saved.length_cm  ? parseFloat(saved.length_cm) : null,
+      width_cm:    saved.width_cm   ? parseFloat(saved.width_cm)  : null,
+      height_cm:   saved.height_cm  ? parseFloat(saved.height_cm) : null,
+      is_active:         base?.is_active         ?? true,
+      moderation_status: base?.moderation_status ?? "approved",
+      created_at:        base?.created_at        ?? new Date().toISOString(),
+      partner_id:        base?.partner_id        ?? userId,
+    });
     setProducts((prev) => {
       const exists = prev.find((p) => p.id === saved.id);
-      if (exists) return prev.map((p) => p.id === saved.id ? { ...p, ...saved } : p);
-      return [saved as unknown as ProductRow, ...prev];
+      if (exists) return prev.map((p) => p.id === saved.id ? toRow(p) : p);
+      return [toRow(undefined), ...prev];
     });
     setShowForm(false);
     setEditTarget(null);
