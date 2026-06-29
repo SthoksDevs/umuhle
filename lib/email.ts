@@ -101,7 +101,7 @@ async function sendToAll(
   addresses: string[],
   opts: Omit<Parameters<typeof send>[0], "to">
 ) {
-  const unique = [...new Set(addresses.filter(Boolean))];
+  const unique = Array.from(new Set(addresses.filter(Boolean)));
   await Promise.allSettled(
     unique.map(to =>
       send({ ...opts, to }).catch(e =>
