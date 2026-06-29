@@ -140,6 +140,7 @@ CREATE TABLE public.products (
   length_cm numeric,
   width_cm numeric,
   height_cm numeric,
+  product_type text NOT NULL DEFAULT 'simple'::text CHECK (product_type = ANY (ARRAY['simple'::text, 'variable'::text])),
   CONSTRAINT products_pkey PRIMARY KEY (id),
   CONSTRAINT products_partner_id_fkey FOREIGN KEY (partner_id) REFERENCES public.profiles(id)
 );
@@ -370,4 +371,15 @@ CREATE TABLE public.admin_otp (
   used boolean NOT NULL DEFAULT false,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT admin_otp_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.product_variants (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  product_id uuid NOT NULL,
+  label text NOT NULL,
+  price integer NOT NULL,
+  stock_count integer NOT NULL DEFAULT 0,
+  sku text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT product_variants_pkey PRIMARY KEY (id),
+  CONSTRAINT product_variants_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id)
 );
