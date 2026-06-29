@@ -15,15 +15,16 @@ export function generateSignature(
   params: Record<string, string>,
   passphrase?: string
 ): string {
-  const filtered = Object.keys(params)
-    .filter(
-      (key) =>
-        key !== "signature" &&
-        params[key] !== undefined &&
-        params[key] !== null &&
-        params[key] !== ""
-    )
-    .sort();
+  // PayFast computes its signature from fields in the order they appear in the
+  // submitted form — do NOT sort. Keep insertion order (Object.keys preserves it
+  // in all modern JS engines) and only strip empty / signature keys.
+  const filtered = Object.keys(params).filter(
+    (key) =>
+      key !== "signature" &&
+      params[key] !== undefined &&
+      params[key] !== null &&
+      params[key] !== ""
+  );
 
   const data = filtered
     .map((key) => {
