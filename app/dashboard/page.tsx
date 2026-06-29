@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
+import ProductForm, { productToForm, type ProductFormData } from "@/components/ProductForm";
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
@@ -19,7 +20,7 @@ function formatDate(dateStr: string) {
 }
 
 // ── Tab type extended with "invite" and "my-store" (replaces "my-store") ──────
-type Tab = "bookings" | "wishlist" | "profile" | "my-store" | "my-services" | "invite";
+type Tab = "bookings" | "wishlist" | "profile" | "my-store" | "my-services" | "invite" | "my-shop";
 
 const SERVICE_TYPES = [
   { id: "hair",   label: "Hair",  banner: "/banners/hair.jpg",   description: "From protective styles to blowouts, braids to colour — let clients know exactly what you specialise in." },
@@ -1962,6 +1963,312 @@ function BookingsTab({ user, profile, onUpdateProfile }: { user: User; profile: 
   );
 }
 
+// ─── My Shop tab (business partners: Products + Ads) ──────────────────────────
+
+interface PartnerProductRow {
+  id: string;
+  name: string;
+  description: string | null;
+  price: number;
+  image_url: string | null;
+  category: string | null;
+  stock_count: number;
+  is_active: boolean;
+  moderation_status: string;
+  created_at: string;
+  partner_id: string;
+  weight_g: number | null;
+  length_cm: number | null;
+  width_cm: number | null;
+  height_cm: number | null;
+}
+
+interface PartnerAdRow {
+  id: string;
+  title: string;
+  description: string | null;
+  image_url: string | null;
+  package: string;
+  status: string;
+  moderation_status: string;
+  created_at: string;
+  starts_at: string | null;
+  expires_at: string | null;
+}
+
+const fmtShop = (cents: number) => `R${(cents / 100).toFixed(0)}`;
+
+function MyShopTab({ user }: { user: { id: string } }) {
+  const supabase = createClient();
+  const [innerTab, setInnerTab] = useState<"products" | "ads">("products");
+
+  // ── Products state ──
+  const [products,   setProducts]   = useState<PartnerProductRow[]>([]);
+  const [prodLoading, setProdLoading] = useState(true);
+  const [showForm,   setShowForm]   = useState(false);
+  const [editTarget, setEditTarget] = useState<PartnerProductRow | null>(null);
+
+  // ── Ads state ──
+  const [ads,       setAds]       = useState<PartnerAdRow[]>([]);
+  const [adsLoading, setAdsLoading] = useState(true);
+
+  // Load products
+  const loadProducts = useCallback(async () => {
+    setProdLoading(true);
+    const { data } = await supabase
+      .from("products")
+      .select("*")
+      .eq("partner_id", user.id)
+      .order("created_at", { ascending: false });
+    setProducts((data ?? []) as PartnerProductRow[]);
+    setProdLoading(false);
+  }, [supabase, user.id]);
+
+  // Load ads
+  const loadAds = useCallback(async () => {
+    setAdsLoading(true);
+    const { data } = await supabase
+      .from("ads")
+      .select("id, title, description, image_url, package, status, moderation_status, created_at, starts_at, expires_at")
+      .eq("partner_id", user.id)
+      .order("created_at", { ascending: false });
+    setAds((data ?? []) as PartnerAdRow[]);
+    setAdsLoading(false);
+  }, [supabase, user.id]);
+
+  useEffect(() => { loadProducts(); loadAds(); }, [loadProducts, loadAds]);
+
+  // After ProductForm saves
+  const handleSaved = (saved: ProductFormData & { id: string }) => {
+    const toRow = (base: PartnerProductRow | undefined): PartnerProductRow => ({
+      ...(base ?? {} as PartnerProductRow),
+      id:          saved.id,
+      name:        saved.name,
+      description: saved.description || null,
+      price:       Math.round(Number(saved.price) * 100),
+      category:    saved.category || null,
+      stock_count: parseInt(saved.stock_count) || 0,
+      image_url:   saved.image_url ?? base?.image_url ?? null,
+      weight_g:    saved.weight_g   ? parseInt(saved.weight_g)    : null,
+      length_cm:   saved.length_cm  ? parseFloat(saved.length_cm) : null,
+      width_cm:    saved.width_cm   ? parseFloat(saved.width_cm)  : null,
+      height_cm:   saved.height_cm  ? parseFloat(saved.height_cm) : null,
+      is_active:         base?.is_active         ?? false,
+      moderation_status: base?.moderation_status ?? "scanning",
+      created_at:        base?.created_at        ?? new Date().toISOString(),
+      partner_id:        base?.partner_id        ?? user.id,
+    });
+    setProducts(prev => {
+      const exists = prev.find(p => p.id === saved.id);
+      if (exists) return prev.map(p => p.id === saved.id ? toRow(p) : p);
+      return [toRow(undefined), ...prev];
+    });
+    setShowForm(false);
+    setEditTarget(null);
+  };
+
+  const toggleActive = async (p: PartnerProductRow) => {
+    await supabase.from("products").update({ is_active: !p.is_active }).eq("id", p.id);
+    setProducts(prev => prev.map(x => x.id === p.id ? { ...x, is_active: !x.is_active } : x));
+  };
+
+  const modBadge = (status: string) => {
+    const map: Record<string, { bg: string; color: string; label: string }> = {
+      approved:     { bg: "#E8F5E9", color: "#2E7D32", label: "Live" },
+      scanning:     { bg: "#FFF3E0", color: "#E65100", label: "Under review" },
+      draft:        { bg: "#F5F5F5", color: "#757575", label: "Draft" },
+      needs_review: { bg: "#FFF3E0", color: "#E65100", label: "Needs review" },
+      rejected:     { bg: "#FFEBEE", color: "#C62828", label: "Rejected" },
+    };
+    const s = map[status] ?? map.draft;
+    return (
+      <span style={{ background: s.bg, color: s.color, borderRadius: 100, padding: "0.2rem 0.65rem", fontSize: "0.7rem", fontWeight: 600 }}>
+        {s.label}
+      </span>
+    );
+  };
+
+  const adStatusBadge = (ad: PartnerAdRow) => {
+    const map: Record<string, { bg: string; color: string }> = {
+      active:          { bg: "#E8F5E9", color: "#2E7D32" },
+      pending_payment: { bg: "#FFF3E0", color: "#E65100" },
+      expired:         { bg: "#F5F5F5", color: "#757575" },
+      cancelled:       { bg: "#FFEBEE", color: "#C62828" },
+    };
+    const s = map[ad.status] ?? map.pending_payment;
+    return (
+      <span style={{ background: s.bg, color: s.color, borderRadius: 100, padding: "0.2rem 0.65rem", fontSize: "0.7rem", fontWeight: 600, textTransform: "capitalize" }}>
+        {ad.status.replace("_", " ")}
+      </span>
+    );
+  };
+
+  return (
+    <div>
+      <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.25rem" }}>My Shop</h2>
+      <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
+        Manage the products and ads you run on Umuhle.
+      </p>
+
+      {/* Inner tab switcher */}
+      <div style={{ display: "flex", gap: 0, marginBottom: "1.5rem", borderRadius: 100, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.2)", width: "fit-content" }}>
+        {(["products", "ads"] as const).map((t, i) => (
+          <button key={t} onClick={() => setInnerTab(t)} style={{
+            padding: "0.5rem 1.5rem", border: "none", cursor: "pointer", fontSize: "0.85rem",
+            background: innerTab === t ? "var(--plum)" : "#fff",
+            color: innerTab === t ? "#fff" : "var(--grey)",
+            fontWeight: innerTab === t ? 600 : 400,
+            borderRight: i === 0 ? "1.5px solid rgba(155,127,184,0.2)" : "none",
+            textTransform: "capitalize",
+          }}>
+            {t === "products" ? `Products${products.length ? ` (${products.length})` : ""}` : `Ads${ads.length ? ` (${ads.length})` : ""}`}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Products panel ── */}
+      {innerTab === "products" && (
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+            <p style={{ fontSize: "0.82rem", color: "var(--grey)", margin: 0 }}>
+              Products go through a review before appearing in the shop.
+            </p>
+            {!showForm && !editTarget && (
+              <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.55rem 1.25rem", fontSize: "0.85rem", whiteSpace: "nowrap", marginLeft: "1rem" }}>
+                + Add product
+              </button>
+            )}
+          </div>
+
+          {showForm && (
+            <div style={{ marginBottom: "1.5rem" }}>
+              <ProductForm
+                partnerId={user.id}
+                supabase={supabase}
+                skipVerify={false}
+                onSaved={handleSaved}
+                onCancel={() => setShowForm(false)}
+              />
+            </div>
+          )}
+
+          {editTarget && (
+            <div style={{ marginBottom: "1.5rem" }}>
+              <ProductForm
+                initial={productToForm(editTarget)}
+                partnerId={user.id}
+                supabase={supabase}
+                skipVerify={false}
+                onSaved={handleSaved}
+                onCancel={() => setEditTarget(null)}
+              />
+            </div>
+          )}
+
+          {prodLoading ? (
+            <p style={{ color: "var(--grey)" }}>Loading products…</p>
+          ) : products.length === 0 && !showForm ? (
+            <div style={{ textAlign: "center", padding: "3rem", background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.12)" }}>
+              <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>🛍️</div>
+              <p style={{ fontFamily: "var(--font-display)", fontSize: "1.05rem", marginBottom: "0.5rem" }}>No products yet</p>
+              <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>Add your first product to start selling on Umuhle.</p>
+              <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.75rem 2rem" }}>Add a product</button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+              {products.map(p => (
+                <div key={p.id} style={{ background: "#fff", borderRadius: 14, border: "1.5px solid rgba(155,127,184,0.12)", padding: "1rem 1.25rem", display: "flex", gap: "1rem", alignItems: "center" }}>
+                  {p.image_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={p.image_url} alt="" style={{ width: 56, height: 56, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />
+                  ) : (
+                    <div style={{ width: 56, height: 56, borderRadius: 8, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <span style={{ fontSize: "1.4rem" }}>🛍️</span>
+                    </div>
+                  )}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.1rem" }}>
+                      <p style={{ fontWeight: 600, fontSize: "0.9rem", margin: 0 }}>{p.name}</p>
+                      {modBadge(p.moderation_status)}
+                    </div>
+                    <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: 0 }}>
+                      {fmtShop(p.price)} · {p.stock_count} in stock · <span style={{ textTransform: "capitalize" }}>{p.category ?? "—"}</span>
+                    </p>
+                  </div>
+                  <div style={{ display: "flex", gap: "0.4rem", flexShrink: 0 }}>
+                    <button
+                      onClick={() => { setEditTarget(p); setShowForm(false); }}
+                      style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "#fff", color: "var(--plum)", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => toggleActive(p)}
+                      style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "none", background: p.is_active ? "#E8F5E9" : "#F5F5F5", color: p.is_active ? "#2E7D32" : "#757575", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
+                    >
+                      {p.is_active ? "Live" : "Hidden"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Ads panel ── */}
+      {innerTab === "ads" && (
+        <div>
+          {adsLoading ? (
+            <p style={{ color: "var(--grey)" }}>Loading ads…</p>
+          ) : ads.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "3rem", background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.12)" }}>
+              <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>📣</div>
+              <p style={{ fontFamily: "var(--font-display)", fontSize: "1.05rem", marginBottom: "0.5rem" }}>No ads yet</p>
+              <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
+                Promote your store to thousands of Umuhle users by running an ad.
+              </p>
+              <a href="/earn"><button className="btn-plum" style={{ padding: "0.75rem 2rem" }}>View ad packages</button></a>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+              {ads.map(ad => (
+                <div key={ad.id} style={{ background: "#fff", borderRadius: 14, border: "1.5px solid rgba(155,127,184,0.12)", padding: "1rem 1.25rem", display: "flex", gap: "1rem", alignItems: "flex-start" }}>
+                  {ad.image_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={ad.image_url} alt="" style={{ width: 56, height: 56, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />
+                  ) : (
+                    <div style={{ width: 56, height: 56, borderRadius: 8, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <span style={{ fontSize: "1.4rem" }}>📣</span>
+                    </div>
+                  )}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.1rem" }}>
+                      <p style={{ fontWeight: 600, fontSize: "0.9rem", margin: 0 }}>{ad.title}</p>
+                      {adStatusBadge(ad)}
+                    </div>
+                    {ad.description && (
+                      <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: "0 0 0.1rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ad.description}</p>
+                    )}
+                    <p style={{ fontSize: "0.72rem", color: "var(--light)", margin: 0, textTransform: "capitalize" }}>
+                      {ad.package} package
+                      {ad.starts_at && ` · from ${new Date(ad.starts_at).toLocaleDateString("en-ZA", { day: "numeric", month: "short" })}`}
+                      {ad.expires_at && ` to ${new Date(ad.expires_at).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })}`}
+                    </p>
+                  </div>
+                </div>
+              ))}
+              <div style={{ marginTop: "0.75rem" }}>
+                <a href="/earn"><button className="btn-outline" style={{ padding: "0.6rem 1.5rem", fontSize: "0.85rem" }}>+ Run another ad</button></a>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main dashboard ────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const router = useRouter();
@@ -2031,6 +2338,7 @@ export default function DashboardPage() {
     { id: "wishlist",    label: "Wishlist",   icon: "💜" },
     { id: "my-store",    label: "My Store",   icon: "✂️" },
     { id: "my-services", label: "Services",   icon: "💅" },
+    ...(profile.is_partner ? [{ id: "my-shop" as Tab, label: "My Shop", icon: "🛍️" }] : []),
     { id: "invite",      label: "Invite",     icon: "🎁" },
     { id: "profile",     label: "Profile",    icon: "👤" },
   ];
@@ -2039,7 +2347,7 @@ export default function DashboardPage() {
   void handleSignOut;
 
   // Primary tabs shown in bottom action bar (mobile) — most used
-  const PRIMARY_TABS: Tab[] = ["bookings", "wishlist", "my-store", "my-services", "profile"];
+  const PRIMARY_TABS: Tab[] = ["bookings", "wishlist", "my-store", "my-services", ...(profile.is_partner ? ["my-shop" as Tab] : []), "profile"];
   const MORE_TABS = TAB_CONFIG.filter(t => !PRIMARY_TABS.includes(t.id));
 
   return (
@@ -2128,6 +2436,9 @@ export default function DashboardPage() {
 
         {/* ── Invite tab ── */}
         {tab === "invite" && <section><InviteTab profile={profile} /></section>}
+
+        {/* ── My Shop tab (business partners only) ── */}
+        {tab === "my-shop" && profile.is_partner && <section><MyShopTab user={user} /></section>}
       </main>
 
       {/* ── Mobile Bottom Action Bar ── */}
