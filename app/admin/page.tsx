@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
 import type { Profile } from "@/types";
+import ProductForm, { productToForm } from "@/components/ProductForm";
 
 const ICON = "/umuhle-icon.png";
 const SUPER_ADMIN_EMAIL = "info@umuhle.co.za";
@@ -84,6 +85,10 @@ interface ProductRow {
   moderation_status: string;
   created_at: string;
   partner_id: string;
+  weight_g: number | null;
+  length_cm: number | null;
+  width_cm: number | null;
+  height_cm: number | null;
   partner?: { full_name: string; email: string };
   is_umuhle_product?: boolean;
 }
@@ -850,10 +855,11 @@ function AdsReviewTab({ supabase }: { supabase: ReturnType<typeof createClient> 
 // ── Products Tab ──────────────────────────────────────────────────────────────
 
 function ProductsReviewTab({ supabase }: { supabase: ReturnType<typeof createClient> }) {
-  const [products, setProducts] = useState<ProductRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<"pending" | "approved" | "all">("pending");
+  const [products,     setProducts]     = useState<ProductRow[]>([]);
+  const [loading,      setLoading]      = useState(true);
+  const [filter,       setFilter]       = useState<"pending" | "approved" | "all">("pending");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [editTarget,   setEditTarget]   = useState<ProductRow | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -868,15 +874,18 @@ function ProductsReviewTab({ supabase }: { supabase: ReturnType<typeof createCli
     setLoading(false);
   }, [filter, supabase]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   const updateMod = async (id: string, status: string) => {
     setActionLoading(id);
     await supabase.from("products").update({ moderation_status: status, is_active: status === "approved" }).eq("id", id);
     setProducts((prev) => prev.filter((p) => p.id !== id));
     setActionLoading(null);
+  };
+
+  const handleEdited = (saved: ProductRow & { id: string }) => {
+    setProducts(prev => prev.map(p => p.id === saved.id ? { ...p, ...saved } : p));
+    setEditTarget(null);
   };
 
   return (
@@ -889,25 +898,34 @@ function ProductsReviewTab({ supabase }: { supabase: ReturnType<typeof createCli
       </p>
       <div style={{ display: "flex", gap: "0.35rem", marginBottom: "1.25rem" }}>
         {(["pending", "approved", "all"] as const).map((f) => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            style={{
-              borderRadius: 100,
-              border: `1.5px solid ${filter === f ? "var(--plum)" : "rgba(155,127,184,0.25)"}`,
-              padding: "0.35rem 0.9rem",
-              fontSize: "0.8rem",
-              fontWeight: filter === f ? 500 : 400,
-              background: filter === f ? "var(--plum-t)" : "#fff",
-              color: filter === f ? "var(--plum)" : "var(--grey)",
-              cursor: "pointer",
-              textTransform: "capitalize",
-            }}
-          >
+          <button key={f} onClick={() => setFilter(f)} style={{
+            borderRadius: 100,
+            border: `1.5px solid ${filter === f ? "var(--plum)" : "rgba(155,127,184,0.25)"}`,
+            padding: "0.35rem 0.9rem", fontSize: "0.8rem",
+            fontWeight: filter === f ? 500 : 400,
+            background: filter === f ? "var(--plum-t)" : "#fff",
+            color: filter === f ? "var(--plum)" : "var(--grey)",
+            cursor: "pointer", textTransform: "capitalize",
+          }}>
             {f}
           </button>
         ))}
       </div>
+
+      {/* Inline edit form */}
+      {editTarget && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <ProductForm
+            initial={productToForm(editTarget)}
+            partnerId={editTarget.partner_id}
+            supabase={supabase}
+            skipVerify={true}
+            onSaved={handleEdited}
+            onCancel={() => setEditTarget(null)}
+          />
+        </div>
+      )}
+
       {loading ? (
         <p style={{ color: "var(--grey)" }}>Loading products…</p>
       ) : products.length === 0 ? (
@@ -917,18 +935,11 @@ function ProductsReviewTab({ supabase }: { supabase: ReturnType<typeof createCli
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
           {products.map((p) => (
-            <div
-              key={p.id}
-              style={{ background: "#fff", borderRadius: 16, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.25rem" }}
-            >
+            <div key={p.id} style={{ background: "#fff", borderRadius: 16, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.25rem" }}>
               <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start" }}>
                 {p.image_url ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={p.image_url}
-                    alt=""
-                    style={{ width: 72, height: 72, borderRadius: 10, objectFit: "cover", flexShrink: 0 }}
-                  />
+                  <img src={p.image_url} alt="" style={{ width: 72, height: 72, borderRadius: 10, objectFit: "cover", flexShrink: 0 }} />
                 ) : (
                   <div style={{ width: 72, height: 72, borderRadius: 10, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                     <span style={{ fontSize: "1.5rem" }}>🛍️</span>
@@ -939,33 +950,42 @@ function ProductsReviewTab({ supabase }: { supabase: ReturnType<typeof createCli
                     <p style={{ fontWeight: 600, fontSize: "0.95rem", margin: 0 }}>{p.name}</p>
                     <StatusBadge status={p.moderation_status} />
                     {p.is_umuhle_product && (
-                      <span style={{ background: "var(--plum)", color: "#fff", borderRadius: 4, padding: "1px 6px", fontSize: "0.68rem", fontWeight: 700 }}>
-                        Umuhle
-                      </span>
+                      <span style={{ background: "var(--plum)", color: "#fff", borderRadius: 4, padding: "1px 6px", fontSize: "0.68rem", fontWeight: 700 }}>Umuhle</span>
                     )}
                   </div>
                   <p style={{ fontSize: "0.82rem", color: "var(--grey)", margin: "0 0 0.1rem" }}>
                     {fmt(p.price)} · Stock: {p.stock_count} · {p.category ?? "uncategorised"}
                   </p>
+                  {(p.weight_g || p.length_cm) && (
+                    <p style={{ fontSize: "0.72rem", color: "#bbb", margin: "0 0 0.1rem" }}>
+                      {p.weight_g ? `${p.weight_g}g` : "no weight"}
+                      {p.length_cm ? ` · ${p.length_cm}×${p.width_cm}×${p.height_cm} cm` : " · no dimensions"}
+                    </p>
+                  )}
+                  {!p.weight_g && !p.length_cm && (
+                    <p style={{ fontSize: "0.72rem", color: "#E65100", margin: "0 0 0.1rem" }}>
+                      ⚠️ Missing delivery dimensions
+                    </p>
+                  )}
                   <p style={{ fontSize: "0.75rem", color: "var(--light)", margin: 0 }}>
                     Partner: {(p.partner as { full_name: string; email: string } | undefined)?.full_name ?? "Umuhle"}
                   </p>
                 </div>
+                <button
+                  onClick={() => setEditTarget(p)}
+                  style={{ padding: "0.35rem 0.9rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "#fff", color: "var(--plum)", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer", flexShrink: 0 }}
+                >
+                  Edit
+                </button>
               </div>
               {filter !== "approved" && !p.is_umuhle_product && (
                 <div style={{ display: "flex", gap: "0.5rem", marginTop: "1rem" }}>
-                  <button
-                    onClick={() => updateMod(p.id, "approved")}
-                    disabled={actionLoading === p.id}
-                    style={{ padding: "0.5rem 1.25rem", borderRadius: 100, border: "none", background: "#E8F5E9", color: "#2E7D32", fontWeight: 600, fontSize: "0.82rem", cursor: "pointer" }}
-                  >
+                  <button onClick={() => updateMod(p.id, "approved")} disabled={actionLoading === p.id}
+                    style={{ padding: "0.5rem 1.25rem", borderRadius: 100, border: "none", background: "#E8F5E9", color: "#2E7D32", fontWeight: 600, fontSize: "0.82rem", cursor: "pointer" }}>
                     ✓ Approve
                   </button>
-                  <button
-                    onClick={() => updateMod(p.id, "rejected")}
-                    disabled={actionLoading === p.id}
-                    style={{ padding: "0.5rem 1.25rem", borderRadius: 100, border: "none", background: "#FFEBEE", color: "#C62828", fontWeight: 600, fontSize: "0.82rem", cursor: "pointer" }}
-                  >
+                  <button onClick={() => updateMod(p.id, "rejected")} disabled={actionLoading === p.id}
+                    style={{ padding: "0.5rem 1.25rem", borderRadius: 100, border: "none", background: "#FFEBEE", color: "#C62828", fontWeight: 600, fontSize: "0.82rem", cursor: "pointer" }}>
                     ✗ Reject
                   </button>
                 </div>
@@ -1155,20 +1175,10 @@ function UmuhleProductsTab({
   supabase: ReturnType<typeof createClient>;
   userId: string;
 }) {
-  const [products, setProducts] = useState<ProductRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState("");
-  const [form, setForm] = useState({
-    name: "",
-    description: "",
-    price: "",
-    category: "hair",
-    stock_count: "0",
-  });
+  const [products,   setProducts]   = useState<ProductRow[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [showForm,   setShowForm]   = useState(false);
+  const [editTarget, setEditTarget] = useState<ProductRow | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1181,71 +1191,22 @@ function UmuhleProductsTab({
     setLoading(false);
   }, [supabase, userId]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setImageFile(f);
-    setImagePreview(URL.createObjectURL(f));
-  };
-
-  const handleSubmit = async () => {
-    if (!form.name.trim()) { setError("Product name is required."); return; }
-    if (!form.price || isNaN(Number(form.price))) { setError("Valid price is required."); return; }
-    setSaving(true); setError("");
-    try {
-      let imageUrl: string | null = null;
-      if (imageFile) {
-        const ext = imageFile.name.split(".").pop();
-        const path = `umuhle-products/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-        const { error: uploadErr } = await supabase.storage.from("products").upload(path, imageFile, { upsert: false });
-        if (uploadErr) throw uploadErr;
-        const { data: { publicUrl } } = supabase.storage.from("products").getPublicUrl(path);
-        imageUrl = publicUrl;
-      }
-      const { data, error: insertErr } = await supabase
-        .from("products")
-        .insert({
-          partner_id: userId,
-          name: form.name.trim(),
-          description: form.description.trim() || null,
-          price: Math.round(Number(form.price) * 100), // convert to cents
-          category: form.category,
-          stock_count: parseInt(form.stock_count) || 0,
-          image_url: imageUrl,
-          is_active: true,
-          moderation_status: "approved", // Umuhle products skip verification
-        })
-        .select()
-        .single();
-      if (insertErr) throw insertErr;
-      setProducts((prev) => [data as ProductRow, ...prev]);
-      setForm({ name: "", description: "", price: "", category: "hair", stock_count: "0" });
-      setImageFile(null);
-      setImagePreview("");
-      setShowForm(false);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Something went wrong.");
-    } finally {
-      setSaving(false);
-    }
-  };
+  useEffect(() => { load(); }, [load]);
 
   const toggleActive = async (p: ProductRow) => {
     await supabase.from("products").update({ is_active: !p.is_active }).eq("id", p.id);
     setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, is_active: !x.is_active } : x)));
   };
 
-  const inputStyle: React.CSSProperties = {
-    width: "100%",
-    padding: "0.75rem 1rem",
-    borderRadius: 12,
-    border: "1.5px solid #E0E0E0",
-    fontSize: "0.9rem",
-    boxSizing: "border-box",
+  // Called by ProductForm after a successful save
+  const handleSaved = (saved: ProductRow & { id: string }) => {
+    setProducts((prev) => {
+      const exists = prev.find((p) => p.id === saved.id);
+      if (exists) return prev.map((p) => p.id === saved.id ? { ...p, ...saved } : p);
+      return [saved as unknown as ProductRow, ...prev];
+    });
+    setShowForm(false);
+    setEditTarget(null);
   };
 
   return (
@@ -1254,61 +1215,40 @@ function UmuhleProductsTab({
         <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", margin: 0 }}>
           Umuhle Products
         </h2>
-        <button
-          onClick={() => setShowForm((v) => !v)}
-          className="btn-plum"
-          style={{ padding: "0.55rem 1.25rem", fontSize: "0.85rem" }}
-        >
-          {showForm ? "Cancel" : "+ Add Product"}
-        </button>
+        {!showForm && !editTarget && (
+          <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.55rem 1.25rem", fontSize: "0.85rem" }}>
+            + Add Product
+          </button>
+        )}
       </div>
       <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
         Products uploaded here are published immediately without requiring verification.
       </p>
 
+      {/* Add form */}
       {showForm && (
-        <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.5rem", marginBottom: "1.5rem" }}>
-          <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>New Umuhle Product</h3>
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.9rem" }}>
-            <div>
-              <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "#888", marginBottom: "0.3rem" }}>Product Name *</label>
-              <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="e.g. Argan Oil Treatment" style={inputStyle} />
-            </div>
-            <div>
-              <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "#888", marginBottom: "0.3rem" }}>Description</label>
-              <textarea value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="Describe the product…" rows={3} style={{ ...inputStyle, resize: "vertical" }} />
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.75rem" }}>
-              <div>
-                <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "#888", marginBottom: "0.3rem" }}>Price (Rand) *</label>
-                <input type="number" min="0" step="0.01" value={form.price} onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))} placeholder="e.g. 149.99" style={inputStyle} />
-              </div>
-              <div>
-                <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "#888", marginBottom: "0.3rem" }}>Category</label>
-                <select value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))} style={{ ...inputStyle, background: "#fff" }}>
-                  {["hair", "nails", "makeup", "lashes", "skincare", "tools", "other"].map((c) => (
-                    <option key={c} value={c} style={{ textTransform: "capitalize" }}>{c}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "#888", marginBottom: "0.3rem" }}>Stock</label>
-                <input type="number" min="0" value={form.stock_count} onChange={(e) => setForm((f) => ({ ...f, stock_count: e.target.value }))} style={inputStyle} />
-              </div>
-            </div>
-            <div>
-              <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "#888", marginBottom: "0.3rem" }}>Product Image</label>
-              {imagePreview && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={imagePreview} alt="" style={{ width: 80, height: 80, borderRadius: 10, objectFit: "cover", marginBottom: 8 }} />
-              )}
-              <input type="file" accept="image/*" onChange={handleImageChange} style={{ fontSize: "0.85rem" }} />
-            </div>
-            {error && <p style={{ color: "#E53935", fontSize: "0.85rem" }}>{error}</p>}
-            <button onClick={handleSubmit} disabled={saving} className="btn-plum" style={{ alignSelf: "flex-start", padding: "0.75rem 2rem" }}>
-              {saving ? "Publishing…" : "Publish Product"}
-            </button>
-          </div>
+        <div style={{ marginBottom: "1.5rem" }}>
+          <ProductForm
+            partnerId={userId}
+            supabase={supabase}
+            skipVerify={true}
+            onSaved={handleSaved}
+            onCancel={() => setShowForm(false)}
+          />
+        </div>
+      )}
+
+      {/* Edit form */}
+      {editTarget && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <ProductForm
+            initial={productToForm(editTarget)}
+            partnerId={userId}
+            supabase={supabase}
+            skipVerify={true}
+            onSaved={handleSaved}
+            onCancel={() => setEditTarget(null)}
+          />
         </div>
       )}
 
@@ -1331,26 +1271,30 @@ function UmuhleProductsTab({
               )}
               <div style={{ flex: 1 }}>
                 <p style={{ fontWeight: 600, fontSize: "0.9rem", margin: "0 0 0.1rem" }}>{p.name}</p>
-                <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: 0 }}>
+                <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: "0 0 0.1rem" }}>
                   {fmt(p.price)} · {p.stock_count} in stock · <span style={{ textTransform: "capitalize" }}>{p.category}</span>
                 </p>
+                {(p.weight_g || p.length_cm) && (
+                  <p style={{ fontSize: "0.72rem", color: "#bbb", margin: 0 }}>
+                    {p.weight_g ? `${p.weight_g}g` : ""}
+                    {p.length_cm ? ` · ${p.length_cm}×${p.width_cm}×${p.height_cm} cm` : ""}
+                  </p>
+                )}
               </div>
-              <button
-                onClick={() => toggleActive(p)}
-                style={{
-                  padding: "0.35rem 0.9rem",
-                  borderRadius: 100,
-                  border: "none",
-                  background: p.is_active ? "#E8F5E9" : "#F5F5F5",
-                  color: p.is_active ? "#2E7D32" : "#757575",
-                  fontWeight: 500,
-                  fontSize: "0.78rem",
-                  cursor: "pointer",
-                  flexShrink: 0,
-                }}
-              >
-                {p.is_active ? "Live" : "Hidden"}
-              </button>
+              <div style={{ display: "flex", gap: "0.5rem", flexShrink: 0 }}>
+                <button
+                  onClick={() => { setEditTarget(p); setShowForm(false); }}
+                  style={{ padding: "0.35rem 0.9rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "#fff", color: "var(--plum)", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => toggleActive(p)}
+                  style={{ padding: "0.35rem 0.9rem", borderRadius: 100, border: "none", background: p.is_active ? "#E8F5E9" : "#F5F5F5", color: p.is_active ? "#2E7D32" : "#757575", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
+                >
+                  {p.is_active ? "Live" : "Hidden"}
+                </button>
+              </div>
             </div>
           ))}
           {products.length === 0 && (
@@ -1362,107 +1306,115 @@ function UmuhleProductsTab({
   );
 }
 
-// ── Add Salon Tab (admin creates a salon directly) ────────────────────────────
+// ── Add Salon Tab (admin creates a salon directly — auto-approved) ─────────────
+// Identical to the SalonForm in dashboard/page.tsx but status is "approved"
+// immediately so it goes live without manual review.
+
+type DayHours = { closed: boolean; open: string; close: string };
+type SpecialDay = { date: string; closed: boolean; open?: string; close?: string };
+type OpeningHours = {
+  weekly: {
+    sunday: DayHours; monday: DayHours; tuesday: DayHours;
+    wednesday: DayHours; thursday: DayHours; friday: DayHours; saturday: DayHours;
+  };
+  public_holidays: DayHours;
+  special_days: SpecialDay[];
+};
+type SalonListing = {
+  id?: string; name: string; description: string; address: string;
+  suburb: string; city: string; phone: string; email: string; website: string;
+  opening_hours: OpeningHours; gallery_urls: string[];
+  instagram_username: string; youtube_url: string; services: string[];
+  status?: "pending" | "approved" | "rejected";
+};
+
+const WEEK_DAYS_ADMIN = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"] as const;
+const ALL_SALON_SERVICES = ["hair","nails","makeup","lashes"];
+const defaultDayAdmin: DayHours = { closed: false, open: "08:00", close: "17:00" };
+
+const emptySalonAdmin = (): SalonListing => ({
+  name: "", description: "", address: "", suburb: "", city: "",
+  phone: "", email: "", website: "",
+  opening_hours: {
+    weekly: {
+      sunday:    { closed: true, open: "", close: "" },
+      monday:    { ...defaultDayAdmin },
+      tuesday:   { ...defaultDayAdmin },
+      wednesday: { ...defaultDayAdmin },
+      thursday:  { ...defaultDayAdmin },
+      friday:    { ...defaultDayAdmin },
+      saturday:  { closed: false, open: "08:00", close: "13:00" },
+    },
+    public_holidays: { closed: true, open: "", close: "" },
+    special_days: [],
+  },
+  gallery_urls: [], instagram_username: "", youtube_url: "", services: [],
+});
 
 function AddSalonTab({ supabase, userId }: { supabase: ReturnType<typeof createClient>; userId: string }) {
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-  const [form, setForm] = useState({
-    name: "",
-    description: "",
-    address: "",
-    suburb: "",
-    city: "",
-    phone: "",
-    email: "",
-    website: "",
-    instagram_username: "",
-    youtube_url: "",
-    services: [] as string[],
-    partner_email: "", // the owner email
-  });
-
-  const ALL_SERVICES = ["hair", "nails", "makeup", "lashes"];
+  const [form,         setForm]        = useState<SalonListing>(emptySalonAdmin());
+  const [saving,       setSaving]      = useState(false);
+  const [error,        setError]       = useState("");
+  const [success,      setSuccess]     = useState("");
+  const [partnerEmail, setPartnerEmail] = useState("");
 
   const inputStyle: React.CSSProperties = {
-    width: "100%",
-    padding: "0.75rem 1rem",
-    borderRadius: 12,
-    border: "1.5px solid #E0E0E0",
-    fontSize: "0.9rem",
-    boxSizing: "border-box",
+    width: "100%", padding: "0.75rem 1rem", borderRadius: 12,
+    border: "1.5px solid #E0E0E0", fontSize: "0.9rem", boxSizing: "border-box",
   };
   const labelStyle: React.CSSProperties = {
-    fontSize: "0.8rem",
-    fontWeight: 600,
-    color: "#888",
-    display: "block",
-    marginBottom: "0.3rem",
-    marginTop: "0.85rem",
+    fontSize: "0.8rem", fontWeight: 600, color: "#888",
+    display: "block", marginBottom: "0.3rem", marginTop: "0.85rem",
   };
 
   const toggleService = (svc: string) => {
-    setForm((f) => ({
+    setForm(f => ({
       ...f,
-      services: f.services.includes(svc) ? f.services.filter((s) => s !== svc) : [...f.services, svc],
+      services: f.services.includes(svc) ? f.services.filter(s => s !== svc) : [...f.services, svc],
     }));
   };
 
   const handleSubmit = async () => {
+    setError(""); setSuccess("");
     if (!form.name.trim()) { setError("Salon name is required."); return; }
     if (!form.address.trim()) { setError("Address is required."); return; }
+    const openDays = Object.values(form.opening_hours.weekly).filter(d => !d.closed);
+    if (openDays.length === 0) { setError("Select at least one open business day."); return; }
     if (form.services.length === 0) { setError("Select at least one service."); return; }
 
-    setSaving(true); setError(""); setSuccess("");
+    setSaving(true);
     try {
-      // Resolve partner by email if provided
       let partnerId = userId;
-      if (form.partner_email.trim()) {
+      if (partnerEmail.trim()) {
         const { data: partnerProfile } = await supabase
-          .from("profiles")
-          .select("id")
-          .eq("email", form.partner_email.trim())
-          .single();
+          .from("profiles").select("id").eq("email", partnerEmail.trim()).single();
         if (partnerProfile) partnerId = partnerProfile.id;
+        else { setError("Partner email not found in profiles."); setSaving(false); return; }
       }
 
-      const defaultHours = {
-        weekly: {
-          sunday: { closed: true, open: "", close: "" },
-          monday: { closed: false, open: "08:00", close: "17:00" },
-          tuesday: { closed: false, open: "08:00", close: "17:00" },
-          wednesday: { closed: false, open: "08:00", close: "17:00" },
-          thursday: { closed: false, open: "08:00", close: "17:00" },
-          friday: { closed: false, open: "08:00", close: "17:00" },
-          saturday: { closed: false, open: "08:00", close: "13:00" },
-        },
-        public_holidays: { closed: true, open: "", close: "" },
-        special_days: [],
-      };
-
       const { error: insertErr } = await supabase.from("partner_salons").insert({
-        partner_id: partnerId,
-        name: form.name.trim(),
-        description: form.description.trim() || null,
-        address: form.address.trim(),
-        suburb: form.suburb.trim() || null,
-        city: form.city.trim() || null,
-        phone: form.phone.trim() || null,
-        email: form.email.trim() || null,
-        website: form.website.trim() || null,
+        partner_id:         partnerId,
+        name:               form.name.trim(),
+        description:        form.description.trim() || null,
+        address:            form.address.trim(),
+        suburb:             form.suburb.trim() || null,
+        city:               form.city.trim() || null,
+        phone:              form.phone.trim() || null,
+        email:              form.email.trim() || null,
+        website:            form.website.trim() || null,
         instagram_username: form.instagram_username.trim() || null,
-        youtube_url: form.youtube_url.trim() || null,
-        services: form.services,
-        opening_hours: defaultHours,
-        status: "approved",
-        is_active: true,
-        gallery_urls: [],
+        youtube_url:        form.youtube_url.trim() || null,
+        services:           form.services,
+        opening_hours:      form.opening_hours,
+        gallery_urls:       [],
+        status:             "approved",
+        is_active:          true,
       });
       if (insertErr) throw insertErr;
 
-      setSuccess(`Salon "${form.name}" has been created and published.`);
-      setForm({ name: "", description: "", address: "", suburb: "", city: "", phone: "", email: "", website: "", instagram_username: "", youtube_url: "", services: [], partner_email: "" });
+      setSuccess(`Salon "${form.name}" created and published.`);
+      setForm(emptySalonAdmin());
+      setPartnerEmail("");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
@@ -1471,101 +1423,199 @@ function AddSalonTab({ supabase, userId }: { supabase: ReturnType<typeof createC
   };
 
   return (
-    <div style={{ maxWidth: 640 }}>
+    <div style={{ maxWidth: 680 }}>
       <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>
         Add Salon (Admin)
       </h2>
       <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-        Manually create and immediately publish a salon on behalf of a partner.
+        Manually create and immediately publish a salon. No review required.
       </p>
-      <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.5rem" }}>
-        <label style={labelStyle}>Partner Email (optional — assigns to that partner)</label>
-        <input
-          type="email"
-          value={form.partner_email}
-          onChange={(e) => setForm((f) => ({ ...f, partner_email: e.target.value }))}
-          placeholder="partner@example.co.za"
-          style={inputStyle}
-        />
-        <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "0.25rem" }}>Leave blank to assign to your admin account.</p>
 
-        <label style={labelStyle}>Salon Name *</label>
-        <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="e.g. Beauty by Thandi" style={inputStyle} />
+      <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.5rem" }}>
+
+        <label style={labelStyle}>Partner email (optional)</label>
+        <input type="email" value={partnerEmail}
+          onChange={e => setPartnerEmail(e.target.value)}
+          placeholder="partner@example.co.za" style={inputStyle} />
+        <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "0.25rem" }}>
+          Leave blank to assign to your admin account.
+        </p>
+
+        <label style={labelStyle}>Salon name *</label>
+        <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+          placeholder="e.g. Beauty by Thandi" style={inputStyle} />
 
         <label style={labelStyle}>Description</label>
-        <textarea value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="Tell clients what makes this salon special…" rows={3} style={{ ...inputStyle, resize: "vertical" }} />
+        <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+          placeholder="Tell clients what makes this salon special…" rows={3}
+          style={{ ...inputStyle, resize: "vertical" }} />
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 1rem" }}>
           <div>
-            <label style={labelStyle}>Suburb</label>
-            <input value={form.suburb} onChange={(e) => setForm((f) => ({ ...f, suburb: e.target.value }))} placeholder="e.g. Sandton" style={inputStyle} />
+            <label style={labelStyle}>Suburb *</label>
+            <input value={form.suburb} onChange={e => setForm(f => ({ ...f, suburb: e.target.value }))}
+              placeholder="e.g. Sandton" style={inputStyle} />
           </div>
           <div>
-            <label style={labelStyle}>City</label>
-            <input value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))} placeholder="e.g. Johannesburg" style={inputStyle} />
+            <label style={labelStyle}>City *</label>
+            <input value={form.city} onChange={e => setForm(f => ({ ...f, city: e.target.value }))}
+              placeholder="e.g. Johannesburg" style={inputStyle} />
           </div>
         </div>
 
-        <label style={labelStyle}>Full Address *</label>
-        <input value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} placeholder="123 Main St, Sandton" style={inputStyle} />
+        <label style={labelStyle}>Full address *</label>
+        <input value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
+          placeholder="123 Main Street, Sandton" style={inputStyle} />
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 1rem" }}>
           <div>
             <label style={labelStyle}>Phone</label>
-            <input type="tel" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} placeholder="082 123 4567" style={inputStyle} />
+            <input type="tel" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
+              placeholder="082 123 4567" style={inputStyle} />
           </div>
           <div>
             <label style={labelStyle}>Email</label>
-            <input type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} placeholder="hello@salon.co.za" style={inputStyle} />
+            <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+              placeholder="hello@yoursalon.co.za" style={inputStyle} />
           </div>
         </div>
 
         <label style={labelStyle}>Website</label>
-        <input type="url" value={form.website} onChange={(e) => setForm((f) => ({ ...f, website: e.target.value }))} placeholder="https://salon.co.za" style={inputStyle} />
+        <input type="url" value={form.website} onChange={e => setForm(f => ({ ...f, website: e.target.value }))}
+          placeholder="https://yoursalon.co.za" style={inputStyle} />
 
-        <label style={labelStyle}>Instagram Username</label>
-        <input value={form.instagram_username} onChange={(e) => setForm((f) => ({ ...f, instagram_username: e.target.value.replace(/^@/, "") }))} placeholder="salonhandle" style={inputStyle} />
-
-        <label style={labelStyle}>YouTube URL</label>
-        <input type="url" value={form.youtube_url} onChange={(e) => setForm((f) => ({ ...f, youtube_url: e.target.value }))} placeholder="https://youtube.com/watch?v=…" style={inputStyle} />
-
-        <label style={labelStyle}>Services *</label>
+        <label style={labelStyle}>Services offered *</label>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
-          {ALL_SERVICES.map((svc) => {
+          {ALL_SALON_SERVICES.map(svc => {
             const on = form.services.includes(svc);
             return (
-              <button
-                key={svc}
-                type="button"
-                onClick={() => toggleService(svc)}
-                style={{
-                  padding: "0.4rem 1rem", borderRadius: 100, fontSize: "0.85rem", cursor: "pointer",
-                  border: "1.5px solid", borderColor: on ? "var(--plum)" : "rgba(155,127,184,0.25)",
-                  background: on ? "var(--plum)" : "#fff", color: on ? "#fff" : "var(--grey)",
-                  fontWeight: on ? 600 : 400, textTransform: "capitalize",
-                }}
-              >
-                {svc}
-              </button>
+              <button key={svc} type="button" onClick={() => toggleService(svc)} style={{
+                padding: "0.4rem 1rem", borderRadius: 100, fontSize: "0.85rem", cursor: "pointer",
+                border: "1.5px solid", borderColor: on ? "var(--plum)" : "rgba(155,127,184,0.25)",
+                background: on ? "var(--plum)" : "#fff", color: on ? "#fff" : "var(--grey)",
+                fontWeight: on ? 600 : 400, textTransform: "capitalize",
+              }}>{svc}</button>
             );
           })}
         </div>
 
-        {error && <p style={{ color: "#E53935", fontSize: "0.85rem", marginTop: "0.75rem" }}>{error}</p>}
-        {success && <p style={{ color: "#2E7D32", fontSize: "0.85rem", marginTop: "0.75rem" }}>{success}</p>}
+        <label style={{ ...labelStyle, marginTop: "1.25rem" }}>Business hours *</label>
+        <div style={{ border: "1.5px solid #E0E0E0", borderRadius: 12, overflow: "hidden", marginTop: 4 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+            <thead>
+              <tr style={{ background: "#fafaf8" }}>
+                <th style={{ padding: "0.75rem", textAlign: "left" }}>Day</th>
+                <th style={{ padding: "0.75rem", textAlign: "center" }}>Closed</th>
+                <th style={{ padding: "0.75rem", textAlign: "left" }}>Open</th>
+                <th style={{ padding: "0.75rem", textAlign: "left" }}>Close</th>
+              </tr>
+            </thead>
+            <tbody>
+              {WEEK_DAYS_ADMIN.map(day => {
+                const hours = form.opening_hours.weekly[day];
+                return (
+                  <tr key={day} style={{ borderTop: "1px solid #f0f0f0" }}>
+                    <td style={{ padding: "0.75rem", textTransform: "capitalize" }}>{day}</td>
+                    <td style={{ padding: "0.75rem", textAlign: "center" }}>
+                      <input type="checkbox" checked={hours.closed}
+                        onChange={e => setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, weekly: { ...f.opening_hours.weekly, [day]: { ...hours, closed: e.target.checked } } } }))} />
+                    </td>
+                    <td style={{ padding: "0.75rem" }}>
+                      <input type="time" disabled={hours.closed} value={hours.open}
+                        onChange={e => setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, weekly: { ...f.opening_hours.weekly, [day]: { ...hours, open: e.target.value } } } }))}
+                        style={{ ...inputStyle, opacity: hours.closed ? 0.5 : 1 }} />
+                    </td>
+                    <td style={{ padding: "0.75rem" }}>
+                      <input type="time" disabled={hours.closed} value={hours.close}
+                        onChange={e => setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, weekly: { ...f.opening_hours.weekly, [day]: { ...hours, close: e.target.value } } } }))}
+                        style={{ ...inputStyle, opacity: hours.closed ? 0.5 : 1 }} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
 
-        <button
-          onClick={handleSubmit}
-          disabled={saving}
-          className="btn-plum"
-          style={{ marginTop: "1.25rem", padding: "0.75rem 2rem", borderRadius: 100, fontWeight: 600, width: "100%" }}
-        >
+        <label style={{ ...labelStyle, marginTop: "1rem" }}>Public holidays</label>
+        <div style={{ border: "1.5px solid #E0E0E0", borderRadius: 12, padding: "1rem" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr", gap: "0.75rem", alignItems: "center" }}>
+            <label>
+              <input type="checkbox" checked={form.opening_hours.public_holidays.closed}
+                onChange={e => setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, public_holidays: { ...f.opening_hours.public_holidays, closed: e.target.checked } } }))} />
+              {" "}Closed
+            </label>
+            <input type="time" disabled={form.opening_hours.public_holidays.closed}
+              value={form.opening_hours.public_holidays.open}
+              onChange={e => setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, public_holidays: { ...f.opening_hours.public_holidays, open: e.target.value } } }))}
+              style={inputStyle} />
+            <input type="time" disabled={form.opening_hours.public_holidays.closed}
+              value={form.opening_hours.public_holidays.close}
+              onChange={e => setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, public_holidays: { ...f.opening_hours.public_holidays, close: e.target.value } } }))}
+              style={inputStyle} />
+          </div>
+        </div>
+
+        <label style={{ ...labelStyle, marginTop: "1rem" }}>Special days</label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {form.opening_hours.special_days.map((sd, idx) => (
+            <div key={idx} style={{ border: "1.5px solid #E0E0E0", borderRadius: 12, padding: "0.75rem", display: "grid", gridTemplateColumns: "1.2fr auto 1fr 1fr auto", gap: "0.5rem", alignItems: "center" }}>
+              <input type="date" value={sd.date}
+                onChange={e => { const next = [...form.opening_hours.special_days]; next[idx].date = e.target.value; setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, special_days: next } })); }}
+                style={inputStyle} />
+              <label>
+                <input type="checkbox" checked={sd.closed}
+                  onChange={e => { const next = [...form.opening_hours.special_days]; next[idx].closed = e.target.checked; setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, special_days: next } })); }} />
+                {" "}Closed
+              </label>
+              <input type="time" disabled={sd.closed} value={sd.open ?? ""}
+                onChange={e => { const next = [...form.opening_hours.special_days]; next[idx].open = e.target.value; setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, special_days: next } })); }}
+                style={inputStyle} />
+              <input type="time" disabled={sd.closed} value={sd.close ?? ""}
+                onChange={e => { const next = [...form.opening_hours.special_days]; next[idx].close = e.target.value; setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, special_days: next } })); }}
+                style={inputStyle} />
+              <button type="button"
+                onClick={() => setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, special_days: f.opening_hours.special_days.filter((_, i) => i !== idx) } }))}
+                style={{ border: "none", background: "#FCEBEB", color: "#A32D2D", borderRadius: 8, padding: "0.5rem", cursor: "pointer" }}>
+                Remove
+              </button>
+            </div>
+          ))}
+          <button type="button"
+            onClick={() => setForm(f => ({ ...f, opening_hours: { ...f.opening_hours, special_days: [...f.opening_hours.special_days, { date: "", closed: true, open: "", close: "" }] } }))}
+            style={{ padding: "0.75rem", borderRadius: 12, border: "1.5px dashed rgba(155,127,184,0.3)", background: "#fafaf8", cursor: "pointer", color: "var(--plum)" }}>
+            + Add special day
+          </button>
+        </div>
+
+        <label style={labelStyle}>Instagram username</label>
+        <div style={{ position: "relative" }}>
+          <span style={{ position: "absolute", left: "1rem", top: "50%", transform: "translateY(-50%)", color: "#C13584", fontSize: "0.9rem", pointerEvents: "none" }}>@</span>
+          <input value={form.instagram_username}
+            onChange={e => setForm(f => ({ ...f, instagram_username: e.target.value.replace(/^@/, "") }))}
+            placeholder="yoursalonhandle" style={{ ...inputStyle, paddingLeft: "2rem" }} />
+        </div>
+
+        <label style={labelStyle}>YouTube video URL</label>
+        <input type="url" value={form.youtube_url}
+          onChange={e => setForm(f => ({ ...f, youtube_url: e.target.value }))}
+          placeholder="https://youtube.com/watch?v=..." style={inputStyle} />
+
+        {error   && <p style={{ color: "#E53935", fontSize: "0.85rem", marginTop: "0.75rem", background: "#FFF0F0", borderRadius: 8, padding: "0.5rem 0.75rem" }}>{error}</p>}
+        {success && <p style={{ color: "#2E7D32", fontSize: "0.85rem", marginTop: "0.75rem", background: "#F1F8E9", borderRadius: 8, padding: "0.5rem 0.75rem" }}>✓ {success}</p>}
+
+        <button onClick={handleSubmit} disabled={saving} className="btn-plum"
+          style={{ marginTop: "1.25rem", padding: "0.75rem 2rem", borderRadius: 100, fontWeight: 600, width: "100%", cursor: saving ? "not-allowed" : "pointer", opacity: saving ? 0.7 : 1 }}>
           {saving ? "Creating…" : "Create & Publish Salon"}
         </button>
+        <p style={{ fontSize: "0.75rem", color: "#bbb", textAlign: "center", marginTop: "0.5rem" }}>
+          Salon goes live immediately — no review needed for admin-created listings.
+        </p>
       </div>
     </div>
   );
 }
+
 
 // ── Main Admin Dashboard ───────────────────────────────────────────────────────
 
