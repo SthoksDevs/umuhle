@@ -278,7 +278,10 @@ export default function ProductForm({
         await supabase.from("product_variants").delete().eq("product_id", productId);
       }
 
-      onSaved({ ...form, ...data, id: productId });
+      // IMPORTANT: do NOT spread raw DB \`data\` here — it contains price in cents,
+      // which would overwrite form.price (rand string) and cause a double ×100 in
+      // the caller's handleSaved. Only carry form values forward + the authoritative id.
+      onSaved({ ...form, id: productId });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
@@ -321,7 +324,7 @@ export default function ProductForm({
       </div>
 
       {/* ── Product type toggle ── */}
-      <label style={sectionLabel}>🏷️ Product type</label>
+      <label style={sectionLabel}>Product type</label>
       <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.4rem" }}>
         {(["simple", "variable"] as ProductType[]).map(t => (
           <button key={t} type="button"
@@ -339,7 +342,7 @@ export default function ProductForm({
         ))}
       </div>
 
-      {/* ── Simple: price + stock ── */}
+      {/* ── Simple: price + stock */}
       {!isVariable && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginTop: "0.85rem" }}>
           <div>
@@ -357,7 +360,7 @@ export default function ProductForm({
         </div>
       )}
 
-      {/* ── Variable: variants repeater ── */}
+      {/* ── Variable: variants repeater */}
       {isVariable && (
         <div style={{ marginTop: "0.75rem" }}>
           <p style={{ fontSize: "0.78rem", color: "#aaa", margin: "0 0 0.75rem" }}>
@@ -401,10 +404,10 @@ export default function ProductForm({
         </div>
       )}
 
-      {/* ── Delivery dimensions ── */}
-      <label style={sectionLabel}>📦 Delivery dimensions</label>
+      {/* ── Product dimensions ── */}
+      <label style={sectionLabel}>Delivery dimensions</label>
       <p style={{ fontSize: "0.75rem", color: "#aaa", marginBottom: "0.5rem" }}>
-        Required by couriers (Bob Go, Pargo) to calculate shipping rates.
+        Required by couriers to calculate shipping rates.
       </p>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "0.75rem" }}>
         <div>
@@ -434,7 +437,7 @@ export default function ProductForm({
       </div>
 
       {/* ── Product image ── */}
-      <label style={sectionLabel}>🖼️ Product image</label>
+      <label style={sectionLabel}>Product image</label>
       {imagePreview && (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={imagePreview} alt=""
