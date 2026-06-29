@@ -13,16 +13,29 @@
 //   onCancel     — called when user clicks Cancel
 
 import { useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export type ProductType = "simple" | "variable";
+
+export interface ProductVariant {
+  id?: string;          // present on existing variants
+  label: string;        // e.g. "250ml", "Black / S"
+  price: string;        // rand string, e.g. "149.99"
+  stock_count: string;
+  sku: string;
+}
 
 export interface ProductFormData {
   id?: string;
   name: string;
   description: string;
-  price: string;           // rand, e.g. "149.99"
+  price: string;          // rand — only used for simple products
   category: string;
-  stock_count: string;
-  weight_g: string;        // grams
+  stock_count: string;    // only used for simple products
+  product_type: ProductType;
+  variants: ProductVariant[];
+  weight_g: string;
   length_cm: string;
   width_cm: string;
   height_cm: string;
@@ -31,52 +44,75 @@ export interface ProductFormData {
 
 const CATEGORIES = ["hair", "nails", "makeup", "lashes", "skincare", "tools", "other"];
 
+const emptyVariant = (): ProductVariant => ({
+  label: "", price: "", stock_count: "0", sku: "",
+});
+
 const emptyForm = (): ProductFormData => ({
   name: "", description: "", price: "", category: "hair",
-  stock_count: "0", weight_g: "", length_cm: "", width_cm: "", height_cm: "",
+  stock_count: "0", product_type: "simple", variants: [],
+  weight_g: "", length_cm: "", width_cm: "", height_cm: "",
   image_url: null,
 });
 
 export function productToForm(p: {
   id: string; name: string; description: string | null; price: number;
   category: string | null; stock_count: number; image_url: string | null;
+  product_type?: string | null;
   weight_g?: number | null; length_cm?: number | null;
   width_cm?: number | null; height_cm?: number | null;
+  product_variants?: Array<{
+    id: string; label: string; price: number; stock_count: number; sku: string | null;
+  }> | null;
 }): ProductFormData {
   return {
-    id:          p.id,
-    name:        p.name,
-    description: p.description ?? "",
-    price:       (p.price / 100).toFixed(2),
-    category:    p.category ?? "hair",
-    stock_count: String(p.stock_count),
-    weight_g:    p.weight_g != null ? String(p.weight_g) : "",
-    length_cm:   p.length_cm != null ? String(p.length_cm) : "",
-    width_cm:    p.width_cm  != null ? String(p.width_cm)  : "",
-    height_cm:   p.height_cm != null ? String(p.height_cm) : "",
-    image_url:   p.image_url,
+    id:           p.id,
+    name:         p.name,
+    description:  p.description ?? "",
+    price:        (p.price / 100).toFixed(2),
+    category:     p.category ?? "hair",
+    stock_count:  String(p.stock_count),
+    product_type: (p.product_type as ProductType) ?? "simple",
+    variants:     (p.product_variants ?? []).map(v => ({
+      id:          v.id,
+      label:       v.label,
+      price:       (v.price / 100).toFixed(2),
+      stock_count: String(v.stock_count),
+      sku:         v.sku ?? "",
+    })),
+    weight_g:     p.weight_g  != null ? String(p.weight_g)  : "",
+    length_cm:    p.length_cm != null ? String(p.length_cm) : "",
+    width_cm:     p.width_cm  != null ? String(p.width_cm)  : "",
+    height_cm:    p.height_cm != null ? String(p.height_cm) : "",
+    image_url:    p.image_url,
   };
 }
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 interface Props {
   initial?:    ProductFormData | null;
   partnerId:   string;
-  // Accept either a typed Supabase client or any compatible object
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase:    any;
-  skipVerify?: boolean;   // true = admin path, publishes immediately
+  skipVerify?: boolean;
   onSaved:     (row: ProductFormData & { id: string }) => void;
   onCancel?:   () => void;
 }
 
-export default function ProductForm({ initial, partnerId, supabase, skipVerify = false, onSaved, onCancel }: Props) {
+export default function ProductForm({
+  initial, partnerId, supabase, skipVerify = false, onSaved, onCancel,
+}: Props) {
   const [form,         setForm]         = useState<ProductFormData>(initial ?? emptyForm());
   const [imageFile,    setImageFile]    = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState(initial?.image_url ?? "");
   const [saving,       setSaving]       = useState(false);
   const [error,        setError]        = useState("");
 
-  const isEdit = Boolean(form.id);
+  const isEdit     = Boolean(form.id);
+  const isVariable = form.product_type === "variable";
+
+  // ── Styles ─────────────────────────────────────────────────────────────────
 
   const inputStyle: React.CSSProperties = {
     width: "100%", padding: "0.75rem 1rem", borderRadius: 12,
@@ -88,9 +124,28 @@ export default function ProductForm({ initial, partnerId, supabase, skipVerify =
     color: "#888", marginBottom: "0.3rem", marginTop: "0.85rem",
   };
   const sectionLabel: React.CSSProperties = {
-    ...labelStyle, marginTop: "1.25rem", color: "#9B7FB8",
-    textTransform: "uppercase", letterSpacing: "0.06em",
+    ...labelStyle, marginTop: "1.5rem", color: "#9B7FB8",
+    textTransform: "uppercase", letterSpacing: "0.06em", fontSize: "0.72rem",
   };
+  const smallInputStyle: React.CSSProperties = {
+    ...inputStyle, padding: "0.55rem 0.75rem", fontSize: "0.85rem",
+  };
+
+  // ── Variant helpers ─────────────────────────────────────────────────────────
+
+  const addVariant = () =>
+    setForm(f => ({ ...f, variants: [...f.variants, emptyVariant()] }));
+
+  const removeVariant = (i: number) =>
+    setForm(f => ({ ...f, variants: f.variants.filter((_, idx) => idx !== i) }));
+
+  const updateVariant = (i: number, patch: Partial<ProductVariant>) =>
+    setForm(f => ({
+      ...f,
+      variants: f.variants.map((v, idx) => idx === i ? { ...v, ...patch } : v),
+    }));
+
+  // ── Image ───────────────────────────────────────────────────────────────────
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -99,47 +154,79 @@ export default function ProductForm({ initial, partnerId, supabase, skipVerify =
     setImagePreview(URL.createObjectURL(f));
   };
 
-  const handleSubmit = async () => {
-    setError("");
-    if (!form.name.trim()) { setError("Product name is required."); return; }
-    if (!form.price || isNaN(Number(form.price)) || Number(form.price) <= 0) {
-      setError("A valid price is required."); return;
-    }
+  // ── Validation ──────────────────────────────────────────────────────────────
 
+  const validate = (): string | null => {
+    if (!form.name.trim()) return "Product name is required.";
+    if (!isVariable) {
+      if (!form.price || isNaN(Number(form.price)) || Number(form.price) <= 0)
+        return "A valid price is required.";
+    } else {
+      if (form.variants.length === 0)
+        return "Add at least one variant (e.g. size or colour).";
+      for (const v of form.variants) {
+        if (!v.label.trim()) return "All variants need a label (e.g. \"250ml\").";
+        if (!v.price || isNaN(Number(v.price)) || Number(v.price) <= 0)
+          return "All variants need a valid price.";
+      }
+    }
+    return null;
+  };
+
+  // ── Submit ──────────────────────────────────────────────────────────────────
+
+  const handleSubmit = async () => {
+    const validationErr = validate();
+    if (validationErr) { setError(validationErr); return; }
+    setError("");
     setSaving(true);
+
     try {
-      // Upload new image if provided
+      // Upload image to the "product-images" bucket
       let imageUrl: string | null = form.image_url ?? null;
       if (imageFile) {
         const ext  = imageFile.name.split(".").pop();
-        const path = `${skipVerify ? "umuhle-products" : "partner-products"}/${partnerId}/${Date.now()}.${ext}`;
+        const folder = skipVerify ? "umuhle-products" : "partner-products";
+        const path = `${folder}/${partnerId}/${Date.now()}.${ext}`;
         const { error: uploadErr } = await supabase.storage
-          .from("products")
+          .from("product-images")
           .upload(path, imageFile, { upsert: false });
         if (uploadErr) throw uploadErr;
-        const { data: { publicUrl } } = supabase.storage.from("products").getPublicUrl(path);
+        const { data: { publicUrl } } = supabase.storage
+          .from("product-images")
+          .getPublicUrl(path);
         imageUrl = publicUrl;
       }
+
+      // For simple products, price comes from the form.
+      // For variable products, set price = lowest variant price (for display/sorting).
+      const basePrice = isVariable
+        ? Math.min(...form.variants.map(v => Math.round(Number(v.price) * 100)))
+        : Math.round(Number(form.price) * 100);
+
+      const baseStock = isVariable
+        ? form.variants.reduce((sum, v) => sum + (parseInt(v.stock_count) || 0), 0)
+        : parseInt(form.stock_count) || 0;
 
       const payload = {
         partner_id:        partnerId,
         name:              form.name.trim(),
         description:       form.description.trim() || null,
-        price:             Math.round(Number(form.price) * 100),
+        price:             basePrice,
         category:          form.category,
-        stock_count:       parseInt(form.stock_count) || 0,
+        stock_count:       baseStock,
+        product_type:      form.product_type,
         image_url:         imageUrl,
-        weight_g:          form.weight_g   ? parseInt(form.weight_g)      : null,
-        length_cm:         form.length_cm  ? parseFloat(form.length_cm)   : null,
-        width_cm:          form.width_cm   ? parseFloat(form.width_cm)    : null,
-        height_cm:         form.height_cm  ? parseFloat(form.height_cm)   : null,
+        weight_g:          form.weight_g   ? parseInt(form.weight_g)    : null,
+        length_cm:         form.length_cm  ? parseFloat(form.length_cm) : null,
+        width_cm:          form.width_cm   ? parseFloat(form.width_cm)  : null,
+        height_cm:         form.height_cm  ? parseFloat(form.height_cm) : null,
         moderation_status: skipVerify ? "approved" : "scanning",
         is_active:         skipVerify,
       };
 
       let data, err;
       if (isEdit && form.id) {
-        // On edit, don't overwrite moderation_status if not admin
         const updatePayload = skipVerify
           ? payload
           : { ...payload, moderation_status: undefined, is_active: undefined };
@@ -151,13 +238,55 @@ export default function ProductForm({ initial, partnerId, supabase, skipVerify =
       }
       if (err) throw err;
 
-      onSaved({ ...form, ...data, id: data.id });
+      const productId: string = data.id;
+
+      // Upsert variants for variable products
+      if (isVariable) {
+        // Delete variants that were removed (on edit)
+        if (isEdit) {
+          const keptIds = form.variants.filter(v => v.id).map(v => v.id!);
+          if (keptIds.length > 0) {
+            await supabase
+              .from("product_variants")
+              .delete()
+              .eq("product_id", productId)
+              .not("id", "in", `(${keptIds.join(",")})`);
+          } else {
+            await supabase.from("product_variants").delete().eq("product_id", productId);
+          }
+        }
+
+        for (const v of form.variants) {
+          const variantPayload = {
+            product_id:  productId,
+            label:       v.label.trim(),
+            price:       Math.round(Number(v.price) * 100),
+            stock_count: parseInt(v.stock_count) || 0,
+            sku:         v.sku.trim() || null,
+          };
+          if (v.id) {
+            await supabase.from("product_variants").update(variantPayload).eq("id", v.id);
+          } else {
+            const { data: newV, error: vErr } = await supabase
+              .from("product_variants").insert(variantPayload).select().single();
+            if (vErr) throw vErr;
+            v.id = newV.id;
+          }
+        }
+      } else if (isEdit) {
+        // Switching from variable to simple — remove all variants
+        await supabase.from("product_variants").delete().eq("product_id", productId);
+      }
+
+      onSaved({ ...form, ...data, id: productId });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
       setSaving(false);
     }
   };
+
+  // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.5rem" }}>
@@ -170,7 +299,7 @@ export default function ProductForm({ initial, partnerId, supabase, skipVerify =
         </p>
       )}
 
-      {/* Basic info */}
+      {/* ── Product name & description ── */}
       <label style={labelStyle}>Product name *</label>
       <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
         placeholder="e.g. Argan Oil Treatment" style={inputStyle} />
@@ -180,84 +309,155 @@ export default function ProductForm({ initial, partnerId, supabase, skipVerify =
         placeholder="Describe the product…" rows={3}
         style={{ ...inputStyle, resize: "vertical" }} />
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.75rem" }}>
-        <div>
-          <label style={labelStyle}>Price (R) *</label>
-          <input type="number" min="0" step="0.01" value={form.price}
-            onChange={e => setForm(f => ({ ...f, price: e.target.value }))}
-            placeholder="149.99" style={inputStyle} />
-        </div>
-        <div>
-          <label style={labelStyle}>Category</label>
-          <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
-            style={{ ...inputStyle }}>
-            {CATEGORIES.map(c => (
-              <option key={c} value={c} style={{ textTransform: "capitalize" }}>{c}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label style={labelStyle}>Stock count</label>
-          <input type="number" min="0" value={form.stock_count}
-            onChange={e => setForm(f => ({ ...f, stock_count: e.target.value }))}
-            style={inputStyle} />
-        </div>
+      {/* ── Category ── */}
+      <div style={{ marginTop: "0.85rem" }}>
+        <label style={{ ...labelStyle, marginTop: 0 }}>Category</label>
+        <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
+          style={inputStyle}>
+          {CATEGORIES.map(c => (
+            <option key={c} value={c} style={{ textTransform: "capitalize" }}>{c}</option>
+          ))}
+        </select>
       </div>
 
-      {/* Delivery dimensions */}
+      {/* ── Product type toggle ── */}
+      <label style={sectionLabel}>🏷️ Product type</label>
+      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.4rem" }}>
+        {(["simple", "variable"] as ProductType[]).map(t => (
+          <button key={t} type="button"
+            onClick={() => setForm(f => ({ ...f, product_type: t }))}
+            style={{
+              padding: "0.5rem 1.25rem", borderRadius: 100, cursor: "pointer",
+              border: `1.5px solid ${form.product_type === t ? "var(--plum)" : "rgba(155,127,184,0.3)"}`,
+              background: form.product_type === t ? "var(--plum-t)" : "#fff",
+              color: form.product_type === t ? "var(--plum)" : "var(--grey)",
+              fontWeight: form.product_type === t ? 600 : 400,
+              fontSize: "0.85rem", textTransform: "capitalize",
+            }}>
+            {t === "simple" ? "Simple (one price)" : "Variable (sizes / colours)"}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Simple: price + stock ── */}
+      {!isVariable && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginTop: "0.85rem" }}>
+          <div>
+            <label style={{ ...labelStyle, marginTop: 0 }}>Price (R) *</label>
+            <input type="number" min="0" step="0.01" value={form.price}
+              onChange={e => setForm(f => ({ ...f, price: e.target.value }))}
+              placeholder="149.99" style={inputStyle} />
+          </div>
+          <div>
+            <label style={{ ...labelStyle, marginTop: 0 }}>Stock count</label>
+            <input type="number" min="0" value={form.stock_count}
+              onChange={e => setForm(f => ({ ...f, stock_count: e.target.value }))}
+              style={inputStyle} />
+          </div>
+        </div>
+      )}
+
+      {/* ── Variable: variants repeater ── */}
+      {isVariable && (
+        <div style={{ marginTop: "0.75rem" }}>
+          <p style={{ fontSize: "0.78rem", color: "#aaa", margin: "0 0 0.75rem" }}>
+            Add a row per variation — e.g. by size (250ml / 500ml) or colour.
+          </p>
+
+          {/* Header row */}
+          {form.variants.length > 0 && (
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1.2fr 32px", gap: "0.5rem", marginBottom: "0.35rem" }}>
+              {["Label *", "Price (R) *", "Stock", "SKU (optional)", ""].map((h, i) => (
+                <span key={i} style={{ fontSize: "0.7rem", fontWeight: 600, color: "#aaa", textTransform: "uppercase", letterSpacing: "0.05em" }}>{h}</span>
+              ))}
+            </div>
+          )}
+
+          {form.variants.map((v, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1.2fr 32px", gap: "0.5rem", marginBottom: "0.5rem", alignItems: "center" }}>
+              <input value={v.label} placeholder="e.g. 250ml"
+                onChange={e => updateVariant(i, { label: e.target.value })}
+                style={smallInputStyle} />
+              <input type="number" min="0" step="0.01" value={v.price} placeholder="49.99"
+                onChange={e => updateVariant(i, { price: e.target.value })}
+                style={smallInputStyle} />
+              <input type="number" min="0" value={v.stock_count}
+                onChange={e => updateVariant(i, { stock_count: e.target.value })}
+                style={smallInputStyle} />
+              <input value={v.sku} placeholder="optional"
+                onChange={e => updateVariant(i, { sku: e.target.value })}
+                style={smallInputStyle} />
+              <button type="button" onClick={() => removeVariant(i)}
+                style={{ width: 32, height: 32, borderRadius: "50%", border: "1.5px solid #FFCDD2", background: "#FFF5F5", color: "#E53935", cursor: "pointer", fontWeight: 700, fontSize: "1rem", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                ×
+              </button>
+            </div>
+          ))}
+
+          <button type="button" onClick={addVariant}
+            style={{ marginTop: "0.25rem", padding: "0.5rem 1.1rem", borderRadius: 100, border: "1.5px dashed rgba(155,127,184,0.5)", background: "transparent", color: "var(--plum)", fontSize: "0.85rem", cursor: "pointer", fontWeight: 500 }}>
+            + Add variant
+          </button>
+        </div>
+      )}
+
+      {/* ── Delivery dimensions ── */}
       <label style={sectionLabel}>📦 Delivery dimensions</label>
       <p style={{ fontSize: "0.75rem", color: "#aaa", marginBottom: "0.5rem" }}>
-        Required by courier services (e.g. Bob Go, Pargo) to calculate shipping rates.
+        Required by couriers (Bob Go, Pargo) to calculate shipping rates.
       </p>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "0.75rem" }}>
         <div>
           <label style={labelStyle}>Weight (g)</label>
           <input type="number" min="0" value={form.weight_g}
             onChange={e => setForm(f => ({ ...f, weight_g: e.target.value }))}
-            placeholder="e.g. 250" style={inputStyle} />
+            placeholder="250" style={inputStyle} />
         </div>
         <div>
           <label style={labelStyle}>Length (cm)</label>
           <input type="number" min="0" step="0.1" value={form.length_cm}
             onChange={e => setForm(f => ({ ...f, length_cm: e.target.value }))}
-            placeholder="e.g. 15" style={inputStyle} />
+            placeholder="15" style={inputStyle} />
         </div>
         <div>
           <label style={labelStyle}>Width (cm)</label>
           <input type="number" min="0" step="0.1" value={form.width_cm}
             onChange={e => setForm(f => ({ ...f, width_cm: e.target.value }))}
-            placeholder="e.g. 8" style={inputStyle} />
+            placeholder="8" style={inputStyle} />
         </div>
         <div>
           <label style={labelStyle}>Height (cm)</label>
           <input type="number" min="0" step="0.1" value={form.height_cm}
             onChange={e => setForm(f => ({ ...f, height_cm: e.target.value }))}
-            placeholder="e.g. 5" style={inputStyle} />
+            placeholder="5" style={inputStyle} />
         </div>
       </div>
 
-      {/* Product image */}
-      <label style={labelStyle}>Product image</label>
+      {/* ── Product image ── */}
+      <label style={sectionLabel}>🖼️ Product image</label>
       {imagePreview && (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={imagePreview} alt="" style={{ width: 80, height: 80, borderRadius: 10, objectFit: "cover", marginBottom: 8, display: "block" }} />
+        <img src={imagePreview} alt=""
+          style={{ width: 80, height: 80, borderRadius: 10, objectFit: "cover", margin: "0.35rem 0 0.5rem", display: "block" }} />
       )}
       <input type="file" accept="image/*" onChange={handleImageChange} style={{ fontSize: "0.85rem" }} />
 
+      {/* ── Error ── */}
       {error && (
         <p style={{ color: "#E53935", fontSize: "0.85rem", marginTop: "0.75rem", background: "#FFF0F0", borderRadius: 8, padding: "0.5rem 0.75rem" }}>
           {error}
         </p>
       )}
 
+      {/* ── Actions ── */}
       <div style={{ display: "flex", gap: "0.75rem", marginTop: "1.25rem" }}>
         {onCancel && (
-          <button onClick={onCancel}
+          <button type="button" onClick={onCancel}
             style={{ flex: 1, padding: "0.75rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "#fff", color: "var(--grey)", fontSize: "0.9rem", cursor: "pointer" }}>
             Cancel
           </button>
         )}
-        <button onClick={handleSubmit} disabled={saving}
+        <button type="button" onClick={handleSubmit} disabled={saving}
           className="btn-plum"
           style={{ flex: 2, padding: "0.75rem", borderRadius: 100, fontSize: "0.9rem", fontWeight: 600, cursor: saving ? "not-allowed" : "pointer", opacity: saving ? 0.7 : 1 }}>
           {saving ? "Saving…" : isEdit ? "Save changes" : skipVerify ? "Publish product" : "Submit for review"}
