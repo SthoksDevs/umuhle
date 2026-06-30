@@ -47,21 +47,17 @@ export function generateSignature(
     ? `${data}&passphrase=${encodeURIComponent(passphrase).replace(/%20/g, "+")}`
     : data;
 
-  console.log("Signature string:");
-  console.log(signatureString);
-
-  console.log("Signature:");
-  console.log(
-    crypto
-        .createHash("md5")
-        .update(signatureString)
-        .digest("hex")
-  );
-
-  return crypto
+  const hash = crypto
     .createHash("md5")
     .update(signatureString)
     .digest("hex");
+
+  console.log("[generateSignature] Field order used:", filtered.join(", "));
+  console.log("[generateSignature] Signature string:", signatureString);
+  console.log("[generateSignature] Passphrase included:", Boolean(passphrase));
+  console.log("[generateSignature] Resulting MD5 hash:", hash);
+
+  return hash;
 }
 
 export function buildPaymentParams(options: {
@@ -100,16 +96,32 @@ export function buildPaymentParams(options: {
 export async function validateITN(
   payload: Record<string, string>
 ): Promise<boolean> {
+  console.log("[PayFast ITN] ── Raw payload received ──");
+  console.log(JSON.stringify(payload, null, 2));
+  console.log("[PayFast ITN] Field order (as received):", Object.keys(payload).join(", "));
+
   const { signature, ...rest } = payload;
-  const expected = generateSignature(rest, process.env.PAYFAST_PASSPHRASE);
+  console.log("[PayFast ITN] Submitted signature:", signature);
+
+  const passphrase = process.env.PAYFAST_PASSPHRASE;
+  console.log("[PayFast ITN] Passphrase is set:", Boolean(passphrase), passphrase ? `(length ${passphrase.length})` : "");
+  console.log("[PayFast ITN] PAYFAST_ENV:", process.env.PAYFAST_ENV, "| IS_SANDBOX:", IS_SANDBOX);
+  console.log("[PayFast ITN] merchant_id in payload:", payload.merchant_id, "| env PAYFAST_MERCHANT_ID set:", Boolean(process.env.PAYFAST_MERCHANT_ID));
+
+  const expected = generateSignature(rest, passphrase);
+  console.log("[PayFast ITN] Expected signature:", expected);
+  console.log("[PayFast ITN] Signatures match:", expected === signature);
+
   if (expected !== signature) {
-    console.error("PayFast ITN: signature mismatch");
+    console.error("[PayFast ITN] ❌ LOCAL signature mismatch — payload was likely tampered with, OR passphrase / encoding differs from what PayFast used to sign.");
     return false;
   }
+  console.log("[PayFast ITN] ✅ Local signature check passed. Proceeding to remote PayFast validation...");
 
   const validateUrl = IS_SANDBOX
     ? "https://sandbox.payfast.co.za/eng/query/validate"
     : "https://www.payfast.co.za/eng/query/validate";
+  console.log("[PayFast ITN] Validating against:", validateUrl);
 
   try {
     const body = Object.entries(payload)
@@ -122,9 +134,15 @@ export async function validateITN(
       body,
     });
 
-    return (await res.text()).trim() === "VALID";
+    const responseText = (await res.text()).trim();
+    console.log("[PayFast ITN] Remote validate HTTP status:", res.status);
+    console.log("[PayFast ITN] Remote validate response body:", responseText);
+
+    const isValid = responseText === "VALID";
+    console.log("[PayFast ITN]", isValid ? "✅ Remote validation passed" : "❌ Remote validation FAILED");
+    return isValid;
   } catch (err) {
-    console.error("PayFast ITN validate error:", err);
+    console.error("[PayFast ITN] Remote validate request error:", err);
     return false;
   }
 }

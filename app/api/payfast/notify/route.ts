@@ -22,15 +22,22 @@ import {
 } from "@/lib/email";
 
 export async function POST(req: NextRequest) {
+  console.log("[PayFast ITN] ── Incoming notification ──");
+  console.log("[PayFast ITN] Headers:", JSON.stringify(Object.fromEntries(req.headers.entries())));
+
   const text = await req.text();
+  console.log("[PayFast ITN] Raw request body:", text);
+
   const params = Object.fromEntries(new URLSearchParams(text));
+  console.log("[PayFast ITN] Parsed params:", JSON.stringify(params, null, 2));
 
   // 1. Validate signature + PayFast server-side confirmation
   const isValid = await validateITN(params);
   if (!isValid) {
-    console.error("PayFast ITN: invalid notification");
+    console.error("[PayFast ITN] ❌ validateITN returned false — notification rejected. See logs above for signature comparison details.");
     return new NextResponse("INVALID", { status: 200 }); // Always 200 to PayFast
   }
+  console.log("[PayFast ITN] ✅ Notification validated successfully. Processing payment type:", params.custom_str1, "| status:", params.payment_status);
 
   const supabase       = await createServiceClient();
   const paymentId      = params.m_payment_id;
@@ -346,9 +353,10 @@ export async function POST(req: NextRequest) {
         console.warn("PayFast ITN: unknown payment type", paymentType, "for", paymentId);
     }
   } catch (err) {
-    console.error("PayFast ITN processing error:", err);
+    console.error("[PayFast ITN] Processing error (caught):", err);
     // Still return 200 — PayFast will retry on non-200 forever
   }
 
+  console.log("[PayFast ITN] ── Handler complete, returning 200 OK to PayFast ──");
   return new NextResponse("OK", { status: 200 });
 }
