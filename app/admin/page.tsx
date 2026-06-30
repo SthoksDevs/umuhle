@@ -1669,19 +1669,48 @@ interface EmailLogRow {
 function EmailLogTab({ supabase }: { supabase: ReturnType<typeof createClient> }) {
   const [rows,    setRows]    = useState<EmailLogRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState<string | null>(null);
   const [filter,  setFilter]  = useState<"all" | "sent" | "failed">("all");
 
+  // Reads via /api/admin/email-log (service-role on the server) rather than
+  // querying `email_log` directly from the browser. The anon-key client used
+  // everywhere else in this dashboard is bound by RLS, and there's no SELECT
+  // policy on `email_log` for admins — so a direct client-side query here
+  // silently returned no rows even though emails were being logged correctly.
   const load = useCallback(async () => {
     setLoading(true);
-    const q = supabase
-      .from("email_log")
-      .select("*")
-      .order("sent_at", { ascending: false })
-      .limit(200);
-    if (filter !== "all") q.eq("status", filter);
-    const { data } = await q;
-    setRows((data ?? []) as EmailLogRow[]);
-    setLoading(false);
+    setError(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) {
+        setError("Not authenticated.");
+        setRows([]);
+        return;
+      }
+
+      const params = new URLSearchParams();
+      if (filter !== "all") params.set("status", filter);
+
+      const res = await fetch(`/api/admin/email-log?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json();
+
+      if (!res.ok) {
+        setError(json?.error ?? "Failed to load email log.");
+        setRows([]);
+        return;
+      }
+
+      setRows((json.rows ?? []) as EmailLogRow[]);
+    } catch (e) {
+      console.error("EmailLogTab load error:", e);
+      setError("Failed to load email log.");
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
   }, [supabase, filter]);
 
   useEffect(() => { load(); }, [load]);
@@ -1709,11 +1738,17 @@ function EmailLogTab({ supabase }: { supabase: ReturnType<typeof createClient> }
         </div>
       </div>
 
+      {error && (
+        <p style={{ color: "#C62828", fontSize: "0.85rem", background: "#FFEBEE", borderRadius: 8, padding: "0.5rem 0.75rem", marginBottom: "0.75rem" }}>
+          {error}
+        </p>
+      )}
+
       {loading ? (
         <p style={{ color: "var(--grey)" }}>Loading…</p>
       ) : rows.length === 0 ? (
         <div style={{ textAlign: "center", padding: "3rem", color: "var(--grey)" }}>
-          {filter === "failed" ? "No failed emails. 🎉" : "No emails logged yet."}
+          {error ? "Couldn't load the email log." : filter === "failed" ? "No failed emails. 🎉" : "No emails logged yet."}
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>

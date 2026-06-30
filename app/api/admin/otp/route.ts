@@ -2,8 +2,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import nodemailer from "nodemailer";
 import { createHmac, timingSafeEqual } from "crypto";
+import { sendAdminOtpEmail } from "@/lib/email";
 
 const ADMIN_EMAIL = "info@umuhle.co.za";
 const OTP_SECRET  = process.env.OTP_SECRET ?? "umuhle-admin-otp-secret-CHANGE-ME";
@@ -22,36 +22,6 @@ function hashCode(code: string): string {
 
 function generateOtp(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
-// Send OTP via your own SMTP — uses the same credentials you entered in Supabase
-async function sendOtpEmail(toEmail: string, code: string): Promise<void> {
-  const transporter = nodemailer.createTransport({
-    host:   process.env.SMTP_HOST,
-    port:   Number(process.env.SMTP_PORT ?? 465),
-    secure: process.env.SMTP_SECURE !== "false", // true for port 465
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
-
-  await transporter.sendMail({
-    from:    `"Umuhle Admin" <${process.env.SMTP_FROM ?? ADMIN_EMAIL}>`,
-    to:      toEmail,
-    subject: "Your Umuhle admin verification code",
-    text:    `Your verification code is: ${code}\n\nThis code expires in 10 minutes. Do not share it.`,
-    html: `
-      <div style="font-family:sans-serif;max-width:400px;margin:0 auto;padding:2rem">
-        <p style="font-size:0.85rem;color:#888;letter-spacing:0.1em;text-transform:uppercase">Umuhle Admin</p>
-        <h2 style="font-size:1.1rem;font-weight:600;color:#1a1a1a;margin:0.5rem 0 1.5rem">Verification code</h2>
-        <div style="background:#f7f4fc;border-radius:12px;padding:1.5rem;text-align:center;margin-bottom:1.5rem">
-          <span style="font-size:2.2rem;font-weight:700;letter-spacing:0.25em;color:#9B7FB8">${code}</span>
-        </div>
-        <p style="font-size:0.85rem;color:#666">Expires in <strong>10 minutes</strong>. Do not share this code with anyone.</p>
-      </div>
-    `,
-  });
 }
 
 // ── POST: verify password → send OTP ─────────────────────────────────────────
@@ -121,9 +91,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Could not create OTP." }, { status: 500 });
   }
 
-  // Send via your own SMTP (bypasses Supabase email entirely)
+  // Send via your own SMTP (bypasses Supabase email entirely), logged to email_log
   try {
-    await sendOtpEmail(normalizedEmail, otp);
+    await sendAdminOtpEmail(normalizedEmail, otp);
   } catch (emailErr) {
     console.error("SMTP send error:", emailErr);
     return NextResponse.json(

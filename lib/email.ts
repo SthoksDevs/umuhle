@@ -217,6 +217,33 @@ async function sendToAll(
   console.log("==================================================");
 }
 
+// ── Admin OTP ──────────────────────────────────────────────────────────────────
+// Used by app/api/admin/otp/route.ts. Previously that route sent OTP emails
+// with its own private nodemailer call and never wrote to `email_log`, which
+// is why OTP codes arrived but never showed up in the database or the admin
+// dashboard's Emails tab. Routing it through the shared send() helper fixes
+// that — every OTP attempt (success or SMTP failure) is now logged exactly
+// like order/booking/ad/salon emails.
+
+export async function sendAdminOtpEmail(toEmail: string, code: string): Promise<void> {
+  await send({
+    to:      toEmail,
+    subject: "Your Umuhle admin verification code",
+    template: "admin_otp",
+    text:    `Your verification code is: ${code}\n\nThis code expires in 10 minutes. Do not share it.`,
+    html: `
+      <div style="font-family:sans-serif;max-width:400px;margin:0 auto;padding:2rem">
+        <p style="font-size:0.85rem;color:#888;letter-spacing:0.1em;text-transform:uppercase">Umuhle Admin</p>
+        <h2 style="font-size:1.1rem;font-weight:600;color:#1a1a1a;margin:0.5rem 0 1.5rem">Verification code</h2>
+        <div style="background:#f7f4fc;border-radius:12px;padding:1.5rem;text-align:center;margin-bottom:1.5rem">
+          <span style="font-size:2.2rem;font-weight:700;letter-spacing:0.25em;color:#9B7FB8">${code}</span>
+        </div>
+        <p style="font-size:0.85rem;color:#666">Expires in <strong>10 minutes</strong>. Do not share this code with anyone.</p>
+      </div>
+    `,
+  });
+}
+
 // ── Shared HTML chrome ────────────────────────────────────────────────────────
 
 function emailWrapper(title: string, body: string) {
