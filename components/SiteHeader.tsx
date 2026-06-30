@@ -72,7 +72,12 @@ export default function SiteHeader({
 
   const handleSignInClick = () => {
     setMenuOpen(false);
-    if (onSignInClick) { onSignInClick(); } else { router.push("/?auth=login"); }
+    if (onSignInClick) {
+      onSignInClick();
+    } else {
+      const next = pathname && pathname !== "/" ? `&next=${encodeURIComponent(pathname)}` : "";
+      router.push(`/?auth=login${next}`);
+    }
   };
 
   // Active check: /stores/[id] should also highlight the Stores link

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Artist, Profile } from "@/types";
@@ -230,6 +231,7 @@ function SearchWithFilter<T extends string>({
 // ─────────────────────────────────────────────────────────────────────────────
 export default function Home() {
   const supabase = createClient();
+  const router = useRouter();
 
   const [user, setUser]           = useState<User | null>(null);
   const [profile, setProfile]     = useState<Profile | null>(null);
@@ -237,6 +239,11 @@ export default function Home() {
   const [loading, setLoading]     = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategories, setActiveCategories] = useState<Category[]>([]);
+
+  // Where to send the user after a successful login/signup — defaults to
+  // /dashboard, but preserves wherever they came from (e.g. the shop page)
+  // when present via ?next=
+  const [nextUrl, setNextUrl] = useState<string | null>(null);
 
   // Cart
   const [cart, setCart]           = useState<CartItem[]>([]);
@@ -284,6 +291,8 @@ export default function Home() {
     const params = new URLSearchParams(window.location.search);
     if (params.get("auth") === "login") { setShowAuth(true); setAuthMode("login"); }
     if (params.get("auth") === "register") { setShowAuth(true); setAuthMode("register"); }
+    const n = params.get("next");
+    if (n && n.startsWith("/")) setNextUrl(n);
     // Clear error hash from OAuth failures so UI stays clean
     if (window.location.hash.includes("error")) {
       window.history.replaceState({}, "", window.location.pathname);
@@ -323,7 +332,7 @@ export default function Home() {
     await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        redirectTo: `${window.location.origin}/auth/callback?next=/dashboard`,
+        redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(nextUrl || "/dashboard")}`,
       },
     });
   };
@@ -354,6 +363,9 @@ export default function Home() {
         setShowAuth(false);
         gTag("login", { method: "email" });
         fbq("Login");
+        // Take the user back to where they were (e.g. the shop page) rather
+        // than always landing on the dashboard.
+        router.push(nextUrl || "/dashboard");
       } else {
         const { error } = await supabase.auth.signUp({
           email: authForm.email,

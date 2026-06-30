@@ -6,7 +6,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Product } from "@/types";
-import { useCart } from "@/lib/cart-context";
+import { useCart, setPendingCartAdd, getPendingCartAdd, clearPendingCartAdd } from "@/lib/cart-context";
 import Footer from "@/components/Footer";
 import SiteHeader from "@/components/SiteHeader";
 
@@ -209,11 +209,34 @@ export default function ShopPage() {
   });
 
   const handleAdd = (product: Product) => {
-    if (!user) { setShowAuth(true); return; }
+    if (!user) {
+      // Remember what they were trying to add — re-applied once they sign in
+      // and land back on this page (see the effect below).
+      setPendingCartAdd(product.id, 1);
+      setShowAuth(true);
+      return;
+    }
     addItem(product, 1);
     setAdded(product.id);
     setTimeout(() => setAdded(null), 1500);
   };
+
+  // Re-apply a pending "add to cart" click once the user is signed in and
+  // products have loaded (e.g. after they logged in from the auth modal and
+  // were redirected back to /shop).
+  useEffect(() => {
+    if (!user || products.length === 0) return;
+    const pending = getPendingCartAdd();
+    if (!pending) return;
+    const product = products.find(p => p.id === pending.productId);
+    if (product && product.stock_count > 0) {
+      addItem(product, pending.quantity);
+      setAdded(product.id);
+      setTimeout(() => setAdded(null), 1500);
+    }
+    clearPendingCartAdd();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, products]);
 
   const hasProducts = !loading && !error && products.length > 0;
   const isEmpty     = !loading && !error && products.length === 0;
@@ -362,8 +385,8 @@ export default function ShopPage() {
             <div style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 380, textAlign: "center", boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
               <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>Sign in to shop</h3>
               <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>Create an account to save items and checkout.</p>
-              <Link href="/?auth=login"><button className="btn-plum" style={{ width: "100%", marginBottom: "0.75rem" }} onClick={() => setShowAuth(false)}>Sign in</button></Link>
-              <Link href="/?auth=register"><button className="btn-outline" style={{ width: "100%" }} onClick={() => setShowAuth(false)}>Create account</button></Link>
+              <Link href="/?auth=login&next=%2Fshop"><button className="btn-plum" style={{ width: "100%", marginBottom: "0.75rem" }} onClick={() => setShowAuth(false)}>Sign in</button></Link>
+              <Link href="/?auth=register&next=%2Fshop"><button className="btn-outline" style={{ width: "100%" }} onClick={() => setShowAuth(false)}>Create account</button></Link>
             </div>
           </div>
         )}

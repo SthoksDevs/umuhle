@@ -261,7 +261,7 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) { router.replace("/?auth=login"); return; }
+      if (!user) { router.replace("/?auth=login&next=%2Fcheckout"); return; }
       setUser(user);
       supabase.from("profiles").select("*").eq("id", user.id).single().then(({ data }) => {
         if (data) {
