@@ -46,17 +46,10 @@ export async function POST(req: NextRequest) {
   const pfPaymentId    = params.pf_payment_id;
 
   try {
-
-
     console.log("======================================");
     console.log("[PAYMENT] Payment callback received");
-    console.log("[PAYMENT] Status:", paymentStatus);
-    console.log("[PAYMENT] Payment ID:", pfPaymentId);
+    console.log("[PAYMENT] Type:", paymentType, "| Status:", paymentStatus, "| Payment ID:", pfPaymentId);
 
-    /*console.log("[PAYMENT] Customer email:", booking.client_email);
-    console.log("[PAYMENT] Admin email:", process.env.ADMIN_EMAIL);*/
-
-    console.log("[PAYMENT] Calling sendBookingConfirmedEmail...");
     switch (paymentType) {
 
       // ── BOOKING ─────────────────────────────────────────────────────────────
@@ -128,31 +121,43 @@ export async function POST(req: NextRequest) {
 
           // WhatsApp notifications (fire-and-forget, don't block)
           if (clientPhone && artistPhone) {
-            notifyBookingCreated({
-              clientName:       clientRow.full_name as string,
-              clientPhone,
-              artistName:       artistRow.display_name as string,
-              artistPhone,
-              date:             booking.booking_date,
-              time:             booking.booking_time,
-              serviceName:      serviceRow?.name as string,
-              meetingAddress:   booking.meeting_address ?? undefined,
-              expectedDuration: serviceRow?.duration_minutes ?? undefined,
-            }).catch(e => console.error("WhatsApp notify error:", e));
+            try {
+              await notifyBookingCreated({
+                clientName:       clientRow.full_name as string,
+                clientPhone,
+                artistName:       artistRow.display_name as string,
+                artistPhone,
+                date:             booking.booking_date,
+                time:             booking.booking_time,
+                serviceName:      serviceRow?.name as string,
+                meetingAddress:   booking.meeting_address ?? undefined,
+                expectedDuration: serviceRow?.duration_minutes ?? undefined,
+              });
+            } catch (e) {
+              console.error("[PayFast ITN] WhatsApp notify error:", e);
+            }
           }
 
-          // Admin email
-          sendBookingConfirmedEmail({
-            bookingId:     booking.id,
-            clientName:    clientRow?.full_name as string ?? "Unknown",
-            clientEmail:   clientRow?.email    as string ?? "",
-            artistName:    artistRow?.display_name as string ?? "Unknown",
-            serviceName:   serviceRow?.name as string ?? "Service",
-            date:          booking.booking_date,
-            time:          booking.booking_time,
-            amount:        booking.total_amount,
-            meetingAddress: booking.meeting_address ?? undefined,
-          }).catch(e => console.error("Admin email error:", e));
+          // Admin + customer email — MUST be awaited. Vercel kills the function
+          // as soon as POST() returns, so a fire-and-forget promise here never
+          // gets to finish its SMTP handshake.
+          try {
+            console.log("[PayFast ITN] Sending booking confirmed emails...");
+            await sendBookingConfirmedEmail({
+              bookingId:     booking.id,
+              clientName:    clientRow?.full_name as string ?? "Unknown",
+              clientEmail:   clientRow?.email    as string ?? "",
+              artistName:    artistRow?.display_name as string ?? "Unknown",
+              serviceName:   serviceRow?.name as string ?? "Service",
+              date:          booking.booking_date,
+              time:          booking.booking_time,
+              amount:        booking.total_amount,
+              meetingAddress: booking.meeting_address ?? undefined,
+            });
+            console.log("[PayFast ITN] Booking confirmed emails done.");
+          } catch (e) {
+            console.error("[PayFast ITN] Booking confirmed email error:", e);
+          }
 
         } else if (paymentStatus === "CANCELLED" || paymentStatus === "FAILED") {
           // Mark the intent as cancelled/failed — no booking was ever created
@@ -174,16 +179,22 @@ export async function POST(req: NextRequest) {
             const clientRow  = Array.isArray(intent.client)  ? intent.client[0]  : intent.client;
             const serviceRow = Array.isArray(intent.service) ? intent.service[0] : intent.service;
 
-            sendBookingFailedEmail({
-              bookingId:   paymentId,
-              clientName:  clientRow?.full_name ?? "Unknown",
-              clientEmail: clientRow?.email     ?? "",
-              serviceName: serviceRow?.name     ?? "Service",
-              date:        intent.booking_date,
-              time:        intent.booking_time,
-              amount:      intent.total_amount,
-              reason,
-            }).catch(e => console.error("Admin failed email error:", e));
+            try {
+              console.log("[PayFast ITN] Sending booking failed/cancelled emails...");
+              await sendBookingFailedEmail({
+                bookingId:   paymentId,
+                clientName:  clientRow?.full_name ?? "Unknown",
+                clientEmail: clientRow?.email     ?? "",
+                serviceName: serviceRow?.name     ?? "Service",
+                date:        intent.booking_date,
+                time:        intent.booking_time,
+                amount:      intent.total_amount,
+                reason,
+              });
+              console.log("[PayFast ITN] Booking failed/cancelled emails done.");
+            } catch (e) {
+              console.error("[PayFast ITN] Booking failed email error:", e);
+            }
           }
         }
         break;
@@ -217,18 +228,24 @@ export async function POST(req: NextRequest) {
 
           if (order) {
             const clientRow = Array.isArray(order.client) ? order.client[0] : order.client;
-            sendOrderPaidEmail({
-              orderId:         paymentId,
-              clientName:      clientRow?.full_name      ?? "Unknown",
-              clientEmail:     clientRow?.email          ?? "",
-              totalAmount:     order.total_amount,
-              shippingAddress: order.shipping_address    ?? undefined,
-              items: (orderItems ?? []).map(i => ({
-                name:       (Array.isArray(i.product) ? i.product[0] : i.product)?.name ?? "Product",
-                quantity:   i.quantity,
-                unit_price: i.unit_price,
-              })),
-            }).catch(e => console.error("Admin order email error:", e));
+            try {
+              console.log("[PayFast ITN] Sending order paid emails...");
+              await sendOrderPaidEmail({
+                orderId:         paymentId,
+                clientName:      clientRow?.full_name      ?? "Unknown",
+                clientEmail:     clientRow?.email          ?? "",
+                totalAmount:     order.total_amount,
+                shippingAddress: order.shipping_address    ?? undefined,
+                items: (orderItems ?? []).map(i => ({
+                  name:       (Array.isArray(i.product) ? i.product[0] : i.product)?.name ?? "Product",
+                  quantity:   i.quantity,
+                  unit_price: i.unit_price,
+                })),
+              });
+              console.log("[PayFast ITN] Order paid emails done.");
+            } catch (e) {
+              console.error("[PayFast ITN] Order paid email error:", e);
+            }
           }
 
         } else if (paymentStatus === "CANCELLED" || paymentStatus === "FAILED") {
@@ -244,13 +261,19 @@ export async function POST(req: NextRequest) {
 
           if (order) {
             const clientRow = Array.isArray(order.client) ? order.client[0] : order.client;
-            sendOrderFailedEmail({
-              orderId:     paymentId,
-              clientName:  clientRow?.full_name ?? "Unknown",
-              clientEmail: clientRow?.email     ?? "",
-              totalAmount: order.total_amount,
-              reason,
-            }).catch(e => console.error("Admin order failed email error:", e));
+            try {
+              console.log("[PayFast ITN] Sending order failed/cancelled emails...");
+              await sendOrderFailedEmail({
+                orderId:     paymentId,
+                clientName:  clientRow?.full_name ?? "Unknown",
+                clientEmail: clientRow?.email     ?? "",
+                totalAmount: order.total_amount,
+                reason,
+              });
+              console.log("[PayFast ITN] Order failed/cancelled emails done.");
+            } catch (e) {
+              console.error("[PayFast ITN] Order failed email error:", e);
+            }
           }
         }
         break;
@@ -294,15 +317,21 @@ export async function POST(req: NextRequest) {
 
         if (ad) {
           const partnerRow = Array.isArray(ad.partner) ? ad.partner[0] : ad.partner;
-          sendAdPaidEmail({
-            adId:          paymentId,
-            clientName:    (partnerRow as { full_name: string } | undefined)?.full_name ?? "Partner",
-            clientEmail:   (partnerRow as { email: string } | undefined)?.email ?? "",
-            packageName:   pkg.charAt(0).toUpperCase() + pkg.slice(1),
-            adsCount:      AD_COUNTS[pkg] ?? 1,
-            durationLabel: DURATION_LABELS[pkg] ?? `${weeks} weeks`,
-            amount:        ad.price ?? 0,
-          }).catch(e => console.error("Ad paid email error:", e));
+          try {
+            console.log("[PayFast ITN] Sending ad paid emails...");
+            await sendAdPaidEmail({
+              adId:          paymentId,
+              clientName:    (partnerRow as { full_name: string } | undefined)?.full_name ?? "Partner",
+              clientEmail:   (partnerRow as { email: string } | undefined)?.email ?? "",
+              packageName:   pkg.charAt(0).toUpperCase() + pkg.slice(1),
+              adsCount:      AD_COUNTS[pkg] ?? 1,
+              durationLabel: DURATION_LABELS[pkg] ?? `${weeks} weeks`,
+              amount:        ad.price ?? 0,
+            });
+            console.log("[PayFast ITN] Ad paid emails done.");
+          } catch (e) {
+            console.error("[PayFast ITN] Ad paid email error:", e);
+          }
         }
         break;
       }
@@ -337,14 +366,20 @@ export async function POST(req: NextRequest) {
             .single();
 
           const partnerRow = Array.isArray(payment.partner) ? payment.partner[0] : payment.partner;
-          sendSalonPaidEmail({
-            paymentId,
-            clientName:  (partnerRow as { full_name: string } | undefined)?.full_name ?? "Partner",
-            clientEmail: (partnerRow as { email: string } | undefined)?.email ?? "",
-            salonName:   salon?.name ?? "Your salon",
-            amount:      (payment as { amount?: number }).amount ?? 3500,
-            expiresAt:   oneYear.toISOString(),
-          }).catch(e => console.error("Salon paid email error:", e));
+          try {
+            console.log("[PayFast ITN] Sending salon paid emails...");
+            await sendSalonPaidEmail({
+              paymentId,
+              clientName:  (partnerRow as { full_name: string } | undefined)?.full_name ?? "Partner",
+              clientEmail: (partnerRow as { email: string } | undefined)?.email ?? "",
+              salonName:   salon?.name ?? "Your salon",
+              amount:      (payment as { amount?: number }).amount ?? 3500,
+              expiresAt:   oneYear.toISOString(),
+            });
+            console.log("[PayFast ITN] Salon paid emails done.");
+          } catch (e) {
+            console.error("[PayFast ITN] Salon paid email error:", e);
+          }
         }
         break;
       }
