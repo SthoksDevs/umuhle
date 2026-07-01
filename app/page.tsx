@@ -605,6 +605,19 @@ export default function Home() {
               </div>
             )}
           </section>
+
+          {/* Become an Artist CTA */}
+          <section style={{ padding: "0 1.5rem 4rem", maxWidth: 900, margin: "0 auto" }}>
+            <div style={{ background: "linear-gradient(135deg,var(--plum-t) 0%,#fff 60%)", borderRadius: 20, padding: "3rem 2rem", textAlign: "center" }}>
+              <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.8rem", color: "var(--onyx)", marginBottom: "0.75rem" }}>
+                Are you a beauty <em style={{ color: "var(--plum)", fontStyle: "italic" }}>artist</em>?
+              </h2>
+              <p style={{ color: "var(--grey)", maxWidth: 420, margin: "0 auto 1.5rem", fontSize: "0.95rem" }}>
+                Join Umuhle and get discovered by clients across South Africa looking for hair, nail, makeup and lash artists.
+              </p>
+              <Link href="/?auth=register"><button className="btn-plum">Become an Artist</button></Link>
+            </div>
+          </section>
         </main>
       </div>
 

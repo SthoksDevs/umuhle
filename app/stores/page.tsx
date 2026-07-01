@@ -268,6 +268,17 @@ export default function StoresPage() {
             </div>
           </>
         )}
+
+        {/* List a Store CTA */}
+        <div style={{ marginTop: "3rem", background: "linear-gradient(135deg,var(--plum-t) 0%,#fff 60%)", borderRadius: 20, padding: "3rem 2rem", textAlign: "center" }}>
+          <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.8rem", color: "var(--onyx)", marginBottom: "0.75rem" }}>
+            Own a beauty <em style={{ color: "var(--plum)", fontStyle: "italic" }}>salon or store</em>?
+          </h2>
+          <p style={{ color: "var(--grey)", maxWidth: 420, margin: "0 auto 1.5rem", fontSize: "0.95rem" }}>
+            List your store on Umuhle and get discovered by clients booking hair, nail, makeup and lash appointments near them.
+          </p>
+          <Link href="/?auth=register"><button className="btn-plum">List a Store</button></Link>
+        </div>
       </main>
       <Footer />
     </div>
