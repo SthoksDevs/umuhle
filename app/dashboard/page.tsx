@@ -21,7 +21,7 @@ function formatDate(dateStr: string) {
 }
 
 // ── Tab type extended with "invite" and "my-store" (replaces "my-store") ──────
-type Tab = "bookings" | "my-orders" | "wishlist" | "profile" | "my-store" | "my-services" | "invite" | "my-shop";
+type Tab = "bookings" | "my-orders" | "wishlist" | "profile" | "my-store" | "my-products" | "my-services" | "invite" | "my-shop";
 
 const SERVICE_TYPES = [
   { id: "hair",   label: "Hair",  banner: "/banners/hair.jpg",   description: "From protective styles to blowouts, braids to colour — let clients know exactly what you specialise in." },
@@ -2008,21 +2008,18 @@ interface PartnerAdRow {
 
 const fmtShop = (cents: number) => `R${(cents / 100).toFixed(0)}`;
 
-function MyShopTab({ user }: { user: { id: string } }) {
+// ── Products manager ─────────────────────────────────────────────────────────
+// Shared product create/edit/list UI. Used both by the standalone "My
+// Products" dashboard tab (available to every user — no store required) and
+// inside "My Shop" for business partners who also run ads.
+function ProductsManager({ user }: { user: { id: string } }) {
   const supabase = createClient();
-  const [innerTab, setInnerTab] = useState<"products" | "ads">("products");
 
-  // ── Products state ──
   const [products,   setProducts]   = useState<PartnerProductRow[]>([]);
   const [prodLoading, setProdLoading] = useState(true);
   const [showForm,   setShowForm]   = useState(false);
   const [editTarget, setEditTarget] = useState<PartnerProductRow | null>(null);
 
-  // ── Ads state ──
-  const [ads,       setAds]       = useState<PartnerAdRow[]>([]);
-  const [adsLoading, setAdsLoading] = useState(true);
-
-  // Load products
   const loadProducts = useCallback(async () => {
     setProdLoading(true);
     const { data } = await supabase
@@ -2034,21 +2031,8 @@ function MyShopTab({ user }: { user: { id: string } }) {
     setProdLoading(false);
   }, [supabase, user.id]);
 
-  // Load ads
-  const loadAds = useCallback(async () => {
-    setAdsLoading(true);
-    const { data } = await supabase
-      .from("ads")
-      .select("id, title, description, image_url, package, status, moderation_status, created_at, starts_at, expires_at")
-      .eq("partner_id", user.id)
-      .order("created_at", { ascending: false });
-    setAds((data ?? []) as PartnerAdRow[]);
-    setAdsLoading(false);
-  }, [supabase, user.id]);
+  useEffect(() => { loadProducts(); }, [loadProducts]);
 
-  useEffect(() => { loadProducts(); loadAds(); }, [loadProducts, loadAds]);
-
-  // After ProductForm saves
   const handleSaved = (saved: ProductFormData & { id: string }) => {
     const toRow = (base: PartnerProductRow | undefined): PartnerProductRow => ({
       ...(base ?? {} as PartnerProductRow),
@@ -2098,6 +2082,118 @@ function MyShopTab({ user }: { user: { id: string } }) {
     );
   };
 
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "0.75rem" }}>
+        <p style={{ fontSize: "0.82rem", color: "var(--grey)", margin: 0 }}>
+          Products go through a review before appearing in the shop.
+        </p>
+        {!showForm && !editTarget && (
+          <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.55rem 1.25rem", fontSize: "0.85rem", whiteSpace: "nowrap" }}>
+            + Add product
+          </button>
+        )}
+      </div>
+
+      {showForm && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <ProductForm
+            partnerId={user.id}
+            supabase={supabase}
+            skipVerify={false}
+            onSaved={handleSaved}
+            onCancel={() => setShowForm(false)}
+          />
+        </div>
+      )}
+
+      {editTarget && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <ProductForm
+            initial={productToForm(editTarget)}
+            partnerId={user.id}
+            supabase={supabase}
+            skipVerify={false}
+            onSaved={handleSaved}
+            onCancel={() => setEditTarget(null)}
+          />
+        </div>
+      )}
+
+      {prodLoading ? (
+        <p style={{ color: "var(--grey)" }}>Loading products…</p>
+      ) : products.length === 0 && !showForm ? (
+        <div style={{ textAlign: "center", padding: "3rem", background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.12)" }}>
+          <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>🛍️</div>
+          <p style={{ fontFamily: "var(--font-display)", fontSize: "1.05rem", marginBottom: "0.5rem" }}>No products yet</p>
+          <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>Add your first product to start selling on Umuhle.</p>
+          <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.75rem 2rem" }}>Add a product</button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+          {products.map(p => (
+            <div key={p.id} style={{ background: "#fff", borderRadius: 14, border: "1.5px solid rgba(155,127,184,0.12)", padding: "1rem 1.25rem", display: "flex", gap: "1rem", alignItems: "center" }}>
+              {p.image_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={p.image_url} alt="" style={{ width: 56, height: 56, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />
+              ) : (
+                <div style={{ width: 56, height: 56, borderRadius: 8, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <span style={{ fontSize: "1.4rem" }}>🛍️</span>
+                </div>
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.1rem" }}>
+                  <p style={{ fontWeight: 600, fontSize: "0.9rem", margin: 0 }}>{p.name}</p>
+                  {modBadge(p.moderation_status)}
+                </div>
+                <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: 0 }}>
+                  {fmtShop(p.price)} · {p.stock_count} in stock · <span style={{ textTransform: "capitalize" }}>{p.category ?? "—"}</span>
+                </p>
+              </div>
+              <div style={{ display: "flex", gap: "0.4rem", flexShrink: 0 }}>
+                <button
+                  onClick={() => { setEditTarget(p); setShowForm(false); }}
+                  style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "#fff", color: "var(--plum)", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => toggleActive(p)}
+                  style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "none", background: p.is_active ? "#E8F5E9" : "#F5F5F5", color: p.is_active ? "#2E7D32" : "#757575", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
+                >
+                  {p.is_active ? "Live" : "Hidden"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MyShopTab({ user }: { user: { id: string } }) {
+  const supabase = createClient();
+  const [innerTab, setInnerTab] = useState<"products" | "ads">("products");
+
+  // ── Ads state ──
+  const [ads,       setAds]       = useState<PartnerAdRow[]>([]);
+  const [adsLoading, setAdsLoading] = useState(true);
+
+  // Load ads
+  const loadAds = useCallback(async () => {
+    setAdsLoading(true);
+    const { data } = await supabase
+      .from("ads")
+      .select("id, title, description, image_url, package, status, moderation_status, created_at, starts_at, expires_at")
+      .eq("partner_id", user.id)
+      .order("created_at", { ascending: false });
+    setAds((data ?? []) as PartnerAdRow[]);
+    setAdsLoading(false);
+  }, [supabase, user.id]);
+
+  useEffect(() => { loadAds(); }, [loadAds]);
+
   const adStatusBadge = (ad: PartnerAdRow) => {
     const map: Record<string, { bg: string; color: string }> = {
       active:          { bg: "#E8F5E9", color: "#2E7D32" },
@@ -2117,7 +2213,7 @@ function MyShopTab({ user }: { user: { id: string } }) {
     <div>
       <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.25rem" }}>My Shop</h2>
       <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-        Manage the products and ads you run on Umuhle.
+        Manage the products and ads you run on Umuhle. Looking to just add products? Head to the <strong>My Products</strong> tab — you don&apos;t need a shop to sell.
       </p>
 
       {/* Inner tab switcher */}
@@ -2131,100 +2227,13 @@ function MyShopTab({ user }: { user: { id: string } }) {
             borderRight: i === 0 ? "1.5px solid rgba(155,127,184,0.2)" : "none",
             textTransform: "capitalize",
           }}>
-            {t === "products" ? `Products${products.length ? ` (${products.length})` : ""}` : `Ads${ads.length ? ` (${ads.length})` : ""}`}
+            {t === "products" ? "Products" : `Ads${ads.length ? ` (${ads.length})` : ""}`}
           </button>
         ))}
       </div>
 
       {/* ── Products panel ── */}
-      {innerTab === "products" && (
-        <div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-            <p style={{ fontSize: "0.82rem", color: "var(--grey)", margin: 0 }}>
-              Products go through a review before appearing in the shop.
-            </p>
-            {!showForm && !editTarget && (
-              <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.55rem 1.25rem", fontSize: "0.85rem", whiteSpace: "nowrap", marginLeft: "1rem" }}>
-                + Add product
-              </button>
-            )}
-          </div>
-
-          {showForm && (
-            <div style={{ marginBottom: "1.5rem" }}>
-              <ProductForm
-                partnerId={user.id}
-                supabase={supabase}
-                skipVerify={false}
-                onSaved={handleSaved}
-                onCancel={() => setShowForm(false)}
-              />
-            </div>
-          )}
-
-          {editTarget && (
-            <div style={{ marginBottom: "1.5rem" }}>
-              <ProductForm
-                initial={productToForm(editTarget)}
-                partnerId={user.id}
-                supabase={supabase}
-                skipVerify={false}
-                onSaved={handleSaved}
-                onCancel={() => setEditTarget(null)}
-              />
-            </div>
-          )}
-
-          {prodLoading ? (
-            <p style={{ color: "var(--grey)" }}>Loading products…</p>
-          ) : products.length === 0 && !showForm ? (
-            <div style={{ textAlign: "center", padding: "3rem", background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.12)" }}>
-              <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>🛍️</div>
-              <p style={{ fontFamily: "var(--font-display)", fontSize: "1.05rem", marginBottom: "0.5rem" }}>No products yet</p>
-              <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>Add your first product to start selling on Umuhle.</p>
-              <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.75rem 2rem" }}>Add a product</button>
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
-              {products.map(p => (
-                <div key={p.id} style={{ background: "#fff", borderRadius: 14, border: "1.5px solid rgba(155,127,184,0.12)", padding: "1rem 1.25rem", display: "flex", gap: "1rem", alignItems: "center" }}>
-                  {p.image_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={p.image_url} alt="" style={{ width: 56, height: 56, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />
-                  ) : (
-                    <div style={{ width: 56, height: 56, borderRadius: 8, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <span style={{ fontSize: "1.4rem" }}>🛍️</span>
-                    </div>
-                  )}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.1rem" }}>
-                      <p style={{ fontWeight: 600, fontSize: "0.9rem", margin: 0 }}>{p.name}</p>
-                      {modBadge(p.moderation_status)}
-                    </div>
-                    <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: 0 }}>
-                      {fmtShop(p.price)} · {p.stock_count} in stock · <span style={{ textTransform: "capitalize" }}>{p.category ?? "—"}</span>
-                    </p>
-                  </div>
-                  <div style={{ display: "flex", gap: "0.4rem", flexShrink: 0 }}>
-                    <button
-                      onClick={() => { setEditTarget(p); setShowForm(false); }}
-                      style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "#fff", color: "var(--plum)", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={() => toggleActive(p)}
-                      style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "none", background: p.is_active ? "#E8F5E9" : "#F5F5F5", color: p.is_active ? "#2E7D32" : "#757575", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
-                    >
-                      {p.is_active ? "Live" : "Hidden"}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      {innerTab === "products" && <ProductsManager user={user} />}
 
       {/* ── Ads panel ── */}
       {innerTab === "ads" && (
@@ -2584,8 +2593,9 @@ export default function DashboardPage() {
     { id: "my-orders",   label: "My Orders",  icon: "🧾" },
     { id: "wishlist",    label: "Wishlist",   icon: "💜" },
     { id: "my-store",    label: "My Store",   icon: "✂️" },
+    { id: "my-products", label: "My Products", icon: "🛍️" },
     { id: "my-services", label: "Services",   icon: "💅" },
-    ...(profile.is_partner ? [{ id: "my-shop" as Tab, label: "My Shop", icon: "🛍️" }] : []),
+    ...(profile.is_partner ? [{ id: "my-shop" as Tab, label: "My Shop", icon: "📣" }] : []),
     { id: "invite",      label: "Invite",     icon: "🎁" },
     { id: "profile",     label: "Profile",    icon: "👤" },
   ];
@@ -2680,6 +2690,17 @@ export default function DashboardPage() {
 
         {/* ── My Salon tab ── */}
         {tab === "my-store" && <section><MySalonTab user={user} /></section>}
+
+        {/* ── My Products tab (any user — no store required) ── */}
+        {tab === "my-products" && (
+          <section>
+            <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", marginBottom: "0.25rem" }}>My Products</h2>
+            <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
+              Create and manage products to sell in the Umuhle shop — no store listing required.
+            </p>
+            <ProductsManager user={user} />
+          </section>
+        )}
 
         {/* ── My Services tab ── */}
         {tab === "my-services" && <section><MyServicesTab profile={profile} user={user} onUpdate={(p) => setProfile(p)} /></section>}

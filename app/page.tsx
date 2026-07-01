@@ -36,6 +36,24 @@ const CAT_ICONS: Record<string, string> = { hair: "✂", nails: "◈", makeup: "
 
 type CartItem = { id: string; name: string; price: number };
 
+// ── Pending "add to wishlist" intent ────────────────────────────────────────
+// Same idea as the cart's pending-add: if a logged-out visitor taps the heart
+// on an artist card, we remember which artist they meant, send them through
+// auth, and replay the save once they're signed in.
+const PENDING_WISHLIST_KEY = "umuhle_pending_wishlist_add";
+function setPendingWishlistAdd(artistId: string) {
+  if (typeof window === "undefined") return;
+  try { window.sessionStorage.setItem(PENDING_WISHLIST_KEY, artistId); } catch { /* ignore */ }
+}
+function getPendingWishlistAdd(): string | null {
+  if (typeof window === "undefined") return null;
+  try { return window.sessionStorage.getItem(PENDING_WISHLIST_KEY); } catch { return null; }
+}
+function clearPendingWishlistAdd() {
+  if (typeof window === "undefined") return;
+  try { window.sessionStorage.removeItem(PENDING_WISHLIST_KEY); } catch { /* ignore */ }
+}
+
 // ─── Category pill nav with scroll arrow ──────────────────────────────────────
 function CategoryPillNav({ active, onChange }: { active: Category; onChange: (c: Category) => void }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -249,6 +267,9 @@ export default function Home() {
   const [cart, setCart]           = useState<CartItem[]>([]);
   const [showCart, setShowCart]   = useState(false);
 
+  // Wishlist — artist IDs the signed-in user has saved
+  const [wishlistIds, setWishlistIds] = useState<Set<string>>(new Set());
+
   // Auth modal
   const [showAuth, setShowAuth]   = useState(false);
   const [authMode, setAuthMode] = useState<"login" | "register" | "forgot">("login");
@@ -298,6 +319,72 @@ export default function Home() {
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, []);
+
+  // Load the signed-in user's wishlist (for heart states on artist cards), and
+  // replay any pending "add to wishlist" click that happened while logged out.
+  useEffect(() => {
+    if (!user) { setWishlistIds(new Set()); return; }
+    (async () => {
+      let ids = new Set<string>();
+      try {
+        const res = await fetch("/api/wishlist");
+        if (res.ok) {
+          const data = await res.json();
+          ids = new Set<string>((data.items ?? []).map((i: { artist_id: string }) => i.artist_id));
+        }
+      } catch { /* ignore — heart states just won't be pre-filled */ }
+
+      const pending = getPendingWishlistAdd();
+      if (pending && !ids.has(pending)) {
+        try {
+          await fetch("/api/wishlist", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ artistId: pending }),
+          });
+          ids.add(pending);
+        } catch { /* ignore — user can just tap the heart again */ }
+      }
+      if (pending) clearPendingWishlistAdd();
+      setWishlistIds(ids);
+    })();
+  }, [user]);
+
+  const toggleWishlist = useCallback(async (artistId: string) => {
+    if (!user) {
+      // Remember the intent, keep them on the homepage after they sign in
+      // (rather than dropping them on the dashboard), then replay the save.
+      setPendingWishlistAdd(artistId);
+      setNextUrl("/");
+      setShowAuth(true);
+      setAuthMode("login");
+      return;
+    }
+    const wasSaved = wishlistIds.has(artistId);
+    setWishlistIds(prev => {
+      const next = new Set(prev);
+      if (wasSaved) next.delete(artistId); else next.add(artistId);
+      return next;
+    });
+    try {
+      if (wasSaved) {
+        await fetch(`/api/wishlist?artistId=${artistId}`, { method: "DELETE" });
+      } else {
+        await fetch("/api/wishlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ artistId }),
+        });
+      }
+    } catch {
+      // Revert the optimistic update if the request failed
+      setWishlistIds(prev => {
+        const next = new Set(prev);
+        if (wasSaved) next.add(artistId); else next.delete(artistId);
+        return next;
+      });
+    }
+  }, [user, wishlistIds]);
 
   const fetchProfile = async (userId: string) => {
     const { data } = await supabase.from("profiles").select("*").eq("id", userId).single();
@@ -505,8 +592,10 @@ export default function Home() {
                   <ArtistCard
                     key={artist.id}
                     artist={artist}
+                    isWishlisted={wishlistIds.has(artist.id)}
+                    onToggleWishlist={() => toggleWishlist(artist.id)}
                     onBook={() => {
-                      if (!user) { setShowAuth(true); setAuthMode("login"); return; }
+                      if (!user) { setNextUrl("/"); setShowAuth(true); setAuthMode("login"); return; }
                       setSelectedArtist(artist);
                       ttq("ViewContent", { contents: [{ content_id: artist.id, content_name: artist.display_name }] });
                       fbq("ViewContent", { content_ids: [artist.id], content_name: artist.display_name });
@@ -763,14 +852,28 @@ export default function Home() {
 
       {/* ── Booking modal ── */}
       {selectedArtist && (
-        <BookingDrawer artist={selectedArtist} onClose={() => setSelectedArtist(null)} user={user!} />
+        <BookingDrawer
+          artist={selectedArtist}
+          onClose={() => setSelectedArtist(null)}
+          user={user!}
+          isWishlisted={wishlistIds.has(selectedArtist.id)}
+          onToggleWishlist={() => toggleWishlist(selectedArtist.id)}
+        />
       )}
     </div>
   );
 }
 
 // ─── Artist card ──────────────────────────────────────────────────────────────
-function ArtistCard({ artist, onBook }: { artist: Artist; onBook: () => void }) {
+function ArtistCard({ artist, onBook, isWishlisted, onToggleWishlist }: { artist: Artist; onBook: () => void; isWishlisted: boolean; onToggleWishlist: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const handleHeartClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (busy) return;
+    setBusy(true);
+    await onToggleWishlist();
+    setBusy(false);
+  };
   return (
     <div
       style={{ borderRadius: 18, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.15)", background: "#fff", transition: "transform 0.2s, box-shadow 0.2s" }}
@@ -780,6 +883,17 @@ function ArtistCard({ artist, onBook }: { artist: Artist; onBook: () => void }) 
       <div style={{ height: 180, overflow: "hidden", position: "relative", background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <Image src={artist.avatar_url ?? "/umuhle-icon.png"} alt={artist.display_name} width={100} height={100} style={{ objectFit: "contain", opacity: 0.85 }} />
         {artist.is_verified && <span style={{ position: "absolute", top: 10, right: 10, background: "var(--forest)", color: "#fff", borderRadius: 100, padding: "0.2rem 0.6rem", fontSize: "0.7rem", fontWeight: 600 }}>Verified</span>}
+        <button
+          onClick={handleHeartClick}
+          disabled={busy}
+          aria-label={isWishlisted ? "Remove from wishlist" : "Save to wishlist"}
+          aria-pressed={isWishlisted}
+          style={{ position: "absolute", top: 10, left: 10, background: "rgba(255,255,255,0.9)", border: "none", borderRadius: "50%", width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", backdropFilter: "blur(4px)" }}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill={isWishlisted ? "#E53935" : "none"} stroke="#E53935" strokeWidth="1.75">
+            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+          </svg>
+        </button>
         <span style={{ position: "absolute", bottom: 10, left: 10, background: "rgba(255,255,255,0.9)", borderRadius: 100, padding: "0.2rem 0.75rem", fontSize: "0.75rem", fontWeight: 500, color: "var(--plum)", backdropFilter: "blur(4px)" }}>
           {CAT_ICONS[artist.category] ?? ""} {artist.category}
         </span>
@@ -798,7 +912,7 @@ function ArtistCard({ artist, onBook }: { artist: Artist; onBook: () => void }) 
 }
 
 // ─── Booking drawer ───────────────────────────────────────────────────────────
-function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () => void; user: User }) {
+function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }: { artist: Artist; onClose: () => void; user: User; isWishlisted: boolean; onToggleWishlist: () => Promise<void> }) {
   const supabase = createClient();
   type Service = { id: string; name: string; price: number; duration_minutes: number };
   const [services, setServices]   = useState<Service[]>([]);
@@ -853,7 +967,17 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
             <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1.2rem", margin: 0 }}>{artist.display_name}</h3>
             <p style={{ color: "var(--grey)", fontSize: "0.85rem", margin: 0 }}>{artist.suburb} · ★ {artist.rating.toFixed(1)}</p>
           </div>
-          <button onClick={onClose} style={{ marginLeft: "auto", background: "none", border: "none", fontSize: "1.4rem", color: "var(--light)", lineHeight: 1, cursor: "pointer" }}>×</button>
+          <button
+            onClick={() => onToggleWishlist()}
+            aria-label={isWishlisted ? "Remove from wishlist" : "Save to wishlist"}
+            aria-pressed={isWishlisted}
+            style={{ marginLeft: "auto", background: "none", border: "none", display: "flex", alignItems: "center", cursor: "pointer", padding: "0.25rem" }}
+          >
+            <svg width="19" height="19" viewBox="0 0 24 24" fill={isWishlisted ? "#E53935" : "none"} stroke="#E53935" strokeWidth="1.75">
+              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+            </svg>
+          </button>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: "1.4rem", color: "var(--light)", lineHeight: 1, cursor: "pointer" }}>×</button>
         </div>
 
         {step === "services" && (
