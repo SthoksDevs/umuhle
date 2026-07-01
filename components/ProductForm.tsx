@@ -175,13 +175,25 @@ export default function ProductForm({
     e.target.value = "";
   };
 
-  const handleImageDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const f = e.dataTransfer.files?.[0];
-    if (!f) return;
-    acceptImageFile(f);
-  };
+  const handleImageDrop = (e: React.DragEvent<HTMLElement>) => {
+  e.preventDefault();
+  setIsDragging(false);
+
+  const f = e.dataTransfer.files?.[0];
+  if (!f) return;
+
+  acceptImageFile(f);
+};
+
+const handleImageDragOver = (e: React.DragEvent<HTMLElement>) => {
+  e.preventDefault();
+  setIsDragging(true);
+};
+
+const handleImageDragLeave = (e: React.DragEvent<HTMLElement>) => {
+  e.preventDefault();
+  setIsDragging(false);
+};
 
   const handleImageDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
