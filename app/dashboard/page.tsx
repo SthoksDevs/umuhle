@@ -2114,6 +2114,7 @@ function ProductsManager({ user }: { user: { id: string } }) {
             partnerId={user.id}
             supabase={supabase}
             skipVerify={false}
+            isLive={editTarget.is_active && editTarget.moderation_status === "approved"}
             onSaved={handleSaved}
             onCancel={() => setEditTarget(null)}
           />

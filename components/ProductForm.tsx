@@ -96,16 +96,22 @@ interface Props {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase:    any;
   skipVerify?: boolean;
+  isLive?:     boolean;
   onSaved:     (row: ProductFormData & { id: string }) => void;
   onCancel?:   () => void;
 }
 
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // 2MB
+const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
+
 export default function ProductForm({
-  initial, partnerId, supabase, skipVerify = false, onSaved, onCancel,
+  initial, partnerId, supabase, skipVerify = false, isLive = false, onSaved, onCancel,
 }: Props) {
   const [form,         setForm]         = useState<ProductFormData>(initial ?? emptyForm());
   const [imageFile,    setImageFile]    = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState(initial?.image_url ?? "");
+  const [imageError,   setImageError]   = useState("");
+  const [isDragging,   setIsDragging]   = useState(false);
   const [saving,       setSaving]       = useState(false);
   const [error,        setError]        = useState("");
 
@@ -147,11 +153,44 @@ export default function ProductForm({
 
   // ── Image ───────────────────────────────────────────────────────────────────
 
+  const acceptImageFile = (f: File) => {
+    if (!ACCEPTED_IMAGE_TYPES.includes(f.type)) {
+      setImageError("Only PNG, JPG, or WEBP images are allowed.");
+      return;
+    }
+    if (f.size > MAX_IMAGE_BYTES) {
+      setImageError("Image must be smaller than 2MB.");
+      return;
+    }
+    setImageError("");
+    setImageFile(f);
+    setImagePreview(URL.createObjectURL(f));
+  };
+
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    setImageFile(f);
-    setImagePreview(URL.createObjectURL(f));
+    acceptImageFile(f);
+    // allow re-selecting the same file later
+    e.target.value = "";
+  };
+
+  const handleImageDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const f = e.dataTransfer.files?.[0];
+    if (!f) return;
+    acceptImageFile(f);
+  };
+
+  const handleImageDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleImageDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
   };
 
   // ── Validation ──────────────────────────────────────────────────────────────
@@ -323,22 +362,33 @@ export default function ProductForm({
         </select>
       </div>
 
-      {/* ── Product type toggle ── */}
+      {/* ── Product type radios ── */}
       <label style={sectionLabel}>Product type</label>
-      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.4rem" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "0.4rem" }}>
         {(["simple", "variable"] as ProductType[]).map(t => (
-          <button key={t} type="button"
-            onClick={() => setForm(f => ({ ...f, product_type: t }))}
+          <label key={t}
             style={{
-              padding: "0.5rem 1.25rem", borderRadius: 100, cursor: "pointer",
-              border: `1.5px solid ${form.product_type === t ? "var(--plum)" : "rgba(155,127,184,0.3)"}`,
+              display: "flex", alignItems: "center", gap: "0.75rem",
+              padding: "0.65rem 1rem", borderRadius: 14, cursor: "pointer",
+              border: `1.5px solid ${form.product_type === t ? "var(--plum)" : "rgba(155,127,184,0.25)"}`,
               background: form.product_type === t ? "var(--plum-t)" : "#fff",
-              color: form.product_type === t ? "var(--plum)" : "var(--grey)",
-              fontWeight: form.product_type === t ? 600 : 400,
-              fontSize: "0.85rem", textTransform: "capitalize",
             }}>
-            {t === "simple" ? "Simple (one price)" : "Variable (sizes / colours)"}
-          </button>
+            <input
+              type="radio"
+              name="product_type"
+              value={t}
+              checked={form.product_type === t}
+              onChange={() => setForm(f => ({ ...f, product_type: t }))}
+              style={{ width: 16, height: 16, accentColor: "var(--plum)", flexShrink: 0 }}
+            />
+            <span style={{
+              fontWeight: form.product_type === t ? 600 : 400,
+              fontSize: "0.85rem",
+              color: form.product_type === t ? "var(--plum)" : "var(--grey)",
+            }}>
+              {t === "simple" ? "Simple (one price)" : "Variable (sizes / colours)"}
+            </span>
+          </label>
         ))}
       </div>
 
@@ -405,11 +455,8 @@ export default function ProductForm({
       )}
 
       {/* ── Product dimensions ── */}
-      <label style={sectionLabel}>Delivery dimensions</label>
-      <p style={{ fontSize: "0.75rem", color: "#aaa", marginBottom: "0.5rem" }}>
-        Required by couriers to calculate shipping rates.
-      </p>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "0.75rem" }}>
+      <label style={sectionLabel}>Dimensions</label>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "0.75rem", marginTop: "0.5rem" }}>
         <div>
           <label style={labelStyle}>Weight (g)</label>
           <input type="number" min="0" value={form.weight_g}
@@ -438,12 +485,54 @@ export default function ProductForm({
 
       {/* ── Product image ── */}
       <label style={sectionLabel}>Product image</label>
-      {imagePreview && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={imagePreview} alt=""
-          style={{ width: 80, height: 80, borderRadius: 10, objectFit: "cover", margin: "0.35rem 0 0.5rem", display: "block" }} />
+      <div style={{ marginTop: "0.5rem" }}>
+        <label
+          onDrop={handleImageDrop}
+          onDragOver={handleImageDragOver}
+          onDragLeave={handleImageDragLeave}
+          style={{
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+            gap: "0.5rem", textAlign: "center", cursor: "pointer",
+            padding: imagePreview ? "1rem" : "1.75rem 1rem",
+            borderRadius: 14,
+            border: `1.5px dashed ${isDragging ? "var(--plum)" : "rgba(155,127,184,0.4)"}`,
+            background: isDragging ? "var(--plum-t)" : "#FAFAFA",
+            transition: "background 0.15s, border-color 0.15s",
+          }}
+        >
+          {imagePreview ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={imagePreview} alt=""
+              style={{ width: 80, height: 80, borderRadius: 10, objectFit: "cover", display: "block" }} />
+          ) : (
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#9B7FB8" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+          )}
+          <span style={{ fontSize: "0.85rem", fontWeight: 500, color: "var(--plum)" }}>
+            {imagePreview ? "Click or drop to replace image" : "Drag & drop an image, or click to browse"}
+          </span>
+          <span style={{ fontSize: "0.72rem", color: "#aaa" }}>PNG, JPG or WEBP · Max 2MB</span>
+          <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleImageChange} style={{ display: "none" }} />
+        </label>
+        {imageError && (
+          <p style={{ color: "#E53935", fontSize: "0.78rem", marginTop: "0.4rem" }}>{imageError}</p>
+        )}
+      </div>
+
+      {/* ── Live status warning ── */}
+      {isEdit && isLive && (
+        <div style={{
+          background: "#FFF0F0", border: "1.5px solid #FFCDD2", borderRadius: 12,
+          padding: "0.85rem 1rem", marginTop: "1.25rem",
+        }}>
+          <p style={{ color: "#C62828", fontSize: "0.82rem", fontWeight: 500, margin: 0 }}>
+            This product is currently live. Saving changes will void its live status and send it back for review before it&apos;s visible in the shop again.
+          </p>
+        </div>
       )}
-      <input type="file" accept="image/*" onChange={handleImageChange} style={{ fontSize: "0.85rem" }} />
 
       {/* ── Error ── */}
       {error && (

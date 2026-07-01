@@ -132,6 +132,58 @@ button { cursor: pointer; font-family: var(--font-body); }
   }
 }
 
+/* ── Cart page: items + summary ── */
+.cart-layout-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2rem;
+  align-items: start;
+}
+
+@media (max-width: 768px) {
+  .cart-layout-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .cart-summary {
+    position: static !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+  .cart-line-item {
+    flex-wrap: wrap !important;
+  }
+}
+
+/* ── Checkout page: form + summary ── */
+.checkout-layout-grid {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  gap: 2rem;
+  align-items: start;
+}
+
+@media (max-width: 768px) {
+  .checkout-layout-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .checkout-summary {
+    position: static !important;
+  }
+}
+
+/* ── Checkout delivery address fields ── */
+.checkout-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+@media (max-width: 640px) {
+  .checkout-field-row {
+    grid-template-columns: 1fr !important;
+  }
+}
+
 /* ── Multi-select highlight ── */
 select[multiple] option:checked {
   background: var(--plum-t);
