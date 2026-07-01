@@ -23,6 +23,7 @@ type AdminTab =
   | "users"
   | "ads"
   | "products"
+  | "orders"
   | "payments"
   | "umuhle-products"
   | "add-salon"
@@ -106,11 +107,30 @@ interface WithdrawalRow {
   profile?: { full_name: string; email: string; phone: string };
 }
 
+interface OrderRow {
+  id: string;
+  client_id: string;
+  total_amount: number;
+  status: string;
+  shipping_address: string | null;
+  contact_name: string | null;
+  contact_whatsapp: string | null;
+  payment_method: string | null;
+  payfast_payment_id: string | null;
+  gateway_order_id: string | null;
+  discount_cents: number;
+  coupon_code: string | null;
+  created_at: string;
+  client?: { full_name: string; email: string; phone: string };
+  order_items?: { id: string; quantity: number; unit_price: number; product?: { name: string } }[];
+}
+
 interface Analytics {
   totalUsers: number;
   activeUsers: number;
   totalOrderVolume: number;
   totalOrders: number;
+  pendingOrders: number;
   totalSalons: number;
   pendingSalons: number;
   totalProducts: number;
@@ -256,6 +276,11 @@ function StatusBadge({ status }: { status: string }) {
     draft: { bg: "#F5F5F5", color: "#616161", label: "Draft" },
     paid: { bg: "#E8F5E9", color: "#2E7D32", label: "Paid" },
     suspended: { bg: "#FFEBEE", color: "#C62828", label: "Suspended" },
+    pending_payment: { bg: "#FFF3E0", color: "#E65100", label: "Awaiting payment" },
+    processing: { bg: "#E3F2FD", color: "#1565C0", label: "Processing" },
+    shipped: { bg: "#EDE7F6", color: "#4527A0", label: "Shipped" },
+    delivered: { bg: "#E8F5E9", color: "#2E7D32", label: "Delivered" },
+    cancelled: { bg: "#FAFAFA", color: "#757575", label: "Cancelled" },
   };
   const s = map[status] ?? { bg: "#F5F5F5", color: "#616161", label: status };
   return (
@@ -1183,6 +1208,130 @@ function PaymentsTab({ supabase }: { supabase: ReturnType<typeof createClient> }
   );
 }
 
+// ── Orders Tab ─────────────────────────────────────────────────────────────────
+
+const ORDER_FILTERS = ["all", "pending_payment", "paid", "processing", "shipped", "delivered", "cancelled"] as const;
+type OrderFilter = typeof ORDER_FILTERS[number];
+
+function OrdersTab({ supabase }: { supabase: ReturnType<typeof createClient> }) {
+  const [orders, setOrders] = useState<OrderRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<OrderFilter>("all");
+  const [search, setSearch] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    let q = supabase
+      .from("orders")
+      .select("*, client:profiles!client_id(full_name, email, phone), order_items(id, quantity, unit_price, product:products(name))")
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (filter !== "all") q = q.eq("status", filter);
+    const { data } = await q;
+    setOrders((data ?? []) as unknown as OrderRow[]);
+    setLoading(false);
+  }, [filter, supabase]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = orders.filter((o) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return (
+      o.id.toLowerCase().includes(q) ||
+      (o.client?.full_name ?? "").toLowerCase().includes(q) ||
+      (o.client?.email ?? "").toLowerCase().includes(q) ||
+      (o.contact_name ?? "").toLowerCase().includes(q)
+    );
+  });
+
+  return (
+    <div>
+      <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>
+        Orders
+      </h2>
+      <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
+        Product orders placed through the shop. Click an order to view details, items, and update its status.
+      </p>
+
+      <input
+        placeholder="Search by order ID, customer name or email…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        style={{ width: "100%", padding: "0.65rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.85rem", marginBottom: "1rem", boxSizing: "border-box" }}
+      />
+
+      <div style={{ display: "flex", gap: "0.35rem", marginBottom: "1.25rem", flexWrap: "wrap" }}>
+        {ORDER_FILTERS.map((f) => (
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            style={{
+              borderRadius: 100,
+              border: `1.5px solid ${filter === f ? "var(--plum)" : "rgba(155,127,184,0.25)"}`,
+              padding: "0.35rem 0.9rem",
+              fontSize: "0.8rem",
+              fontWeight: filter === f ? 500 : 400,
+              background: filter === f ? "var(--plum-t)" : "#fff",
+              color: filter === f ? "var(--plum)" : "var(--grey)",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {f === "all" ? "All" : f === "pending_payment" ? "Awaiting payment" : f.charAt(0).toUpperCase() + f.slice(1)}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <p style={{ color: "var(--grey)" }}>Loading orders…</p>
+      ) : filtered.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "3rem", background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.12)" }}>
+          <p style={{ color: "var(--grey)" }}>No orders found.</p>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+          {filtered.map((o) => {
+            const itemCount = (o.order_items ?? []).reduce((s, i) => s + i.quantity, 0);
+            return (
+              <Link
+                key={o.id}
+                href={`/admin/orders/${o.id}`}
+                style={{ textDecoration: "none", color: "inherit" }}
+              >
+                <div
+                  style={{ background: "#fff", borderRadius: 16, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.1rem 1.25rem", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", cursor: "pointer", transition: "box-shadow 0.15s" }}
+                  onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.boxShadow = "0 8px 28px rgba(155,127,184,0.14)")}
+                  onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.boxShadow = "")}
+                >
+                  <div style={{ flex: 1, minWidth: 180 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "0.2rem" }}>
+                      <p style={{ fontWeight: 700, fontSize: "0.9rem", margin: 0, fontFamily: "monospace" }}>#{o.id.slice(0, 8)}</p>
+                      <StatusBadge status={o.status} />
+                    </div>
+                    <p style={{ fontSize: "0.85rem", fontWeight: 500, margin: "0 0 0.1rem" }}>
+                      {o.client?.full_name ?? o.contact_name ?? "Unknown customer"}
+                    </p>
+                    <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: 0 }}>
+                      {o.client?.email ?? "—"} · {itemCount} item{itemCount !== 1 ? "s" : ""}
+                    </p>
+                  </div>
+                  <div style={{ textAlign: "right", flexShrink: 0 }}>
+                    <p style={{ fontWeight: 700, color: "var(--plum)", fontSize: "1rem", margin: "0 0 0.15rem" }}>{fmt(o.total_amount)}</p>
+                    <p style={{ fontSize: "0.72rem", color: "var(--light)", margin: 0 }}>
+                      {new Date(o.created_at).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })}
+                    </p>
+                  </div>
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Umuhle Products Tab ───────────────────────────────────────────────────────
 
 function UmuhleProductsTab({
@@ -1808,6 +1957,7 @@ export default function AdminDashboard() {
       { count: totalUsers },
       { count: totalOrders },
       { data: orderVolume },
+      { count: pendingOrders },
       { count: totalSalons },
       { count: pendingSalons },
       { count: totalProducts },
@@ -1820,6 +1970,7 @@ export default function AdminDashboard() {
       supabase.from("profiles").select("*", { count: "exact", head: true }),
       supabase.from("orders").select("*", { count: "exact", head: true }).eq("status", "paid"),
       supabase.from("orders").select("total_amount").eq("status", "paid"),
+      supabase.from("orders").select("*", { count: "exact", head: true }).eq("status", "pending_payment"),
       supabase.from("partner_salons").select("*", { count: "exact", head: true }),
       supabase.from("partner_salons").select("*", { count: "exact", head: true }).eq("status", "pending"),
       supabase.from("products").select("*", { count: "exact", head: true }),
@@ -1844,6 +1995,7 @@ export default function AdminDashboard() {
       activeUsers: activeUsers ?? 0,
       totalOrderVolume: totalVolume,
       totalOrders: totalOrders ?? 0,
+      pendingOrders: pendingOrders ?? 0,
       totalSalons: totalSalons ?? 0,
       pendingSalons: pendingSalons ?? 0,
       totalProducts: totalProducts ?? 0,
@@ -1875,6 +2027,7 @@ export default function AdminDashboard() {
     { id: "users", label: "Users", icon: "👥" },
     { id: "ads", label: "Ads", icon: "📣", badge: analytics?.pendingAds },
     { id: "products", label: "Products", icon: "🛍️", badge: analytics?.pendingProducts },
+    { id: "orders", label: "Orders", icon: "📦", badge: analytics?.pendingOrders },
     { id: "payments", label: "Payments", icon: "💰", badge: analytics?.pendingWithdrawals },
     { id: "umuhle-products", label: "Umuhle Products", icon: "⭐" },
     { id: "add-salon", label: "Add Store", icon: "➕" },
@@ -1934,6 +2087,7 @@ export default function AdminDashboard() {
         {tab === "users" && <UsersTab supabase={supabase} />}
         {tab === "ads" && <AdsReviewTab supabase={supabase} />}
         {tab === "products" && <ProductsReviewTab supabase={supabase} />}
+        {tab === "orders" && <OrdersTab supabase={supabase} />}
         {tab === "payments" && <PaymentsTab supabase={supabase} />}
         {tab === "umuhle-products" && <UmuhleProductsTab supabase={supabase} userId={user.id} />}
         {tab === "add-salon" && <AddSalonTab supabase={supabase} userId={user.id} />}

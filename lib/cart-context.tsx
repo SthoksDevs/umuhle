@@ -5,6 +5,47 @@ import { createContext, useContext, useEffect, useState, useCallback, useMemo } 
 import type { Product } from "@/types";
 
 const STORAGE_KEY = "umuhle_cart_v1";
+const PENDING_ADD_KEY = "umuhle_pending_cart_add";
+
+// ── Pending "add to cart" intent ────────────────────────────────────────────
+// Used when an unauthenticated visitor clicks "Add to cart": the cart itself
+// persists fine across login (it's in localStorage), but the *click* that
+// triggered the login modal would otherwise be lost. We stash the intent in
+// sessionStorage, redirect through auth with a `next` back to the page the
+// visitor was on, then the page re-applies the pending add once the user is
+// confirmed signed in.
+export interface PendingCartAdd {
+  productId: string;
+  quantity: number;
+}
+
+export function setPendingCartAdd(productId: string, quantity: number) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(PENDING_ADD_KEY, JSON.stringify({ productId, quantity }));
+  } catch {
+    // sessionStorage unavailable — the add will just need to be redone manually
+  }
+}
+
+export function getPendingCartAdd(): PendingCartAdd | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(PENDING_ADD_KEY);
+    return raw ? (JSON.parse(raw) as PendingCartAdd) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearPendingCartAdd() {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(PENDING_ADD_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 export interface CartLine {
   product: Product;

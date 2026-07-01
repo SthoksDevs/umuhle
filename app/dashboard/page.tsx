@@ -2411,7 +2411,7 @@ function BookingHistoryCard({ booking }: { booking: BookingWithRelations }) {
           <p style={{ fontWeight: 700, color: "var(--plum)", fontSize: "1rem", margin: 0, flexShrink: 0 }}>{fmt(booking.total_amount)}</p>
         </div>
         <p style={{ fontSize: "0.76rem", color: "var(--light)", fontStyle: "italic", marginTop: "0.5rem" }}>
-          Bookings cannot be reordered automatically — artist availability changes, so book again from their profile.
+          Bookings can&apos;t be reordered automatically — artist availability changes, so book again from their profile.
         </p>
       </div>
     </div>
