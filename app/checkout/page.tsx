@@ -405,20 +405,23 @@ export default function CheckoutPage() {
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: "#FAFAFA", display: "flex", flexDirection: "column" }}>
+    <div className="page-shell" style={{ background: "#FAFAFA", display: "flex", flexDirection: "column" }}>
       {/* Nav */}
       <nav style={{ position: "sticky", top: 0, zIndex: 100, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(155,127,184,0.15)", padding: "0 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", height: 60 }}>
         <Link href="/" style={{ display: "flex", alignItems: "center", gap: "0.5rem", textDecoration: "none" }}>
           <Image src={ICON} alt="Umuhle" width={32} height={32} style={{ borderRadius: "50%", objectFit: "cover" }} />
           <span style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.2rem", letterSpacing: "0.12em", color: "var(--plum)" }}>umuhle</span>
         </Link>
-        <Link href="/cart" style={{ fontSize: "0.85rem", color: "var(--grey)", textDecoration: "none" }}>← Back to cart</Link>
+        <Link href="/cart" aria-label="Back to cart" style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem", color: "var(--grey)", textDecoration: "none" }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5" /><path d="M11 18l-6-6 6-6" /></svg>
+          <span className="nav-links-desktop" style={{ display: "inline" }}>Back to cart</span>
+        </Link>
       </nav>
 
       <main style={{ maxWidth: 900, margin: "0 auto", padding: "3rem 1.5rem 5rem", flex: 1, width: "100%", boxSizing: "border-box" }}>
         <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "2rem", marginBottom: "2rem" }}>Checkout</h1>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: "2rem", alignItems: "start" }}>
+        <div className="checkout-layout-grid">
           {/* Left: form */}
           <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
 
@@ -442,11 +445,11 @@ export default function CheckoutPage() {
               <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>Delivery address</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
                 <input placeholder="Street address *" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} style={inputStyle} />
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+                <div className="checkout-field-row">
                   <input placeholder="Suburb" value={form.suburb} onChange={(e) => setForm((f) => ({ ...f, suburb: e.target.value }))} style={inputStyle} />
                   <input placeholder="City *" value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))} style={inputStyle} />
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+                <div className="checkout-field-row">
                   <select value={form.province} onChange={(e) => setForm((f) => ({ ...f, province: e.target.value }))} style={{ ...inputStyle, background: "#fff" }}>
                     <option value="">Province</option>
                     {["Gauteng","Western Cape","KwaZulu-Natal","Eastern Cape","Limpopo","Mpumalanga","North West","Free State","Northern Cape"].map((p) => (
@@ -499,7 +502,7 @@ export default function CheckoutPage() {
           </div>
 
           {/* Right: order summary + pay button */}
-          <div style={{ position: "sticky", top: 80 }}>
+          <div className="checkout-summary" style={{ position: "sticky", top: 80 }}>
             <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem", marginBottom: "1rem" }}>
               <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>Order summary</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1.25rem" }}>

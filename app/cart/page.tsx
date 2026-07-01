@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useCart } from "@/lib/cart-context";
 import Image from "next/image";
 import Link from "next/link";
@@ -7,25 +8,56 @@ import Footer from "@/components/Footer";
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
+const CART_NAV_LINKS: [string, string][] = [["Search", "/"], ["Shop", "/shop"], ["Earn", "/earn"]];
 
 export default function CartPage() {
   const { items, count, subtotal, removeItem, setQuantity } = useCart();
+  const [menuOpen, setMenuOpen] = useState(false);
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--white)", display: "flex", flexDirection: "column" }}>
+    <div className="page-shell" style={{ background: "var(--white)", display: "flex", flexDirection: "column" }}>
       {/* Nav */}
       <nav style={{ position: "sticky", top: 0, zIndex: 100, background: "rgba(255,255,255,0.92)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(155,127,184,0.15)", padding: "0 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", height: 60 }}>
         <Link href="/" style={{ display: "flex", alignItems: "center", gap: "0.5rem", textDecoration: "none" }}>
           <Image src={ICON} alt="Umuhle" width={32} height={32} style={{ borderRadius: "50%", objectFit: "cover" }} />
           <span style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.2rem", letterSpacing: "0.12em", color: "var(--plum)" }}>umuhle</span>
         </Link>
-        <div style={{ display: "flex", gap: "0.15rem" }}>
-          {[["Search", "/"], ["Shop", "/shop"], ["Earn", "/earn"]].map(([l, h]) => (
+
+        <div className="nav-links-desktop" style={{ display: "flex", gap: "0.15rem" }}>
+          {CART_NAV_LINKS.map(([l, h]) => (
             <Link key={l} href={h} style={{ borderRadius: 100, padding: "0.4rem 1rem", color: "var(--grey)", fontSize: "0.875rem", textDecoration: "none" }}>{l}</Link>
           ))}
         </div>
-        <Link href="/shop" style={{ fontSize: "0.85rem", color: "var(--plum)", textDecoration: "none" }}>Continue shopping</Link>
+
+        <div className="nav-actions-desktop" style={{ display: "flex", alignItems: "center" }}>
+          <Link href="/shop" aria-label="Continue shopping" style={{ display: "flex", alignItems: "center", color: "var(--plum)" }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14" /><path d="M13 6l6 6-6 6" /></svg>
+          </Link>
+        </div>
+
+        <div className="nav-mobile-right" style={{ display: "none", alignItems: "center", gap: "0.5rem" }}>
+          <Link href="/shop" aria-label="Continue shopping" style={{ display: "flex", alignItems: "center", color: "var(--plum)", padding: "0.3rem" }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14" /><path d="M13 6l6 6-6 6" /></svg>
+          </Link>
+          <button
+            aria-label="Open menu"
+            onClick={() => setMenuOpen(v => !v)}
+            style={{ background: "none", border: "none", cursor: "pointer", padding: "0.3rem", color: "var(--grey)", display: "flex", flexDirection: "column", gap: 5, alignItems: "center", justifyContent: "center" }}
+          >
+            <span style={{ display: "block", width: 22, height: 2, background: "var(--grey)", borderRadius: 2, transition: "all 0.2s", transform: menuOpen ? "rotate(45deg) translate(5px,5px)" : "none" }} />
+            <span style={{ display: "block", width: 22, height: 2, background: "var(--grey)", borderRadius: 2, transition: "all 0.2s", opacity: menuOpen ? 0 : 1 }} />
+            <span style={{ display: "block", width: 22, height: 2, background: "var(--grey)", borderRadius: 2, transition: "all 0.2s", transform: menuOpen ? "rotate(-45deg) translate(5px,-5px)" : "none" }} />
+          </button>
+        </div>
       </nav>
+
+      {menuOpen && (
+        <div className="mobile-menu" style={{ position: "sticky", top: 60, zIndex: 99, background: "rgba(255,255,255,0.97)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(155,127,184,0.15)", padding: "0.75rem 1.5rem", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+          {CART_NAV_LINKS.map(([l, h]) => (
+            <Link key={l} href={h} onClick={() => setMenuOpen(false)} style={{ borderRadius: 100, padding: "0.4rem 1rem", color: "var(--grey)", fontSize: "0.875rem", textDecoration: "none", display: "inline-block" }}>{l}</Link>
+          ))}
+        </div>
+      )}
 
       <main style={{ maxWidth: 800, margin: "0 auto", padding: "3rem 1.5rem 5rem", flex: 1, width: "100%", boxSizing: "border-box" }}>
         <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "2rem", marginBottom: "0.5rem" }}>Your cart</h1>
@@ -38,11 +70,11 @@ export default function CartPage() {
             <Link href="/shop"><button className="btn-plum">Browse shop</button></Link>
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "2rem", alignItems: "start" }}>
+          <div className="cart-layout-grid">
             {/* Items */}
             <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
               {items.map(line => (
-                <div key={line.product.id} style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.25rem", display: "flex", gap: "1rem", alignItems: "center" }}>
+                <div key={line.product.id} className="cart-line-item" style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.25rem", display: "flex", gap: "1rem", alignItems: "center" }}>
                   <div style={{ width: 72, height: 72, borderRadius: 12, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                     <Image src={line.product.image_url ?? ICON} alt={line.product.name} width={56} height={56} style={{ objectFit: "contain", opacity: 0.8 }} />
                   </div>
@@ -67,7 +99,7 @@ export default function CartPage() {
             </div>
 
             {/* Summary */}
-            <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem", minWidth: 240, position: "sticky", top: 80 }}>
+            <div className="cart-summary" style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem", minWidth: 240, position: "sticky", top: 80 }}>
               <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>Order summary</h3>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.75rem", fontSize: "0.9rem" }}>
                 <span style={{ color: "var(--grey)" }}>Subtotal</span>
