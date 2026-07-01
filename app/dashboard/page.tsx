@@ -2541,8 +2541,10 @@ export default function DashboardPage() {
   const fetchProfile = async (userId: string) => {
     const { data } = await supabase.from("profiles").select("*").eq("id", userId).single();
     if (data) {
-      setProfile(data as Profile);
-      if (!data.phone) setTimeout(() => setShowWhatsAppNudge(true), 1500);
+      const p = data as Profile;
+      setProfile(p);
+      // Admins don't need the "add your WhatsApp number" onboarding nudge.
+      if (!p.phone && !p.is_admin) setTimeout(() => setShowWhatsAppNudge(true), 1500);
     }
     setLoading(false);
   };

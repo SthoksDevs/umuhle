@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Profile, AccountType } from "@/types";
@@ -18,6 +19,7 @@ const SNOOZE_KEY = "umuhle_profile_gate_snoozed";
  */
 export default function CompleteProfileGate() {
   const supabase = createClient();
+  const pathname = usePathname();
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [show, setShow] = useState(false);
@@ -41,7 +43,9 @@ export default function CompleteProfileGate() {
       setArtistCategory(p.artist_category ?? "hair");
 
       const snoozed = typeof window !== "undefined" && sessionStorage.getItem(SNOOZE_KEY) === "1";
-      if (!p.phone && !snoozed) setShow(true);
+      // Admins already have everything they need set up — don't ask them to
+      // "sign up" as a customer/artist/partner.
+      if (!p.phone && !p.is_admin && !snoozed) setShow(true);
     };
 
     supabase.auth.getUser().then(({ data: { user } }) => checkProfile(user));
@@ -84,7 +88,11 @@ export default function CompleteProfileGate() {
     setShow(false);
   };
 
-  if (!show || !user || !profile) return null;
+  // Never interrupt an admin's session, and never show this onboarding
+  // prompt on the payment result pages — someone who just finished (or
+  // abandoned) a checkout shouldn't be asked to pick an account type.
+  const isPaymentPage = pathname?.startsWith("/payment") ?? false;
+  if (!show || !user || !profile || profile.is_admin || isPaymentPage) return null;
 
   const inputStyle: React.CSSProperties = {
     padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0",
