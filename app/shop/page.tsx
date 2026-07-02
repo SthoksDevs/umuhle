@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Product } from "@/types";
 import { useCart, setPendingCartAdd, getPendingCartAdd, clearPendingCartAdd } from "@/lib/cart-context";
+import { useProductWishlist, getPendingWishlistAdd, clearPendingWishlistAdd } from "@/lib/product-wishlist-context";
 import Footer from "@/components/Footer";
 import SiteHeader from "@/components/SiteHeader";
 
@@ -152,6 +153,7 @@ function ProductSkeleton() {
 export default function ShopPage() {
   const supabase = createClient();
   const { addItem } = useCart();
+  const { isWishlisted, toggle: toggleWishlist } = useProductWishlist();
 
   const [user, setUser]           = useState<User | null>(null);
   const [products, setProducts]   = useState<Product[]>([]);
@@ -238,6 +240,18 @@ export default function ShopPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, products]);
 
+  // Re-apply a pending "heart" click once the user is signed in and products
+  // have loaded (mirrors the pending "add to cart" replay above).
+  useEffect(() => {
+    if (!user || products.length === 0) return;
+    const pendingId = getPendingWishlistAdd();
+    if (!pendingId) return;
+    const product = products.find(p => p.id === pendingId);
+    if (product) toggleWishlist(product);
+    clearPendingWishlistAdd();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, products]);
+
   const hasProducts = !loading && !error && products.length > 0;
   const isEmpty     = !loading && !error && products.length === 0;
 
@@ -314,6 +328,7 @@ export default function ShopPage() {
               const catImage  = CATEGORY_IMAGE[p.category ?? ""] ?? "/umuhle-icon.png";
               const catLabel  = CAT_LABEL[p.category ?? ""] ?? p.category ?? "";
               const isAdded   = added === p.id;
+              const wishlisted = isWishlisted(p.id);
 
               return (
                 <div key={p.id} style={{ borderRadius: 16, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.15)", background: "#fff", position: "relative", display: "flex", flexDirection: "column" }}>
@@ -321,6 +336,15 @@ export default function ShopPage() {
                   {!inStock && (
                     <div style={{ position: "absolute", top: 10, left: 10, zIndex: 2, background: "#888", color: "#fff", borderRadius: 100, padding: "0.2rem 0.7rem", fontSize: "0.7rem", fontWeight: 700 }}>Out of stock</div>
                   )}
+
+                  <button
+                    onClick={() => toggleWishlist(p, () => setShowAuth(true))}
+                    aria-label={wishlisted ? "Remove from wishlist" : "Save to wishlist"}
+                    aria-pressed={wishlisted}
+                    style={{ position: "absolute", top: 10, right: 10, zIndex: 2, background: "rgba(255,255,255,0.92)", border: "none", borderRadius: "50%", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", backdropFilter: "blur(4px)", boxShadow: "0 2px 8px rgba(0,0,0,0.1)" }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill={wishlisted ? "#E53935" : "none"} stroke="#E53935" strokeWidth="1.75"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                  </button>
 
                   {/* Clickable image area → product detail */}
                   <Link href={`/shop/${p.id}`} style={{ textDecoration: "none", display: "block" }}>

@@ -9,6 +9,7 @@ import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Profile } from "@/types";
 import { useCart } from "@/lib/cart-context";
+import { useProductWishlist } from "@/lib/product-wishlist-context";
 
 const ICON = "/umuhle-icon.png";
 
@@ -36,6 +37,7 @@ export default function SiteHeader({
   const pathname  = usePathname();
   const router    = useRouter();
   const { count: cartCount } = useCart();
+  const { count: wishlistCount } = useProductWishlist();
 
   const [user, setUser]       = useState<User | null>(initialUser ?? null);
   const [profile, setProfile] = useState<Profile | null>(initialProfile ?? null);
@@ -96,6 +98,23 @@ export default function SiteHeader({
     transition: "all 0.15s",
   });
 
+  const WishlistIcon = () => (
+    <button
+      onClick={() => router.push("/dashboard?tab=wishlist&sub=products")}
+      aria-label={`Wishlist — ${wishlistCount} saved product${wishlistCount !== 1 ? "s" : ""}`}
+      style={{ position: "relative", background: "none", border: "none", cursor: "pointer", padding: "0.3rem", color: "var(--grey)", display: "flex" }}
+    >
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+      </svg>
+      {wishlistCount > 0 && (
+        <span style={{ position: "absolute", top: -2, right: -2, background: "var(--plum)", color: "#fff", borderRadius: "50%", width: 16, height: 16, fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          {wishlistCount}
+        </span>
+      )}
+    </button>
+  );
+
   const CartIcon = () => (
     <button
       onClick={() => router.push("/cart")}
@@ -129,6 +148,7 @@ export default function SiteHeader({
         </div>
 
         <div className="nav-actions-desktop" style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          {user && <WishlistIcon />}
           <CartIcon />
           {user ? (
             <>
@@ -143,6 +163,7 @@ export default function SiteHeader({
         </div>
 
         <div className="nav-mobile-right" style={{ display: "none", alignItems: "center", gap: "0.5rem" }}>
+          {user && <WishlistIcon />}
           <CartIcon />
           {!user && (
             <button className="btn-plum" style={{ padding: "0.4rem 1rem", fontSize: "0.8rem" }} onClick={handleSignInClick}>Sign in</button>
