@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Product } from "@/types";
 import { useCart, setPendingCartAdd, getPendingCartAdd, clearPendingCartAdd } from "@/lib/cart-context";
+import { useProductWishlist, getPendingWishlistAdd, clearPendingWishlistAdd } from "@/lib/product-wishlist-context";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
 
@@ -72,6 +73,7 @@ export default function ProductDetailPage() {
   const router = useRouter();
   const supabase = createClient();
   const { addItem, items } = useCart();
+  const { isWishlisted, toggle: toggleWishlist } = useProductWishlist();
 
   const [user, setUser]         = useState<User | null>(null);
   const [product, setProduct]   = useState<Product | null>(null);
@@ -173,6 +175,17 @@ export default function ProductDetailPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, product]);
 
+  // Re-apply a pending "heart" click once the user is signed in and the
+  // product has loaded (mirrors the pending "add to cart" replay above).
+  useEffect(() => {
+    if (!user || !product) return;
+    const pendingId = getPendingWishlistAdd();
+    if (!pendingId || pendingId !== product.id) return;
+    toggleWishlist(product);
+    clearPendingWishlistAdd();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, product]);
+
   // ── Loading skeleton ─────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -248,12 +261,21 @@ export default function ProductDetailPage() {
             {/* Right: details */}
             <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
 
-              {/* Category badge */}
-              {catLabel && (
-                <div>
+              {/* Category badge + heart */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                {catLabel ? (
                   <span style={{ display: "inline-block", background: "var(--plum-t)", color: "var(--plum)", borderRadius: 100, padding: "0.3rem 0.9rem", fontSize: "0.75rem", fontWeight: 600 }}>{catLabel}</span>
-                </div>
-              )}
+                ) : <span />}
+                <button
+                  onClick={() => toggleWishlist(product, () => setShowAuth(true))}
+                  aria-label={isWishlisted(product.id) ? "Remove from wishlist" : "Save to wishlist"}
+                  aria-pressed={isWishlisted(product.id)}
+                  style={{ display: "flex", alignItems: "center", gap: "0.4rem", background: "#fff", border: "1.5px solid rgba(155,127,184,0.3)", borderRadius: 100, padding: "0.4rem 0.9rem", cursor: "pointer", fontSize: "0.8rem", color: "var(--plum)" }}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill={isWishlisted(product.id) ? "#E53935" : "none"} stroke="#E53935" strokeWidth="1.75"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                  {isWishlisted(product.id) ? "Saved" : "Save for later"}
+                </button>
+              </div>
 
               {/* Name + price */}
               <div>

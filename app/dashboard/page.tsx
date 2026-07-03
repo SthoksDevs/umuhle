@@ -1,16 +1,17 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Profile, Booking, Artist, Order, OrderItem, Product } from "@/types";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
 import ProductForm, { productToForm, type ProductFormData } from "@/components/ProductForm";
 import { useCart } from "@/lib/cart-context";
+import { useProductWishlist } from "@/lib/product-wishlist-context";
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
@@ -214,6 +215,55 @@ function WishlistCard({ item, onRemove }: { item: WishlistArtist; onRemove: (id:
           <span style={{ fontSize: "0.72rem", color: "var(--light)" }}>{artist.review_count ?? 0} reviews</span>
         </div>
         <Link href={`/?artist=${artist.id}`}><button className="btn-plum" style={{ width: "100%", padding: "0.55rem", fontSize: "0.85rem" }}>Book now</button></Link>
+      </div>
+    </div>
+  );
+}
+
+// ─── Product wishlist card ──────────────────────────────────────────────────────
+function ProductWishlistCard({ product, onRemove }: { product: Product; onRemove: (id: string) => Promise<void> }) {
+  const { addItem } = useCart();
+  const [removing, setRemoving] = useState(false);
+  const [added, setAdded] = useState(false);
+  const inStock = product.stock_count > 0;
+
+  const handleRemove = async () => {
+    setRemoving(true);
+    await onRemove(product.id);
+  };
+
+  const handleAddToCart = () => {
+    addItem(product, 1);
+    setAdded(true);
+    setTimeout(() => setAdded(false), 1500);
+  };
+
+  return (
+    <div style={{ border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 18, background: "#fff", overflow: "hidden", transition: "transform 0.2s, box-shadow 0.2s" }}
+      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.transform = "translateY(-3px)"; (e.currentTarget as HTMLDivElement).style.boxShadow = "0 12px 40px rgba(155,127,184,0.15)"; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.transform = ""; (e.currentTarget as HTMLDivElement).style.boxShadow = ""; }}>
+      <div style={{ position: "relative" }}>
+        <Link href={`/shop/${product.id}`} style={{ textDecoration: "none" }}>
+          <div style={{ height: 160, overflow: "hidden", background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Image src={product.image_url ?? ICON} alt={product.name} width={80} height={80} style={{ objectFit: "contain", opacity: 0.85 }} />
+            {!inStock && <span style={{ position: "absolute", top: 10, right: 10, background: "#888", color: "#fff", borderRadius: 100, padding: "0.2rem 0.6rem", fontSize: "0.7rem", fontWeight: 600 }}>Out of stock</span>}
+          </div>
+        </Link>
+        <button onClick={handleRemove} disabled={removing} aria-label="Remove from wishlist"
+          style={{ position: "absolute", top: 10, left: 10, background: "rgba(255,255,255,0.9)", border: "none", borderRadius: "50%", width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", backdropFilter: "blur(4px)" }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="#E53935" stroke="#E53935" strokeWidth="1.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        </button>
+      </div>
+      <div style={{ padding: "1rem" }}>
+        <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1rem", marginBottom: "0.2rem",
+          overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 1, WebkitBoxOrient: "vertical" as const }}>{product.name}</h3>
+        <p style={{ fontSize: "0.78rem", color: "var(--grey)", marginBottom: "0.5rem", textTransform: "capitalize" }}>{product.category}</p>
+        <p style={{ fontWeight: 700, color: "var(--plum)", marginBottom: "0.75rem" }}>{fmt(product.price)}</p>
+        <button className="btn-plum" style={{ width: "100%", padding: "0.55rem", fontSize: "0.85rem", opacity: inStock ? 1 : 0.5, cursor: inStock ? "pointer" : "not-allowed",
+          background: added ? "#2E7D32" : undefined, transition: "background 0.2s" }}
+          disabled={!inStock} onClick={handleAddToCart}>
+          {added ? "Added ✓" : inStock ? "Add to cart" : "Out of stock"}
+        </button>
       </div>
     </div>
   );
@@ -2524,8 +2574,9 @@ function MyOrdersTab({ user }: { user: User }) {
 }
 
 // ─── Main dashboard ────────────────────────────────────────────────────────────
-export default function DashboardPage() {
+function DashboardContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
 
   const [user, setUser]       = useState<User | null>(null);
@@ -2535,6 +2586,18 @@ export default function DashboardPage() {
 
   const [wishlist, setWishlist]   = useState<WishlistArtist[]>([]);
   const [wishlistLoading, setWishlistLoading] = useState(false);
+  const [wishlistSubTab, setWishlistSubTab] = useState<"artists" | "products">("artists");
+  const { items: productWishlist, loading: productWishlistLoading, remove: removeProductFromWishlist } = useProductWishlist();
+
+  // Deep-link support, e.g. /dashboard?tab=wishlist&sub=products (used by the
+  // header's heart icon)
+  useEffect(() => {
+    const t = searchParams.get("tab") as Tab | null;
+    if (t) setTab(t);
+    const sub = searchParams.get("sub");
+    if (sub === "products" || sub === "artists") setWishlistSubTab(sub);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const [showWhatsAppNudge, setShowWhatsAppNudge] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
@@ -2666,22 +2729,60 @@ export default function DashboardPage() {
         {/* ── Wishlist tab ── */}
         {tab === "wishlist" && (
           <section>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
-              <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem" }}>Saved artists <span style={{ fontSize: "0.9rem", color: "var(--grey)", fontFamily: "var(--font-body)", fontWeight: 400, marginLeft: "0.5rem" }}>({wishlist.length})</span></h2>
+            {/* Artists / Products sub-tabs */}
+            <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem" }}>
+              {([
+                { id: "artists" as const,  label: "Artists",  icon: "💜", count: wishlist.length },
+                { id: "products" as const, label: "Products", icon: "🛍️", count: productWishlist.length },
+              ]).map(t => (
+                <button key={t.id} onClick={() => setWishlistSubTab(t.id)}
+                  style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 1.1rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.25)", cursor: "pointer",
+                    background: wishlistSubTab === t.id ? "var(--plum)" : "transparent", color: wishlistSubTab === t.id ? "#fff" : "var(--onyx)", fontSize: "0.875rem", fontWeight: 500, transition: "all 0.15s" }}>
+                  <span>{t.icon}</span>{t.label} <span style={{ opacity: 0.8 }}>({t.count})</span>
+                </button>
+              ))}
             </div>
-            {wishlistLoading && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: "1.25rem" }}>{[...Array(4)].map((_, i) => <div key={i} style={{ height: 280, borderRadius: 18, background: "var(--plum-t)" }} />)}</div>}
-            {!wishlistLoading && wishlist.length === 0 && (
-              <div style={{ textAlign: "center", padding: "4rem 1rem", background: "#fff", borderRadius: 20, border: "1.5px solid rgba(155,127,184,0.12)" }}>
-                <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>💜</div>
-                <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.2rem", marginBottom: "0.5rem" }}>Your wishlist is empty</h3>
-                <p style={{ color: "var(--grey)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>Save your favourite artists to quickly book them again.</p>
-                <Link href="/"><button className="btn-plum" style={{ padding: "0.75rem 2rem" }}>Discover artists</button></Link>
-              </div>
+
+            {/* ── Saved artists ── */}
+            {wishlistSubTab === "artists" && (
+              <>
+                {wishlistLoading && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: "1.25rem" }}>{[...Array(4)].map((_, i) => <div key={i} style={{ height: 280, borderRadius: 18, background: "var(--plum-t)" }} />)}</div>}
+                {!wishlistLoading && wishlist.length === 0 && (
+                  <div style={{ textAlign: "center", padding: "4rem 1rem", background: "#fff", borderRadius: 20, border: "1.5px solid rgba(155,127,184,0.12)" }}>
+                    <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>💜</div>
+                    <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.2rem", marginBottom: "0.5rem" }}>Your wishlist is empty</h3>
+                    <p style={{ color: "var(--grey)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>Save your favourite artists to quickly book them again.</p>
+                    <Link href="/"><button className="btn-plum" style={{ padding: "0.75rem 2rem" }}>Discover artists</button></Link>
+                  </div>
+                )}
+                {!wishlistLoading && wishlist.length > 0 && (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: "1.25rem" }}>
+                    {wishlist.map(item => <WishlistCard key={item.artist_id} item={item} onRemove={(id) => setWishlist(prev => prev.filter(w => w.artist_id !== id))} />)}
+                  </div>
+                )}
+              </>
             )}
-            {!wishlistLoading && wishlist.length > 0 && (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: "1.25rem" }}>
-                {wishlist.map(item => <WishlistCard key={item.artist_id} item={item} onRemove={(id) => setWishlist(prev => prev.filter(w => w.artist_id !== id))} />)}
-              </div>
+
+            {/* ── Saved products ── */}
+            {wishlistSubTab === "products" && (
+              <>
+                {productWishlistLoading && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: "1.25rem" }}>{[...Array(4)].map((_, i) => <div key={i} style={{ height: 280, borderRadius: 18, background: "var(--plum-t)" }} />)}</div>}
+                {!productWishlistLoading && productWishlist.length === 0 && (
+                  <div style={{ textAlign: "center", padding: "4rem 1rem", background: "#fff", borderRadius: 20, border: "1.5px solid rgba(155,127,184,0.12)" }}>
+                    <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>🛍️</div>
+                    <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.2rem", marginBottom: "0.5rem" }}>No saved products yet</h3>
+                    <p style={{ color: "var(--grey)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>Tap the heart on any shop product to save it here for later.</p>
+                    <Link href="/shop"><button className="btn-plum" style={{ padding: "0.75rem 2rem" }}>Browse shop</button></Link>
+                  </div>
+                )}
+                {!productWishlistLoading && productWishlist.length > 0 && (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: "1.25rem" }}>
+                    {productWishlist.map(item => (
+                      <ProductWishlistCard key={item.product_id} product={item.products} onRemove={removeProductFromWishlist} />
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </section>
         )}
@@ -2742,5 +2843,19 @@ export default function DashboardPage() {
 
       <Footer />
     </div>
+  );
+}
+
+// useSearchParams() requires a Suspense boundary in the app router — wrap the
+// real dashboard content so /dashboard?tab=wishlist deep links keep working.
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--white)" }}>
+        <Image src={ICON} alt="Umuhle" width={48} height={48} style={{ borderRadius: "50%" }} />
+      </div>
+    }>
+      <DashboardContent />
+    </Suspense>
   );
 }
