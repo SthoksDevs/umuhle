@@ -27,6 +27,7 @@ const STATUS_STYLES: Record<string, { bg: string; color: string; label: string }
 
 const PAYMENT_LABEL: Record<string, string> = {
   payfast: "PayFast",
+  ozow: "Ozow (Instant EFT)",
   happypay: "HappyPay (Buy Now, Pay Later)",
   google_pay: "Google Pay",
 };

@@ -22,6 +22,7 @@ function SuccessContent() {
 
   const methodLabel: Record<string, string> = {
     payfast:    "PayFast",
+    ozow:       "Ozow",
     happypay:   "HappyPay",
     google_pay: "Google Pay",
   };

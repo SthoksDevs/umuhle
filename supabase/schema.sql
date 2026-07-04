@@ -152,7 +152,7 @@ CREATE TABLE public.orders (
   shipping_address text,
   contact_name text,
   contact_whatsapp text,
-  payment_method text DEFAULT 'payfast'::text CHECK (payment_method = ANY (ARRAY['payfast'::text, 'happypay'::text, 'google_pay'::text])),
+  payment_method text DEFAULT 'payfast'::text CHECK (payment_method = ANY (ARRAY['payfast'::text, 'happypay'::text, 'google_pay'::text, 'ozow'::text])),
   payfast_payment_id text,
   gateway_order_id text,
   gateway_webhook_secret text,

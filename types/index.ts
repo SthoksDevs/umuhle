@@ -150,7 +150,7 @@ export interface CartItem {
   quantity: number;
 }
 
-export type PaymentMethod = "payfast" | "happypay" | "google_pay";
+export type PaymentMethod = "payfast" | "happypay" | "google_pay" | "ozow";
 
 export interface Order {
   id: string;

@@ -13,7 +13,7 @@ import Footer from "@/components/Footer";
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
-type PayMethod = "payfast" | "happypay" | "google_pay";
+type PayMethod = "payfast" | "happypay" | "google_pay" | "ozow";
 
 // ── Coupon types ──────────────────────────────────────────────────────────────
 interface Coupon {
@@ -357,6 +357,34 @@ export default function CheckoutPage() {
     }
   };
 
+  const handleOzow = async () => {
+    setSubmitting(true); setError("");
+    try {
+      const res = await fetch("/api/ozow/initiate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: items.map((l) => ({ productId: l.product.id, quantity: l.quantity })),
+          shippingAddress,
+          contactName: form.name,
+          contactWhatsapp: form.whatsapp,
+          discountCents: discount,
+          couponCode: appliedCoupon?.code ?? null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Ozow failed");
+      await recordCouponUsage();
+
+      // ⚠️  Same as PayFast/HappyPay — do NOT clear cart here. Cart is
+      //     cleared on /payment/success after confirmed payment.
+      window.location.href = data.redirectUrl;
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Ozow payment failed");
+      setSubmitting(false);
+    }
+  };
+
   const handleGooglePay = async (token: string) => {
     setSubmitting(true); setError("");
     try {
@@ -477,6 +505,7 @@ export default function CheckoutPage() {
               <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
                 {[
                   { id: "payfast" as PayMethod, label: "PayFast", sub: "Card, EFT, Instant EFT, SnapScan & more" },
+                  { id: "ozow" as PayMethod, label: "Ozow", sub: "Instant EFT — pay straight from your bank app" },
                   { id: "happypay" as PayMethod, label: "HappyPay", sub: "Buy now, pay later — split into instalments" },
                   { id: "google_pay" as PayMethod, label: "Google Pay", sub: "Pay instantly with your saved Google card" },
                 ].map((opt) => (
@@ -536,6 +565,13 @@ export default function CheckoutPage() {
               <button className="btn-plum" style={{ width: "100%", padding: "1rem", fontSize: "1rem" }}
                 onClick={handlePayFast} disabled={submitting || !isFormValid}>
                 {submitting ? "Redirecting…" : `Pay ${fmt(total)} with PayFast`}
+              </button>
+            )}
+
+            {payMethod === "ozow" && (
+              <button className="btn-plum" style={{ width: "100%", padding: "1rem", fontSize: "1rem" }}
+                onClick={handleOzow} disabled={submitting || !isFormValid}>
+                {submitting ? "Redirecting…" : `Pay ${fmt(total)} with Ozow`}
               </button>
             )}
 
