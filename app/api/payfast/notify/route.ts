@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateITN } from "@/lib/payfast";
 import { createServiceClient } from "@/lib/supabase/server";
+import { recordBookingSplit, recordOrderItemSplits } from "@/lib/payouts";
 import { notifyBookingCreated } from "@/lib/whatsapp";
 import {
   sendBookingConfirmedEmail,
@@ -107,6 +108,16 @@ export async function POST(req: NextRequest) {
           if (bookingErr || !booking) {
             console.error("PayFast ITN: failed to create booking from intent", bookingErr);
             break;
+          }
+
+          // Record the 5.5% commission / 94.5% artist payout split now, at the
+          // point of sale. This does NOT touch the artist's wallet yet — that
+          // only happens once the booking is marked "completed" (see
+          // lib/payouts.ts and /api/bookings/[id]/status).
+          try {
+            await recordBookingSplit(supabase, booking.id, booking.total_amount);
+          } catch (e) {
+            console.error("[PayFast ITN] Failed to record booking commission split:", e);
           }
 
           const clientRow  = Array.isArray(booking.client)  ? booking.client[0]  : booking.client;
@@ -227,6 +238,15 @@ export async function POST(req: NextRequest) {
           }
 
           if (order) {
+            // Record each item's 5.5% commission / 94.5% partner payout split
+            // now that payment has cleared. Wallets aren't credited until the
+            // order is later marked "delivered" — see lib/payouts.ts.
+            try {
+              await recordOrderItemSplits(supabase, paymentId);
+            } catch (e) {
+              console.error("[PayFast ITN] Failed to record order commission split:", e);
+            }
+
             const clientRow = Array.isArray(order.client) ? order.client[0] : order.client;
             try {
               console.log("[PayFast ITN] Sending order paid emails...");

@@ -1,6 +1,7 @@
 // app/api/happypay/webhook/success/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
+import { recordOrderItemSplits } from "@/lib/payouts";
 
 export async function POST(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -33,6 +34,15 @@ export async function POST(req: NextRequest) {
     .from("orders")
     .update({ status: "paid" })
     .eq("id", orderId);
+
+  // Record each item's 5.5% commission / 94.5% partner payout split now that
+  // payment has cleared. Wallets aren't credited until the order is later
+  // marked "delivered" — see lib/payouts.ts.
+  try {
+    await recordOrderItemSplits(supabase, orderId);
+  } catch (e) {
+    console.error("[HappyPay webhook] Failed to record order commission split:", e);
+  }
 
   // Send WhatsApp confirmation
   try {

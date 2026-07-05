@@ -12,6 +12,7 @@ import Footer from "@/components/Footer";
 import ProductForm, { productToForm, type ProductFormData } from "@/components/ProductForm";
 import { useCart } from "@/lib/cart-context";
 import { useProductWishlist } from "@/lib/product-wishlist-context";
+import { PAYOUT_HOLD_DAYS } from "@/lib/payouts";
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
@@ -1768,6 +1769,12 @@ function WalletTab({ user }: { user: User }) {
     setLoading(true);
     setLoadError(null);
 
+    // Recalculates available/pending/total_earned straight from the ledger —
+    // this is what moves a credit from "pending" into "available" once its
+    // payout hold window has passed. Pure recalculation, so it's always safe
+    // to call and needs no cron job.
+    await supabase.rpc("recompute_wallet_balance", { p_profile_id: user.id });
+
     const { data: walletData, error: walletErr } = await supabase
       .from("wallets")
       .select("*")
@@ -1860,7 +1867,7 @@ function WalletTab({ user }: { user: User }) {
     <div style={{ maxWidth: 560 }}>
       <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", marginBottom: "0.5rem" }}>Wallet</h2>
       <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem", lineHeight: 1.6 }}>
-        Referral rewards land here. Withdraw once your available balance reaches R100.
+        Your earnings from completed bookings and delivered orders land here (Umuhle keeps a 5.5% commission; you keep 94.5%), along with any referral rewards. New earnings sit in <strong>Pending</strong> for {PAYOUT_HOLD_DAYS} days after completion before moving to your available balance — withdraw once that reaches R100.
       </p>
 
       {loadError && (
@@ -1883,6 +1890,9 @@ function WalletTab({ user }: { user: User }) {
           <div>
             <p style={{ fontSize: "0.7rem", opacity: 0.75, marginBottom: 2 }}>Pending</p>
             <p style={{ fontSize: "0.95rem", fontWeight: 500 }}>{fmt(pendingBalance)}</p>
+            {pendingBalance > 0 && (
+              <p style={{ fontSize: "0.65rem", opacity: 0.7, marginTop: 2 }}>in {PAYOUT_HOLD_DAYS}-day payout window</p>
+            )}
           </div>
           <div>
             <p style={{ fontSize: "0.7rem", opacity: 0.75, marginBottom: 2 }}>Total earned</p>
@@ -1948,21 +1958,29 @@ function WalletTab({ user }: { user: User }) {
       {transactions.length === 0 ? (
         <div style={{ textAlign: "center", padding: "3rem 1rem", background: "#fff", borderRadius: 20, border: "1.5px solid rgba(155,127,184,0.12)" }}>
           <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>👛</div>
-          <p style={{ color: "var(--grey)", fontSize: "0.9rem" }}>No transactions yet. Refer a beauty professional to start earning.</p>
+          <p style={{ color: "var(--grey)", fontSize: "0.9rem" }}>No transactions yet. Completed bookings, delivered orders, and referrals will show up here.</p>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
-          {transactions.map(t => (
-            <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", borderRadius: 14, padding: "0.9rem 1.1rem", border: "1.5px solid rgba(155,127,184,0.12)" }}>
-              <div>
-                <p style={{ fontSize: "0.88rem", color: "var(--onyx)", marginBottom: 2 }}>{t.description}</p>
-                <p style={{ fontSize: "0.75rem", color: "var(--light)" }}>{new Date(t.created_at).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })}</p>
+          {transactions.map(t => {
+            const clearsAt = t.clears_at ? new Date(t.clears_at) : null;
+            const isPending = t.type === "credit" && clearsAt !== null && clearsAt.getTime() > Date.now();
+            const daysLeft = isPending && clearsAt ? Math.max(1, Math.ceil((clearsAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24))) : 0;
+            return (
+              <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", borderRadius: 14, padding: "0.9rem 1.1rem", border: "1.5px solid rgba(155,127,184,0.12)" }}>
+                <div>
+                  <p style={{ fontSize: "0.88rem", color: "var(--onyx)", marginBottom: 2 }}>{t.description}</p>
+                  <p style={{ fontSize: "0.75rem", color: "var(--light)" }}>
+                    {new Date(t.created_at).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })}
+                    {isPending && <span style={{ color: "#E65100" }}> · available in {daysLeft} day{daysLeft === 1 ? "" : "s"}</span>}
+                  </p>
+                </div>
+                <p style={{ fontSize: "0.95rem", fontWeight: 600, color: t.type === "credit" ? "var(--forest)" : "var(--onyx)" }}>
+                  {t.type === "credit" ? "+" : "−"}{fmt(t.amount)}
+                </p>
               </div>
-              <p style={{ fontSize: "0.95rem", fontWeight: 600, color: t.type === "credit" ? "var(--forest)" : "var(--onyx)" }}>
-                {t.type === "credit" ? "+" : "−"}{fmt(t.amount)}
-              </p>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

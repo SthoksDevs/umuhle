@@ -24,6 +24,7 @@ type AdminTab =
   | "ads"
   | "products"
   | "orders"
+  | "bookings"
   | "payments"
   | "umuhle-products"
   | "add-salon"
@@ -281,6 +282,10 @@ function StatusBadge({ status }: { status: string }) {
     shipped: { bg: "#EDE7F6", color: "#4527A0", label: "Shipped" },
     delivered: { bg: "#E8F5E9", color: "#2E7D32", label: "Delivered" },
     cancelled: { bg: "#FAFAFA", color: "#757575", label: "Cancelled" },
+    confirmed: { bg: "#E1F5EE", color: "#0F6E56", label: "Confirmed" },
+    in_progress: { bg: "#E3F2FD", color: "#1565C0", label: "In progress" },
+    completed: { bg: "#E8F5E9", color: "#2E7D32", label: "Completed" },
+    no_show: { bg: "#FBE9E7", color: "#BF360C", label: "No show" },
   };
   const s = map[status] ?? { bg: "#F5F5F5", color: "#616161", label: status };
   return (
@@ -1072,24 +1077,31 @@ function PaymentsTab({ supabase }: { supabase: ReturnType<typeof createClient> }
     if (notes[id]) payload.notes = notes[id];
     await supabase.from("withdrawals").update(payload).eq("id", id);
 
+    const w = withdrawals.find((x) => x.id === id);
+
     // If approving payment, deduct from wallet
-    if (status === "paid") {
-      const w = withdrawals.find((x) => x.id === id);
-      if (w) {
-        const { data: walletData } = await supabase
-          .from("wallets")
-          .select("id")
-          .eq("profile_id", w.profile_id)
-          .single();
-        if (walletData) {
-          await supabase.from("wallet_transactions").insert({
-            wallet_id: walletData.id,
-            amount: w.amount,
-            type: "debit",
-            description: `Withdrawal paid — ${w.bank_name} ${w.account_number}`,
-          });
-        }
+    if (status === "paid" && w) {
+      const { data: walletData } = await supabase
+        .from("wallets")
+        .select("id")
+        .eq("profile_id", w.profile_id)
+        .single();
+      if (walletData) {
+        await supabase.from("wallet_transactions").insert({
+          wallet_id: walletData.id,
+          amount: w.amount,
+          type: "debit",
+          description: `Withdrawal paid — ${w.bank_name} ${w.account_number}`,
+        });
       }
+    }
+
+    // Any status change here can move money between "earmarked for
+    // withdrawal", "approved", and "available" — recompute (after the debit
+    // above, if any) so the numbers are correct immediately rather than
+    // waiting for the user's next visit to their Wallet tab.
+    if (w) {
+      await supabase.rpc("recompute_wallet_balance", { p_profile_id: w.profile_id });
     }
 
     setWithdrawals((prev) => prev.filter((x) => x.id !== id));
@@ -1324,6 +1336,198 @@ function OrdersTab({ supabase }: { supabase: ReturnType<typeof createClient> }) 
                   </div>
                 </div>
               </Link>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Bookings Tab ──────────────────────────────────────────────────────────────
+// Manages the real, payable `bookings` table (service bookings sold through
+// Umuhle — distinct from a salon's own free-form `store_bookings` inbox).
+// Marking a booking "Completed" here is what triggers the artist's payout —
+// see /api/bookings/[id]/status and lib/payouts.ts.
+
+const BOOKING_FILTERS = ["all", "pending_payment", "confirmed", "in_progress", "completed", "cancelled", "no_show"] as const;
+type BookingFilter = typeof BOOKING_FILTERS[number];
+const COMMISSION_RATE = 0.055;
+
+interface BookingRow {
+  id: string;
+  booking_date: string;
+  booking_time: string;
+  status: string;
+  total_amount: number;
+  payout_cents: number | null;
+  payout_credited_at: string | null;
+  created_at: string;
+  client?: { full_name: string; email: string } | null;
+  artist?: { id: string; display_name: string } | null;
+  service?: { name: string } | null;
+}
+
+function BookingsTab({ supabase }: { supabase: ReturnType<typeof createClient> }) {
+  const [bookings, setBookings] = useState<BookingRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<BookingFilter>("all");
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    let q = supabase
+      .from("bookings")
+      .select(`
+        id, booking_date, booking_time, status, total_amount, payout_cents, payout_credited_at, created_at,
+        client:profiles!bookings_client_id_fkey(full_name, email),
+        artist:artists(id, display_name),
+        service:services(name)
+      `)
+      .order("booking_date", { ascending: false })
+      .order("booking_time", { ascending: false })
+      .limit(200);
+    if (filter !== "all") q = q.eq("status", filter);
+    const { data } = await q;
+    setBookings((data ?? []) as unknown as BookingRow[]);
+    setLoading(false);
+  }, [filter, supabase]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const changeStatus = async (id: string, status: string) => {
+    setActionLoading(id);
+    setError(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) { setError("Not authenticated."); return; }
+
+      const res = await fetch(`/api/bookings/${id}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setError(json?.error ?? "Couldn't update this booking.");
+        return;
+      }
+      setBookings((prev) => prev.map((b) => (b.id === id ? { ...b, status, payout_credited_at: json?.payout?.credited ? new Date().toISOString() : b.payout_credited_at } : b)));
+    } catch {
+      setError("Couldn't update this booking. Please try again.");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  return (
+    <div>
+      <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>
+        Bookings
+      </h2>
+      <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
+        Service bookings sold through Umuhle. Marking a booking completed credits the artist&apos;s wallet with their 94.5% share (5.5% commission kept by Umuhle) — it then clears to their available balance after the standard payout hold window.
+      </p>
+
+      {error && (
+        <div style={{ background: "#FBE9E7", border: "1.5px solid rgba(191,54,12,0.25)", borderRadius: 14, padding: "0.75rem 1.1rem", marginBottom: "1.25rem", fontSize: "0.85rem", color: "#BF360C" }}>
+          {error}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: "0.35rem", marginBottom: "1.25rem", flexWrap: "wrap" }}>
+        {BOOKING_FILTERS.map((f) => (
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            style={{
+              borderRadius: 100,
+              border: `1.5px solid ${filter === f ? "var(--plum)" : "rgba(155,127,184,0.25)"}`,
+              padding: "0.35rem 0.9rem",
+              fontSize: "0.8rem",
+              fontWeight: filter === f ? 500 : 400,
+              background: filter === f ? "var(--plum-t)" : "#fff",
+              color: filter === f ? "var(--plum)" : "var(--grey)",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {f === "all" ? "All" : f === "pending_payment" ? "Awaiting payment" : f.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <p style={{ color: "var(--grey)" }}>Loading bookings…</p>
+      ) : bookings.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "3rem", background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.12)" }}>
+          <p style={{ color: "var(--grey)" }}>No bookings found.</p>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+          {bookings.map((b) => {
+            const payoutCents = b.payout_cents ?? Math.round(b.total_amount * (1 - COMMISSION_RATE));
+            const busy = actionLoading === b.id;
+            return (
+              <div key={b.id} style={{ background: "#fff", borderRadius: 16, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.1rem 1.25rem" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem", flexWrap: "wrap", marginBottom: "0.6rem" }}>
+                  <div style={{ flex: 1, minWidth: 180 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "0.2rem" }}>
+                      <p style={{ fontWeight: 700, fontSize: "0.9rem", margin: 0, fontFamily: "monospace" }}>#{b.id.slice(0, 8)}</p>
+                      <StatusBadge status={b.status} />
+                    </div>
+                    <p style={{ fontSize: "0.85rem", fontWeight: 500, margin: "0 0 0.1rem" }}>
+                      {b.client?.full_name ?? "Unknown client"} → {b.artist?.display_name ?? "Unknown artist"}
+                    </p>
+                    <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: 0 }}>
+                      {b.service?.name ?? "Service"} · {new Date(b.booking_date).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })} at {b.booking_time}
+                    </p>
+                  </div>
+                  <div style={{ textAlign: "right", flexShrink: 0 }}>
+                    <p style={{ fontWeight: 700, color: "var(--plum)", fontSize: "1rem", margin: "0 0 0.15rem" }}>{fmt(b.total_amount)}</p>
+                    <p style={{ fontSize: "0.72rem", color: "var(--light)", margin: 0 }}>artist gets {fmt(payoutCents)}</p>
+                  </div>
+                </div>
+
+                {b.status === "completed" && (
+                  <p style={{ fontSize: "0.78rem", color: b.payout_credited_at ? "#2E7D32" : "#E65100", margin: "0 0 0.5rem" }}>
+                    {b.payout_credited_at ? "✓ Payout credited to artist wallet" : "Payout pending…"}
+                  </p>
+                )}
+
+                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                  {b.status === "confirmed" && (
+                    <>
+                      <button disabled={busy} onClick={() => changeStatus(b.id, "in_progress")}
+                        style={{ padding: "0.4rem 1rem", borderRadius: 100, border: "none", background: "#E3F2FD", color: "#1565C0", fontWeight: 600, fontSize: "0.8rem", cursor: busy ? "not-allowed" : "pointer" }}>
+                        Start
+                      </button>
+                      <button disabled={busy} onClick={() => changeStatus(b.id, "no_show")}
+                        style={{ padding: "0.4rem 1rem", borderRadius: 100, border: "none", background: "#FBE9E7", color: "#BF360C", fontWeight: 600, fontSize: "0.8rem", cursor: busy ? "not-allowed" : "pointer" }}>
+                        No-show
+                      </button>
+                      <button disabled={busy} onClick={() => changeStatus(b.id, "cancelled")}
+                        style={{ padding: "0.4rem 1rem", borderRadius: 100, border: "none", background: "#FAFAFA", color: "#757575", fontWeight: 600, fontSize: "0.8rem", cursor: busy ? "not-allowed" : "pointer" }}>
+                        Cancel
+                      </button>
+                    </>
+                  )}
+                  {b.status === "in_progress" && (
+                    <>
+                      <button disabled={busy} onClick={() => changeStatus(b.id, "completed")}
+                        style={{ padding: "0.4rem 1rem", borderRadius: 100, border: "none", background: "#E8F5E9", color: "#2E7D32", fontWeight: 600, fontSize: "0.8rem", cursor: busy ? "not-allowed" : "pointer" }}>
+                        Mark completed
+                      </button>
+                      <button disabled={busy} onClick={() => changeStatus(b.id, "no_show")}
+                        style={{ padding: "0.4rem 1rem", borderRadius: 100, border: "none", background: "#FBE9E7", color: "#BF360C", fontWeight: 600, fontSize: "0.8rem", cursor: busy ? "not-allowed" : "pointer" }}>
+                        No-show
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
             );
           })}
         </div>
@@ -2028,6 +2232,7 @@ export default function AdminDashboard() {
     { id: "ads", label: "Ads", icon: "📣", badge: analytics?.pendingAds },
     { id: "products", label: "Products", icon: "🛍️", badge: analytics?.pendingProducts },
     { id: "orders", label: "Orders", icon: "📦", badge: analytics?.pendingOrders },
+    { id: "bookings", label: "Bookings", icon: "📅" },
     { id: "payments", label: "Payments", icon: "💰", badge: analytics?.pendingWithdrawals },
     { id: "umuhle-products", label: "Umuhle Products", icon: "⭐" },
     { id: "add-salon", label: "Add Store", icon: "➕" },
@@ -2088,6 +2293,7 @@ export default function AdminDashboard() {
         {tab === "ads" && <AdsReviewTab supabase={supabase} />}
         {tab === "products" && <ProductsReviewTab supabase={supabase} />}
         {tab === "orders" && <OrdersTab supabase={supabase} />}
+        {tab === "bookings" && <BookingsTab supabase={supabase} />}
         {tab === "payments" && <PaymentsTab supabase={supabase} />}
         {tab === "umuhle-products" && <UmuhleProductsTab supabase={supabase} userId={user.id} />}
         {tab === "add-salon" && <AddSalonTab supabase={supabase} userId={user.id} />}

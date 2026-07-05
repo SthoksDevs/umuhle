@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { validateOzowResponse } from "@/lib/ozow";
 import { sendOrderPaidEmail, sendOrderFailedEmail } from "@/lib/email";
+import { recordOrderItemSplits } from "@/lib/payouts";
 
 export async function POST(req: NextRequest) {
   console.log("[Ozow Notify] ── Incoming notification ──");
@@ -95,6 +96,15 @@ export async function POST(req: NextRequest) {
             p_qty: item.quantity,
           });
         }
+      }
+
+      // Record each item's 5.5% commission / 94.5% partner payout split now
+      // that payment has cleared. Wallets aren't credited until the order is
+      // later marked "delivered" — see lib/payouts.ts.
+      try {
+        await recordOrderItemSplits(supabase, orderId);
+      } catch (e) {
+        console.error("[Ozow Notify] Failed to record order commission split:", e);
       }
 
       try {

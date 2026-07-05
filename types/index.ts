@@ -109,6 +109,9 @@ export interface Booking {
   completed_at: string | null;
   reminder_sent: boolean;
   created_at: string;
+  commission_cents: number | null; // Umuhle's 5.5% cut, recorded at payment time
+  payout_cents: number | null;     // artist's 94.5% share
+  payout_credited_at: string | null; // set once the payout has been credited to the artist's wallet
   // Relations
   client?: Profile;
   artist?: Artist;
@@ -173,6 +176,9 @@ export interface OrderItem {
   product_id: string;
   quantity: number;
   unit_price: number;
+  commission_cents: number | null; // Umuhle's 5.5% cut, recorded at payment time
+  payout_cents: number | null;     // partner's 94.5% share
+  payout_credited_at: string | null; // set once the payout has been credited to the partner's wallet
   product?: Product;
 }
 
@@ -247,6 +253,9 @@ export interface WalletTransaction {
   type: "credit" | "debit";
   description: string;
   reference_id: string | null;
+  source_type: "booking" | "order_item" | "referral" | "withdrawal" | "adjustment" | null;
+  source_id: string | null;
+  clears_at: string | null; // when a pending credit becomes available; null/past = already available
   created_at: string;
 }
 

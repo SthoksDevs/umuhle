@@ -99,6 +99,7 @@ export default function AdminOrderDetailPage() {
   const [statusDraft, setStatusDraft] = useState<OrderStatus>("pending_payment");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
 
   // ── Admin gate ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -144,12 +145,32 @@ export default function AdminOrderDetailPage() {
   const handleUpdateStatus = async () => {
     if (!order || statusDraft === order.status) return;
     setSaving(true);
-    const { error } = await supabase.from("orders").update({ status: statusDraft }).eq("id", order.id);
-    setSaving(false);
-    if (!error) {
+    setStatusError(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) { setStatusError("Not authenticated."); return; }
+
+      // Routed through a server endpoint (rather than a direct client-side
+      // update) because marking an order "delivered" is also what credits
+      // each partner's payout — see /api/admin/orders/[id]/status.
+      const res = await fetch(`/api/admin/orders/${order.id}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status: statusDraft }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setStatusError(json?.error ?? "Couldn't update this order.");
+        return;
+      }
       setOrder({ ...order, status: statusDraft });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+    } catch {
+      setStatusError("Couldn't update this order. Please try again.");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -230,6 +251,14 @@ export default function AdminOrderDetailPage() {
           >
             {saving ? "Saving…" : saved ? "Saved ✓" : "Update status"}
           </button>
+          {statusDraft === "delivered" && order.status !== "delivered" && (
+            <p style={{ width: "100%", fontSize: "0.78rem", color: "var(--grey)", margin: 0 }}>
+              Marking this delivered will credit each partner&apos;s wallet with their 94.5% share (5.5% commission kept by Umuhle).
+            </p>
+          )}
+          {statusError && (
+            <p style={{ width: "100%", fontSize: "0.8rem", color: "#BF360C", margin: 0 }}>{statusError}</p>
+          )}
         </div>
 
         {/* Customer + shipping + payment */}
