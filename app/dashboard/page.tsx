@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
-import type { Profile, Booking, Artist, Order, OrderItem, Product } from "@/types";
+import type { Profile, Booking, Artist, Order, OrderItem, Product, Wallet, WalletTransaction, Withdrawal } from "@/types";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -22,7 +22,7 @@ function formatDate(dateStr: string) {
 }
 
 // ── Tab type extended with "invite" and "my-store" (replaces "my-store") ──────
-type Tab = "bookings" | "my-orders" | "wishlist" | "profile" | "my-store" | "my-products" | "my-services" | "invite" | "my-shop";
+type Tab = "bookings" | "my-orders" | "wishlist" | "profile" | "my-store" | "my-products" | "my-services" | "invite" | "my-shop" | "wallet";
 
 const SERVICE_TYPES = [
   { id: "hair",   label: "Hair",  banner: "/banners/hair.jpg",   description: "From protective styles to blowouts, braids to colour — let clients know exactly what you specialise in." },
@@ -1741,6 +1741,234 @@ function InviteTab({ profile }: { profile: Profile }) {
   );
 }
 
+// ─── Wallet tab ────────────────────────────────────────────────────────────────
+// Reads from the existing wallets / wallet_transactions / withdrawals tables
+// (already used by the admin panel to process payouts). Matches the R100
+// minimum withdrawal called out on the public Earn page.
+const MIN_WITHDRAWAL_CENTS = 10000; // R100
+
+function WalletTab({ user }: { user: User }) {
+  const supabase = createClient();
+  const [wallet, setWallet] = useState<Wallet | null>(null);
+  const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
+  const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [showRequestForm, setShowRequestForm] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const [bankName, setBankName] = useState("");
+  const [accountNumber, setAccountNumber] = useState("");
+  const [accountHolder, setAccountHolder] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+
+    const { data: walletData, error: walletErr } = await supabase
+      .from("wallets")
+      .select("*")
+      .eq("profile_id", user.id)
+      .maybeSingle();
+
+    if (walletErr) {
+      setLoadError("Couldn't load your wallet. Please try again shortly.");
+      setLoading(false);
+      return;
+    }
+    setWallet((walletData as Wallet) ?? null);
+
+    if (walletData) {
+      const { data: txData } = await supabase
+        .from("wallet_transactions")
+        .select("*")
+        .eq("wallet_id", walletData.id)
+        .order("created_at", { ascending: false })
+        .limit(30);
+      setTransactions((txData as WalletTransaction[]) ?? []);
+    } else {
+      setTransactions([]);
+    }
+
+    const { data: wdData } = await supabase
+      .from("withdrawals")
+      .select("*")
+      .eq("profile_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(10);
+    setWithdrawals((wdData as Withdrawal[]) ?? []);
+
+    setLoading(false);
+  }, [user.id, supabase]);
+
+  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 6000);
+    return () => clearTimeout(t);
+  }, [notice]);
+
+  const availableBalance = wallet?.available_balance ?? 0;
+  const pendingBalance = wallet?.pending_balance ?? 0;
+  const totalEarned = wallet?.total_earned ?? 0;
+  const hasOpenRequest = withdrawals.some(w => w.status === "pending" || w.status === "approved");
+  const canRequest = !!wallet && availableBalance >= MIN_WITHDRAWAL_CENTS && !hasOpenRequest;
+
+  const handleSubmitRequest = async () => {
+    if (!wallet || !canRequest) return;
+    if (!bankName.trim() || !accountNumber.trim() || !accountHolder.trim()) {
+      setFormError("Please fill in all your bank details.");
+      return;
+    }
+    setSubmitting(true);
+    setFormError(null);
+    const { error: insertError } = await supabase.from("withdrawals").insert({
+      profile_id: user.id,
+      amount: availableBalance,
+      bank_name: bankName.trim(),
+      account_number: accountNumber.trim(),
+      account_holder: accountHolder.trim(),
+      status: "pending",
+    });
+    setSubmitting(false);
+    if (insertError) {
+      setFormError("Couldn't submit your request. Please try again.");
+      return;
+    }
+    setShowRequestForm(false);
+    setBankName(""); setAccountNumber(""); setAccountHolder("");
+    setNotice("Withdrawal request submitted — we'll pay out within a few business days.");
+    load();
+  };
+
+  if (loading) {
+    return (
+      <div style={{ maxWidth: 560 }}>
+        <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", marginBottom: "1.25rem" }}>Wallet</h2>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          {[...Array(2)].map((_, i) => <div key={i} style={{ height: i === 0 ? 150 : 90, borderRadius: 20, background: "var(--plum-t)", animation: "pulse 1.5s ease-in-out infinite" }} />)}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ maxWidth: 560 }}>
+      <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", marginBottom: "0.5rem" }}>Wallet</h2>
+      <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem", lineHeight: 1.6 }}>
+        Referral rewards land here. Withdraw once your available balance reaches R100.
+      </p>
+
+      {loadError && (
+        <div style={{ background: "#FBE9E7", border: "1.5px solid rgba(191,54,12,0.25)", borderRadius: 14, padding: "0.85rem 1.25rem", marginBottom: "1.25rem", fontSize: "0.85rem", color: "#BF360C" }}>
+          {loadError}
+        </div>
+      )}
+
+      {notice && (
+        <div style={{ background: "var(--plum-t)", border: "1.5px solid rgba(155,127,184,0.3)", borderRadius: 14, padding: "0.85rem 1.25rem", marginBottom: "1.25rem", fontSize: "0.85rem", color: "var(--onyx)" }}>
+          {notice}
+        </div>
+      )}
+
+      {/* Balance card */}
+      <div style={{ background: "linear-gradient(135deg, var(--plum) 0%, var(--plum-d) 100%)", borderRadius: 20, padding: "1.75rem", marginBottom: "1.25rem", color: "#fff" }}>
+        <p style={{ fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.08em", opacity: 0.85, marginBottom: "0.4rem" }}>Available balance</p>
+        <p style={{ fontFamily: "var(--font-display)", fontSize: "2.5rem", fontWeight: 500, marginBottom: "1.25rem" }}>{fmt(availableBalance)}</p>
+        <div style={{ display: "flex", gap: "1.75rem" }}>
+          <div>
+            <p style={{ fontSize: "0.7rem", opacity: 0.75, marginBottom: 2 }}>Pending</p>
+            <p style={{ fontSize: "0.95rem", fontWeight: 500 }}>{fmt(pendingBalance)}</p>
+          </div>
+          <div>
+            <p style={{ fontSize: "0.7rem", opacity: 0.75, marginBottom: 2 }}>Total earned</p>
+            <p style={{ fontSize: "0.95rem", fontWeight: 500 }}>{fmt(totalEarned)}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Withdraw action / status */}
+      {hasOpenRequest ? (
+        <div style={{ background: "var(--plum-t)", borderRadius: 14, padding: "1rem 1.25rem", marginBottom: "2rem", fontSize: "0.85rem", color: "var(--onyx)" }}>
+          You have a withdrawal request being processed.
+        </div>
+      ) : (
+        <div style={{ marginBottom: "2rem" }}>
+          <button
+            className="btn-plum"
+            disabled={!canRequest}
+            onClick={() => setShowRequestForm(true)}
+            style={{ padding: "0.75rem 2rem", opacity: canRequest ? 1 : 0.5, cursor: canRequest ? "pointer" : "not-allowed" }}
+          >
+            Request withdrawal
+          </button>
+          {!canRequest && (
+            <p style={{ fontSize: "0.8rem", color: "var(--light)", marginTop: "0.6rem" }}>
+              You need at least R100 available to request a withdrawal.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Request form modal */}
+      {showRequestForm && (
+        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setShowRequestForm(false); }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 420, boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
+            <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", marginBottom: "0.35rem" }}>Request withdrawal</h3>
+            <p style={{ color: "var(--grey)", fontSize: "0.85rem", marginBottom: "1.25rem" }}>You&apos;re requesting <strong>{fmt(availableBalance)}</strong>.</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+              <div>
+                <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Bank *</label>
+                <input value={bankName} onChange={e => setBankName(e.target.value)} placeholder="e.g. Capitec" style={{ width: "100%", padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", boxSizing: "border-box" }} />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Account number *</label>
+                <input value={accountNumber} onChange={e => setAccountNumber(e.target.value)} style={{ width: "100%", padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", boxSizing: "border-box" }} />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Account holder name *</label>
+                <input value={accountHolder} onChange={e => setAccountHolder(e.target.value)} style={{ width: "100%", padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", boxSizing: "border-box" }} />
+              </div>
+              {formError && <p style={{ color: "#E53935", fontSize: "0.8rem" }}>{formError}</p>}
+              <button className="btn-plum" onClick={handleSubmitRequest} disabled={submitting} style={{ width: "100%", padding: "0.75rem" }}>
+                {submitting ? "Submitting…" : "Submit request"}
+              </button>
+              <button onClick={() => setShowRequestForm(false)} style={{ background: "none", border: "none", color: "var(--light)", fontSize: "0.85rem", cursor: "pointer", textAlign: "center" }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Transaction history */}
+      <p style={{ fontSize: "0.8rem", fontWeight: 500, color: "var(--grey)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "0.85rem" }}>Transaction history</p>
+      {transactions.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "3rem 1rem", background: "#fff", borderRadius: 20, border: "1.5px solid rgba(155,127,184,0.12)" }}>
+          <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>👛</div>
+          <p style={{ color: "var(--grey)", fontSize: "0.9rem" }}>No transactions yet. Refer a beauty professional to start earning.</p>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+          {transactions.map(t => (
+            <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", borderRadius: 14, padding: "0.9rem 1.1rem", border: "1.5px solid rgba(155,127,184,0.12)" }}>
+              <div>
+                <p style={{ fontSize: "0.88rem", color: "var(--onyx)", marginBottom: 2 }}>{t.description}</p>
+                <p style={{ fontSize: "0.75rem", color: "var(--light)" }}>{new Date(t.created_at).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })}</p>
+              </div>
+              <p style={{ fontSize: "0.95rem", fontWeight: 600, color: t.type === "credit" ? "var(--forest)" : "var(--onyx)" }}>
+                {t.type === "credit" ? "+" : "−"}{fmt(t.amount)}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Point of Contact popup ────────────────────────────────────────────────────
 // State for PoC WhatsApp acceptance flow
 type PocStatus = "idle" | "sent" | "confirmed";
@@ -2661,6 +2889,7 @@ function DashboardContent() {
     { id: "my-services", label: "Services",   icon: "💅" },
     ...(profile.is_partner ? [{ id: "my-shop" as Tab, label: "My Shop", icon: "📣" }] : []),
     { id: "invite",      label: "Invite",     icon: "🎁" },
+    { id: "wallet",      label: "Wallet",     icon: "👛" },
     { id: "profile",     label: "Profile",    icon: "👤" },
   ];
 
@@ -2809,6 +3038,9 @@ function DashboardContent() {
 
         {/* ── Invite tab ── */}
         {tab === "invite" && <section><InviteTab profile={profile} /></section>}
+
+        {/* ── Wallet tab ── */}
+        {tab === "wallet" && <section><WalletTab user={user} /></section>}
 
         {/* ── My Shop tab (business partners only) ── */}
         {tab === "my-shop" && profile.is_partner && <section><MyShopTab user={user} /></section>}

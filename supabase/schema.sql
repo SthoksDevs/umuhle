@@ -416,3 +416,12 @@ CREATE TABLE public.email_log (
   sent_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT email_log_pkey PRIMARY KEY (id)
 );
+CREATE TABLE public.product_wishlists (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  profile_id uuid NOT NULL,
+  product_id uuid NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT product_wishlists_pkey PRIMARY KEY (id),
+  CONSTRAINT product_wishlists_profile_id_fkey FOREIGN KEY (profile_id) REFERENCES public.profiles(id),
+  CONSTRAINT product_wishlists_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id)
+);
