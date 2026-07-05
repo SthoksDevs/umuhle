@@ -14,11 +14,19 @@
 //     order is marked "delivered" — see creditBookingPayout /
 //     creditOrderPayouts below.
 //   - Even once credited, funds sit in `pending_balance` for
-//     PAYOUT_HOLD_DAYS (mirrors the site's returns window) before becoming
-//     withdrawable. That transition is handled entirely in Postgres by
-//     recompute_wallet_balance() — see supabase/migrations/20260705_marketplace_payouts.sql —
-//     so it happens automatically whenever the wallet is read, no cron
-//     needed.
+//     PAYOUT_HOLD_DAYS before becoming withdrawable. That transition is
+//     handled entirely in Postgres by recompute_wallet_balance() — see
+//     supabase/migrations/20260705_marketplace_payouts.sql — so it happens
+//     automatically whenever the wallet is read, no cron needed.
+//   - As of July 2026, PAYOUT_HOLD_DAYS is 2 (previously 7) and admin pays
+//     out approved withdrawals on Mondays, Wednesdays and Fridays — see
+//     PAYOUT_DAYS_OF_WEEK / getNextPayoutDate() below. The 7-day figure
+//     used to be chosen deliberately to match the customer returns window
+//     (app/returns/page.tsx) so a partner couldn't cash out before a return
+//     could claw the sale back. At 2 days that's no longer true — a return
+//     filed on day 3–7 after delivery can now land after the payout is
+//     already available, or even paid. Flagging so it's a conscious
+//     tradeoff rather than a side effect.
 //
 // Idempotency: crediting is guarded two ways — a `payout_credited_at`
 // timestamp on the source row (fast, avoids redundant work) and a unique
@@ -28,7 +36,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const COMMISSION_RATE = 0.055; // 5.5%
-export const PAYOUT_HOLD_DAYS = 7; // matches the 7-day returns window
+export const PAYOUT_HOLD_DAYS = 2; // turnaround target (was 7) — see note above re: returns-window overlap
 
 export function splitCommission(grossCents: number): { commissionCents: number; payoutCents: number } {
   const gross = Math.max(Math.round(grossCents), 0);
@@ -37,6 +45,31 @@ export function splitCommission(grossCents: number): { commissionCents: number; 
 }
 
 const fmtR = (cents: number) => `R${(cents / 100).toFixed(2)}`;
+
+// ── Payout schedule ──────────────────────────────────────────────────────────
+//
+// Admin runs payouts on Mondays, Wednesdays and Fridays. This is an
+// operational cadence for display purposes only — it is not enforced by the
+// database or the admin Payments tab, which still lets staff mark a
+// withdrawal "paid" on any day. getNextPayoutDate() just answers "when's
+// the next scheduled run", for copy like "next payout run: Wednesday, 8 July".
+
+export const PAYOUT_DAYS_OF_WEEK = [1, 3, 5] as const; // Mon, Wed, Fri (0 = Sun ... 6 = Sat)
+
+/** The next date (today counts, if today is a payout day) on the Mon/Wed/Fri cycle. */
+export function getNextPayoutDate(from: Date = new Date()): Date {
+  const d = new Date(from);
+  d.setHours(0, 0, 0, 0);
+  while (!(PAYOUT_DAYS_OF_WEEK as readonly number[]).includes(d.getDay())) {
+    d.setDate(d.getDate() + 1);
+  }
+  return d;
+}
+
+/** e.g. "Wednesday, 8 July" */
+export function formatPayoutDate(d: Date): string {
+  return d.toLocaleDateString("en-ZA", { weekday: "long", day: "numeric", month: "long" });
+}
 
 // ── Bookings ─────────────────────────────────────────────────────────────────
 

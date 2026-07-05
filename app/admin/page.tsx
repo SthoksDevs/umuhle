@@ -1114,7 +1114,7 @@ function PaymentsTab({ supabase }: { supabase: ReturnType<typeof createClient> }
         Payment Requests
       </h2>
       <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-        Manage user withdrawal requests and mark payments as processed.
+        Manage user withdrawal requests and mark payments as processed. Payouts run Mondays, Wednesdays and Fridays — this isn&apos;t enforced here, so hold non-run-day payments until the next scheduled run.
       </p>
       <div style={{ display: "flex", gap: "0.35rem", marginBottom: "1.25rem", flexWrap: "wrap" }}>
         {(["pending", "approved", "paid", "all"] as const).map((f) => (

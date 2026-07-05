@@ -116,6 +116,7 @@ export default function EarnPage() {
             ["Reward per partner",  "R10 per qualifying referral"],
             ["When you earn",       "When your referred partner pays for their first advertisement"],
             ["Minimum withdrawal",  "R100"],
+            ["Payout schedule",     "Mondays, Wednesdays & Fridays"],
             ["Who can refer",       "Any Umuhle user"],
             ["Code entry",          "During partner sign-up only"],
           ].map(([l, v]) => (

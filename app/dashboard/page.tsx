@@ -12,7 +12,7 @@ import Footer from "@/components/Footer";
 import ProductForm, { productToForm, type ProductFormData } from "@/components/ProductForm";
 import { useCart } from "@/lib/cart-context";
 import { useProductWishlist } from "@/lib/product-wishlist-context";
-import { PAYOUT_HOLD_DAYS } from "@/lib/payouts";
+import { PAYOUT_HOLD_DAYS, getNextPayoutDate, formatPayoutDate } from "@/lib/payouts";
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
@@ -1848,7 +1848,7 @@ function WalletTab({ user }: { user: User }) {
     }
     setShowRequestForm(false);
     setBankName(""); setAccountNumber(""); setAccountHolder("");
-    setNotice("Withdrawal request submitted — we'll pay out within a few business days.");
+    setNotice(`Withdrawal request submitted. Payouts run Mondays, Wednesdays and Fridays — next payout run is ${formatPayoutDate(getNextPayoutDate())}.`);
     load();
   };
 
@@ -1867,7 +1867,7 @@ function WalletTab({ user }: { user: User }) {
     <div style={{ maxWidth: 560 }}>
       <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", marginBottom: "0.5rem" }}>Wallet</h2>
       <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem", lineHeight: 1.6 }}>
-        Your earnings from completed bookings and delivered orders land here (Umuhle keeps a 5.5% commission; you keep 94.5%), along with any referral rewards. New earnings sit in <strong>Pending</strong> for {PAYOUT_HOLD_DAYS} days after completion before moving to your available balance — withdraw once that reaches R100.
+        Your earnings from completed bookings and delivered orders land here (Umuhle keeps a 5.5% commission; you keep 94.5%), along with any referral rewards. New earnings sit in <strong>Pending</strong> for {PAYOUT_HOLD_DAYS} days after completion before moving to your available balance — withdraw once that reaches R100. Payouts are processed every Monday, Wednesday and Friday.
       </p>
 
       {loadError && (
@@ -1904,7 +1904,7 @@ function WalletTab({ user }: { user: User }) {
       {/* Withdraw action / status */}
       {hasOpenRequest ? (
         <div style={{ background: "var(--plum-t)", borderRadius: 14, padding: "1rem 1.25rem", marginBottom: "2rem", fontSize: "0.85rem", color: "var(--onyx)" }}>
-          You have a withdrawal request being processed.
+          You have a withdrawal request being processed. Payouts run Mondays, Wednesdays and Fridays — next payout run is {formatPayoutDate(getNextPayoutDate())}.
         </div>
       ) : (
         <div style={{ marginBottom: "2rem" }}>
