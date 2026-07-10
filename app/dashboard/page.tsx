@@ -10,6 +10,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
 import ProductForm, { productToForm, type ProductFormData } from "@/components/ProductForm";
+import ListingPackagePicker from "@/components/ListingPackagePicker";
 import { useCart } from "@/lib/cart-context";
 import { useProductWishlist } from "@/lib/product-wishlist-context";
 import { PAYOUT_HOLD_DAYS, getNextPayoutDate, formatPayoutDate } from "@/lib/payouts";
@@ -23,7 +24,9 @@ function formatDate(dateStr: string) {
 }
 
 // ── Tab type extended with "invite" and "my-store" (replaces "my-store") ──────
-type Tab = "bookings" | "my-orders" | "wishlist" | "profile" | "my-store" | "my-products" | "my-services" | "invite" | "my-shop" | "wallet";
+// "my-products" was folded into "my-shop" — products and ads are now one
+// concept, one tab (see the products/ads pricing merge).
+type Tab = "bookings" | "my-orders" | "wishlist" | "profile" | "my-store" | "my-services" | "invite" | "my-shop" | "wallet";
 
 const SERVICE_TYPES = [
   { id: "hair",   label: "Hair",  banner: "/banners/hair.jpg",   description: "From protective styles to blowouts, braids to colour — let clients know exactly what you specialise in." },
@@ -2287,17 +2290,8 @@ interface PartnerProductRow {
   length_cm: number | null;
   width_cm: number | null;
   height_cm: number | null;
-}
-
-interface PartnerAdRow {
-  id: string;
-  title: string;
-  description: string | null;
-  image_url: string | null;
-  package: string;
-  status: string;
-  moderation_status: string;
-  created_at: string;
+  package: string | null;
+  listing_status: string | null;
   starts_at: string | null;
   expires_at: string | null;
 }
@@ -2305,9 +2299,13 @@ interface PartnerAdRow {
 const fmtShop = (cents: number) => `R${(cents / 100).toFixed(0)}`;
 
 // ── Products manager ─────────────────────────────────────────────────────────
-// Shared product create/edit/list UI. Used both by the standalone "My
-// Products" dashboard tab (available to every user — no store required) and
-// inside "My Shop" for business partners who also run ads.
+// Shared product create/edit/list UI — this is now the whole "My Shop" tab.
+// Products and ads used to be two separate things (a free product listing,
+// plus a paid ad you bought separately to promote it). They're merged now:
+// listing a product IS the promotion, paid for up front via the same
+// Starter/Growth/Business/Premium packages ads used to use on their own.
+// Legacy products (listing_status null, created before this merge) are
+// grandfathered in — ungated, exactly as they worked before.
 function ProductsManager({ user }: { user: { id: string } }) {
   const supabase = createClient();
 
@@ -2315,6 +2313,7 @@ function ProductsManager({ user }: { user: { id: string } }) {
   const [prodLoading, setProdLoading] = useState(true);
   const [showForm,   setShowForm]   = useState(false);
   const [editTarget, setEditTarget] = useState<PartnerProductRow | null>(null);
+  const [paymentTarget, setPaymentTarget] = useState<{ id: string; name: string; mode: "new" | "renew" } | null>(null);
 
   const loadProducts = useCallback(async () => {
     setProdLoading(true);
@@ -2329,7 +2328,12 @@ function ProductsManager({ user }: { user: { id: string } }) {
 
   useEffect(() => { loadProducts(); }, [loadProducts]);
 
-  const handleSaved = (saved: ProductFormData & { id: string }) => {
+  const isExpired = (p: PartnerProductRow) =>
+    Boolean(p.expires_at && new Date(p.expires_at) < new Date());
+  const isGated = (p: PartnerProductRow) =>
+    p.listing_status === "pending_payment" || p.listing_status === "cancelled";
+
+  const handleSaved = (saved: ProductFormData & { id: string }, wasNew: boolean) => {
     const toRow = (base: PartnerProductRow | undefined): PartnerProductRow => ({
       ...(base ?? {} as PartnerProductRow),
       id:          saved.id,
@@ -2347,6 +2351,10 @@ function ProductsManager({ user }: { user: { id: string } }) {
       moderation_status: base?.moderation_status ?? "scanning",
       created_at:        base?.created_at        ?? new Date().toISOString(),
       partner_id:        base?.partner_id        ?? user.id,
+      package:           base?.package        ?? null,
+      listing_status:    base?.listing_status ?? (wasNew ? "pending_payment" : null),
+      starts_at:         base?.starts_at      ?? null,
+      expires_at:        base?.expires_at     ?? null,
     });
     setProducts(prev => {
       const exists = prev.find(p => p.id === saved.id);
@@ -2355,14 +2363,22 @@ function ProductsManager({ user }: { user: { id: string } }) {
     });
     setShowForm(false);
     setEditTarget(null);
+    if (wasNew) setPaymentTarget({ id: saved.id, name: saved.name, mode: "new" });
   };
 
   const toggleActive = async (p: PartnerProductRow) => {
+    if (isGated(p) || isExpired(p)) return; // use the payment flow instead
     await supabase.from("products").update({ is_active: !p.is_active }).eq("id", p.id);
     setProducts(prev => prev.map(x => x.id === p.id ? { ...x, is_active: !x.is_active } : x));
   };
 
-  const modBadge = (status: string) => {
+  const modBadge = (p: PartnerProductRow) => {
+    if (isGated(p)) {
+      return <span style={{ background: "#FFF3E0", color: "#E65100", borderRadius: 100, padding: "0.2rem 0.65rem", fontSize: "0.7rem", fontWeight: 600 }}>Awaiting payment</span>;
+    }
+    if (isExpired(p)) {
+      return <span style={{ background: "#F5F5F5", color: "#757575", borderRadius: 100, padding: "0.2rem 0.65rem", fontSize: "0.7rem", fontWeight: 600 }}>Expired</span>;
+    }
     const map: Record<string, { bg: string; color: string; label: string }> = {
       approved:     { bg: "#E8F5E9", color: "#2E7D32", label: "Live" },
       scanning:     { bg: "#FFF3E0", color: "#E65100", label: "Under review" },
@@ -2370,7 +2386,7 @@ function ProductsManager({ user }: { user: { id: string } }) {
       needs_review: { bg: "#FFF3E0", color: "#E65100", label: "Needs review" },
       rejected:     { bg: "#FFEBEE", color: "#C62828", label: "Rejected" },
     };
-    const s = map[status] ?? map.draft;
+    const s = map[p.moderation_status] ?? map.draft;
     return (
       <span style={{ background: s.bg, color: s.color, borderRadius: 100, padding: "0.2rem 0.65rem", fontSize: "0.7rem", fontWeight: 600 }}>
         {s.label}
@@ -2381,10 +2397,11 @@ function ProductsManager({ user }: { user: { id: string } }) {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "0.75rem" }}>
-        <p style={{ fontSize: "0.82rem", color: "var(--grey)", margin: 0 }}>
-          Products go through a review before appearing in the shop.
+        <p style={{ fontSize: "0.82rem", color: "var(--grey)", margin: 0, maxWidth: 480 }}>
+          Every listing — from R20 for 6 weeks — goes through a quick review before it appears in the shop.{" "}
+          <a href="/fees" target="_blank" rel="noopener noreferrer" style={{ color: "var(--plum)" }}>See all fees →</a>
         </p>
-        {!showForm && !editTarget && (
+        {!showForm && !editTarget && !paymentTarget && (
           <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.55rem 1.25rem", fontSize: "0.85rem", whiteSpace: "nowrap" }}>
             + Add product
           </button>
@@ -2417,13 +2434,24 @@ function ProductsManager({ user }: { user: { id: string } }) {
         </div>
       )}
 
+      {paymentTarget && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <ListingPackagePicker
+            productId={paymentTarget.id}
+            productName={paymentTarget.name}
+            mode={paymentTarget.mode}
+            onCancel={() => setPaymentTarget(null)}
+          />
+        </div>
+      )}
+
       {prodLoading ? (
         <p style={{ color: "var(--grey)" }}>Loading products…</p>
       ) : products.length === 0 && !showForm ? (
         <div style={{ textAlign: "center", padding: "3rem", background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.12)" }}>
           <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>🛍️</div>
           <p style={{ fontFamily: "var(--font-display)", fontSize: "1.05rem", marginBottom: "0.5rem" }}>No products yet</p>
-          <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>Add your first product to start selling on Umuhle.</p>
+          <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>Add your first product — R20 keeps it listed for 6 weeks — to start selling on Umuhle.</p>
           <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.75rem 2rem" }}>Add a product</button>
         </div>
       ) : (
@@ -2441,25 +2469,44 @@ function ProductsManager({ user }: { user: { id: string } }) {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.1rem" }}>
                   <p style={{ fontWeight: 600, fontSize: "0.9rem", margin: 0 }}>{p.name}</p>
-                  {modBadge(p.moderation_status)}
+                  {modBadge(p)}
                 </div>
                 <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: 0 }}>
                   {fmtShop(p.price)} · {p.stock_count} in stock · <span style={{ textTransform: "capitalize" }}>{p.category ?? "—"}</span>
+                  {p.package && p.expires_at && !isExpired(p) && (
+                    <> · <span style={{ textTransform: "capitalize" }}>{p.package}</span> package, live till {new Date(p.expires_at).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })}</>
+                  )}
                 </p>
               </div>
               <div style={{ display: "flex", gap: "0.4rem", flexShrink: 0 }}>
                 <button
-                  onClick={() => { setEditTarget(p); setShowForm(false); }}
+                  onClick={() => { setEditTarget(p); setShowForm(false); setPaymentTarget(null); }}
                   style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "#fff", color: "var(--plum)", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
                 >
                   Edit
                 </button>
-                <button
-                  onClick={() => toggleActive(p)}
-                  style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "none", background: p.is_active ? "#E8F5E9" : "#F5F5F5", color: p.is_active ? "#2E7D32" : "#757575", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
-                >
-                  {p.is_active ? "Live" : "Hidden"}
-                </button>
+                {isGated(p) ? (
+                  <button
+                    onClick={() => setPaymentTarget({ id: p.id, name: p.name, mode: "new" })}
+                    style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "none", background: "var(--plum)", color: "#fff", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
+                  >
+                    Pay to publish
+                  </button>
+                ) : isExpired(p) ? (
+                  <button
+                    onClick={() => setPaymentTarget({ id: p.id, name: p.name, mode: "renew" })}
+                    style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "none", background: "var(--plum)", color: "#fff", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
+                  >
+                    Renew
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => toggleActive(p)}
+                    style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "none", background: p.is_active ? "#E8F5E9" : "#F5F5F5", color: p.is_active ? "#2E7D32" : "#757575", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
+                  >
+                    {p.is_active ? "Live" : "Hidden"}
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -2469,118 +2516,18 @@ function ProductsManager({ user }: { user: { id: string } }) {
   );
 }
 
+// My Shop — products and ads used to be two tabs here (a free product list,
+// plus a separate ad-purchase tab that, as it turns out, had no way to
+// actually create an ad from the UI). They're merged now: this tab IS
+// listing management, and every listing is paid + promoted from the start.
 function MyShopTab({ user }: { user: { id: string } }) {
-  const supabase = createClient();
-  const [innerTab, setInnerTab] = useState<"products" | "ads">("products");
-
-  // ── Ads state ──
-  const [ads,       setAds]       = useState<PartnerAdRow[]>([]);
-  const [adsLoading, setAdsLoading] = useState(true);
-
-  // Load ads
-  const loadAds = useCallback(async () => {
-    setAdsLoading(true);
-    const { data } = await supabase
-      .from("ads")
-      .select("id, title, description, image_url, package, status, moderation_status, created_at, starts_at, expires_at")
-      .eq("partner_id", user.id)
-      .order("created_at", { ascending: false });
-    setAds((data ?? []) as PartnerAdRow[]);
-    setAdsLoading(false);
-  }, [supabase, user.id]);
-
-  useEffect(() => { loadAds(); }, [loadAds]);
-
-  const adStatusBadge = (ad: PartnerAdRow) => {
-    const map: Record<string, { bg: string; color: string }> = {
-      active:          { bg: "#E8F5E9", color: "#2E7D32" },
-      pending_payment: { bg: "#FFF3E0", color: "#E65100" },
-      expired:         { bg: "#F5F5F5", color: "#757575" },
-      cancelled:       { bg: "#FFEBEE", color: "#C62828" },
-    };
-    const s = map[ad.status] ?? map.pending_payment;
-    return (
-      <span style={{ background: s.bg, color: s.color, borderRadius: 100, padding: "0.2rem 0.65rem", fontSize: "0.7rem", fontWeight: 600, textTransform: "capitalize" }}>
-        {ad.status.replace("_", " ")}
-      </span>
-    );
-  };
-
   return (
     <div>
       <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.25rem" }}>My Shop</h2>
       <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-        Manage the products and ads you run on Umuhle. Looking to just add products? Head to the <strong>My Products</strong> tab — you don&apos;t need a shop to sell.
+        List a product and it&apos;s automatically promoted on Umuhle for as long as its package runs — starting at R20 for 6 weeks. No separate ad to buy.
       </p>
-
-      {/* Inner tab switcher */}
-      <div style={{ display: "flex", gap: 0, marginBottom: "1.5rem", borderRadius: 100, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.2)", width: "fit-content" }}>
-        {(["products", "ads"] as const).map((t, i) => (
-          <button key={t} onClick={() => setInnerTab(t)} style={{
-            padding: "0.5rem 1.5rem", border: "none", cursor: "pointer", fontSize: "0.85rem",
-            background: innerTab === t ? "var(--plum)" : "#fff",
-            color: innerTab === t ? "#fff" : "var(--grey)",
-            fontWeight: innerTab === t ? 600 : 400,
-            borderRight: i === 0 ? "1.5px solid rgba(155,127,184,0.2)" : "none",
-            textTransform: "capitalize",
-          }}>
-            {t === "products" ? "Products" : `Ads${ads.length ? ` (${ads.length})` : ""}`}
-          </button>
-        ))}
-      </div>
-
-      {/* ── Products panel ── */}
-      {innerTab === "products" && <ProductsManager user={user} />}
-
-      {/* ── Ads panel ── */}
-      {innerTab === "ads" && (
-        <div>
-          {adsLoading ? (
-            <p style={{ color: "var(--grey)" }}>Loading ads…</p>
-          ) : ads.length === 0 ? (
-            <div style={{ textAlign: "center", padding: "3rem", background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.12)" }}>
-              <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>📣</div>
-              <p style={{ fontFamily: "var(--font-display)", fontSize: "1.05rem", marginBottom: "0.5rem" }}>No ads yet</p>
-              <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-                Promote your store to thousands of Umuhle users by running an ad.
-              </p>
-              <a href="/earn"><button className="btn-plum" style={{ padding: "0.75rem 2rem" }}>View ad packages</button></a>
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
-              {ads.map(ad => (
-                <div key={ad.id} style={{ background: "#fff", borderRadius: 14, border: "1.5px solid rgba(155,127,184,0.12)", padding: "1rem 1.25rem", display: "flex", gap: "1rem", alignItems: "flex-start" }}>
-                  {ad.image_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={ad.image_url} alt="" style={{ width: 56, height: 56, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />
-                  ) : (
-                    <div style={{ width: 56, height: 56, borderRadius: 8, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <span style={{ fontSize: "1.4rem" }}>📣</span>
-                    </div>
-                  )}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.1rem" }}>
-                      <p style={{ fontWeight: 600, fontSize: "0.9rem", margin: 0 }}>{ad.title}</p>
-                      {adStatusBadge(ad)}
-                    </div>
-                    {ad.description && (
-                      <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: "0 0 0.1rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ad.description}</p>
-                    )}
-                    <p style={{ fontSize: "0.72rem", color: "var(--light)", margin: 0, textTransform: "capitalize" }}>
-                      {ad.package} package
-                      {ad.starts_at && ` · from ${new Date(ad.starts_at).toLocaleDateString("en-ZA", { day: "numeric", month: "short" })}`}
-                      {ad.expires_at && ` to ${new Date(ad.expires_at).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })}`}
-                    </p>
-                  </div>
-                </div>
-              ))}
-              <div style={{ marginTop: "0.75rem" }}>
-                <a href="/earn"><button className="btn-outline" style={{ padding: "0.6rem 1.5rem", fontSize: "0.85rem" }}>+ Run another ad</button></a>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      <ProductsManager user={user} />
     </div>
   );
 }
@@ -2838,7 +2785,10 @@ function DashboardContent() {
   // Deep-link support, e.g. /dashboard?tab=wishlist&sub=products (used by the
   // header's heart icon)
   useEffect(() => {
-    const t = searchParams.get("tab") as Tab | null;
+    const raw = searchParams.get("tab");
+    // "my-products" no longer exists — it merged into "my-shop". Keep old
+    // bookmarks/links working instead of landing on a blank pane.
+    const t = (raw === "my-products" ? "my-shop" : raw) as Tab | null;
     if (t) setTab(t);
     const sub = searchParams.get("sub");
     if (sub === "products" || sub === "artists") setWishlistSubTab(sub);
@@ -2903,9 +2853,8 @@ function DashboardContent() {
     { id: "my-orders",   label: "My Orders",  icon: "🧾" },
     { id: "wishlist",    label: "Wishlist",   icon: "💜" },
     { id: "my-store",    label: "My Store",   icon: "✂️" },
-    { id: "my-products", label: "My Products", icon: "🛍️" },
+    { id: "my-shop",     label: "My Shop",    icon: "🛍️" },
     { id: "my-services", label: "Services",   icon: "💅" },
-    ...(profile.is_partner ? [{ id: "my-shop" as Tab, label: "My Shop", icon: "📣" }] : []),
     { id: "invite",      label: "Invite",     icon: "🎁" },
     { id: "wallet",      label: "Wallet",     icon: "👛" },
     { id: "profile",     label: "Profile",    icon: "👤" },
@@ -2915,7 +2864,7 @@ function DashboardContent() {
   void handleSignOut;
 
   // Primary tabs shown in bottom action bar (mobile) — most used
-  const PRIMARY_TABS: Tab[] = ["bookings", "wishlist", "my-store", "my-services", ...(profile.is_partner ? ["my-shop" as Tab] : []), "profile"];
+  const PRIMARY_TABS: Tab[] = ["bookings", "wishlist", "my-store", "my-services", "my-shop", "profile"];
   const MORE_TABS = TAB_CONFIG.filter(t => !PRIMARY_TABS.includes(t.id));
 
   return (
@@ -3040,17 +2989,6 @@ function DashboardContent() {
         {/* ── My Salon tab ── */}
         {tab === "my-store" && <section><MySalonTab user={user} /></section>}
 
-        {/* ── My Products tab (any user — no store required) ── */}
-        {tab === "my-products" && (
-          <section>
-            <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", marginBottom: "0.25rem" }}>My Products</h2>
-            <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-              Create and manage products to sell in the Umuhle shop — no store listing required.
-            </p>
-            <ProductsManager user={user} />
-          </section>
-        )}
-
         {/* ── My Services tab ── */}
         {tab === "my-services" && <section><MyServicesTab profile={profile} user={user} onUpdate={(p) => setProfile(p)} /></section>}
 
@@ -3060,8 +2998,9 @@ function DashboardContent() {
         {/* ── Wallet tab ── */}
         {tab === "wallet" && <section><WalletTab user={user} /></section>}
 
-        {/* ── My Shop tab (business partners only) ── */}
-        {tab === "my-shop" && profile.is_partner && <section><MyShopTab user={user} /></section>}
+        {/* ── My Shop tab — products + promotion, merged. Open to everyone: ──
+             selling was never restricted to formal "partner" accounts. ── */}
+        {tab === "my-shop" && <section><MyShopTab user={user} /></section>}
       </main>
 
       {/* ── Mobile Bottom Action Bar ── */}

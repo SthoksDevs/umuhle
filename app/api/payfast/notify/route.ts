@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { validateITN } from "@/lib/payfast";
+import { LISTING_PACKAGES } from "@/types";
 import { createServiceClient } from "@/lib/supabase/server";
 import { recordBookingSplit, recordOrderItemSplits } from "@/lib/payouts";
 import { notifyBookingCreated } from "@/lib/whatsapp";
@@ -20,6 +21,7 @@ import {
   sendOrderFailedEmail,
   sendAdPaidEmail,
   sendSalonPaidEmail,
+  sendProductListingPaidEmail,
 } from "@/lib/email";
 
 export async function POST(req: NextRequest) {
@@ -42,7 +44,7 @@ export async function POST(req: NextRequest) {
 
   const supabase       = await createServiceClient();
   const paymentId      = params.m_payment_id;
-  const paymentType    = params.custom_str1 as "booking" | "order" | "ad" | "salon" | undefined;
+  const paymentType    = params.custom_str1 as "booking" | "order" | "ad" | "salon" | "product_listing" | undefined;
   const paymentStatus  = params.payment_status; // "COMPLETE" | "CANCELLED" | "FAILED" | "PENDING"
   const pfPaymentId    = params.pf_payment_id;
 
@@ -352,6 +354,69 @@ export async function POST(req: NextRequest) {
           } catch (e) {
             console.error("[PayFast ITN] Ad paid email error:", e);
           }
+        }
+        break;
+      }
+
+      // ── PRODUCT LISTING ─────────────────────────────────────────────────────
+      // Same shape as the "ad" case above — same packages, same durations —
+      // just updating `products` instead of `ads`. The one extra wrinkle:
+      // is_active only flips to true here if content moderation already
+      // cleared the product (a partner can pay before or after admin
+      // reviews it; whichever finishes last is what makes it visible).
+      case "product_listing": {
+        if (paymentStatus !== "COMPLETE") break;
+
+        const now = new Date();
+        const { data: product } = await supabase
+          .from("products")
+          .select("package, name, moderation_status, partner:profiles!partner_id(full_name, email)")
+          .eq("id", paymentId)
+          .eq("listing_status", "pending_payment")
+          .single();
+
+        if (!product) {
+          console.warn("PayFast ITN: product not found or already processed", paymentId);
+          break;
+        }
+
+        const WEEKS: Record<string, number> = {
+          starter: 6, growth: 12, business: 16, premium: 24,
+        };
+        const DURATION_LABELS: Record<string, string> = {
+          starter: "6 weeks", growth: "3 months", business: "4 months", premium: "6 months",
+        };
+        const pkg       = product.package ?? "starter";
+        const weeks     = WEEKS[pkg] ?? 6;
+        const expiresAt = new Date(now.getTime() + weeks * 7 * 24 * 60 * 60 * 1000);
+
+        await supabase
+          .from("products")
+          .update({
+            listing_status:      "active",
+            payfast_payment_id:  pfPaymentId,
+            starts_at:           now.toISOString(),
+            expires_at:          expiresAt.toISOString(),
+            is_active:           product.moderation_status === "approved",
+          })
+          .eq("id", paymentId)
+          .eq("listing_status", "pending_payment");
+
+        const partnerRow = Array.isArray(product.partner) ? product.partner[0] : product.partner;
+        try {
+          console.log("[PayFast ITN] Sending product listing paid emails...");
+          await sendProductListingPaidEmail({
+            productId:      paymentId,
+            productName:    product.name,
+            clientName:     (partnerRow as { full_name: string } | undefined)?.full_name ?? "Partner",
+            clientEmail:    (partnerRow as { email: string } | undefined)?.email ?? "",
+            packageName:    pkg.charAt(0).toUpperCase() + pkg.slice(1),
+            durationLabel:  DURATION_LABELS[pkg] ?? `${weeks} weeks`,
+            amount:         LISTING_PACKAGES.find((p) => p.id === pkg)?.price ?? 2000,
+          });
+          console.log("[PayFast ITN] Product listing paid emails done.");
+        } catch (e) {
+          console.error("[PayFast ITN] Product listing paid email error:", e);
         }
         break;
       }

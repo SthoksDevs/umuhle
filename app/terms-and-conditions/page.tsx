@@ -36,16 +36,12 @@ export default function TermsPage() {
             <p>Booking arrangements are made between customers and artists. Umuhle facilitates discovery, communication and payments but is not a party to the underlying service agreement.</p>
           </Section>
 
-          <Section title="Products and Orders">
-            <p>Partners are responsible for product accuracy, pricing, fulfilment, stock availability and compliance with applicable laws.</p>
-          </Section>
-
-          <Section title="Advertisements and Salon Subscriptions">
-            <p>Advertisement purchases and salon subscriptions increase visibility but do not guarantee impressions, enquiries, bookings, sales or revenue.</p>
+          <Section title="Products, Listings and Salon Subscriptions">
+            <p>Partners are responsible for product accuracy, pricing, fulfilment, stock availability and compliance with applicable laws. Every product listing requires payment of a listing package before it appears in the shop; listing and salon subscription fees increase visibility for the paid duration but do not guarantee impressions, enquiries, bookings, sales or revenue.</p>
           </Section>
 
           <Section title="Referral Programme">
-            <p>Referral rewards become payable only when a referred partner successfully purchases and pays for their first qualifying advertisement. The current reward and withdrawal thresholds may be updated by Umuhle from time to time.</p>
+            <p>Referral rewards become payable only when a referred partner successfully pays for their first qualifying product listing. The current reward and withdrawal thresholds may be updated by Umuhle from time to time.</p>
           </Section>
 
           <Section title="Reviews and Content">

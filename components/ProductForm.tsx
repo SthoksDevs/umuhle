@@ -97,7 +97,10 @@ interface Props {
   supabase:    any;
   skipVerify?: boolean;
   isLive?:     boolean;
-  onSaved:     (row: ProductFormData & { id: string }) => void;
+  // wasNew is true only for a fresh, non-skipVerify insert — i.e. exactly
+  // the case that now needs a listing package + payment before it can go
+  // live. Edits and skipVerify (Umuhle's own products) always pass false.
+  onSaved:     (row: ProductFormData & { id: string }, wasNew: boolean) => void;
   onCancel?:   () => void;
 }
 
@@ -268,14 +271,24 @@ export default function ProductForm({
 
       let data, err;
       if (isEdit && form.id) {
+        // Editing never touches listing_status/package/expires_at — a
+        // partner tidying up a description shouldn't reset or extend the
+        // paid listing window they already bought.
         const updatePayload = skipVerify
           ? payload
           : { ...payload, moderation_status: undefined, is_active: undefined };
         ({ data, error: err } = await supabase
           .from("products").update(updatePayload).eq("id", form.id).select().single());
       } else {
+        // Brand-new product from a partner: gate it behind the listing fee.
+        // skipVerify (Umuhle's own products, added via admin) skips this —
+        // Umuhle doesn't charge itself — and just goes straight to active
+        // via the column default.
+        const insertPayload = skipVerify
+          ? payload
+          : { ...payload, listing_status: "pending_payment" };
         ({ data, error: err } = await supabase
-          .from("products").insert(payload).select().single());
+          .from("products").insert(insertPayload).select().single());
       }
       if (err) throw err;
 
@@ -322,7 +335,7 @@ export default function ProductForm({
       // IMPORTANT: do NOT spread raw DB \`data\` here — it contains price in cents,
       // which would overwrite form.price (rand string) and cause a double ×100 in
       // the caller's handleSaved. Only carry form values forward + the authoritative id.
-      onSaved({ ...form, id: productId });
+      onSaved({ ...form, id: productId }, !isEdit && !skipVerify);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
@@ -339,7 +352,7 @@ export default function ProductForm({
       </h3>
       {!skipVerify && !isEdit && (
         <p style={{ fontSize: "0.78rem", color: "#888", marginBottom: "0.75rem" }}>
-          Your product will be reviewed before appearing in the shop.
+          Next you&apos;ll choose a listing package (from R20 for 6 weeks) and pay — then it&apos;s reviewed before appearing in the shop.
         </p>
       )}
 
@@ -554,7 +567,7 @@ export default function ProductForm({
         <button type="button" onClick={handleSubmit} disabled={saving}
           className="btn-plum"
           style={{ flex: 2, padding: "0.75rem", borderRadius: 100, fontSize: "0.9rem", fontWeight: 600, cursor: saving ? "not-allowed" : "pointer", opacity: saving ? 0.7 : 1 }}>
-          {saving ? "Saving…" : isEdit ? "Save changes" : skipVerify ? "Publish product" : "Submit for review"}
+          {saving ? "Saving…" : isEdit ? "Save changes" : skipVerify ? "Publish product" : "Continue to listing package →"}
         </button>
       </div>
     </div>

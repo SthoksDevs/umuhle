@@ -550,6 +550,58 @@ export async function sendAdPaidEmail(opts: {
   }
 }
 
+// ── Product listing payment confirmed ──────────────────────────────────────────
+// Same shape as sendAdPaidEmail above — products now use the same package
+// pricing as ads, just for a single named item instead of a generic ad slot.
+
+export async function sendProductListingPaidEmail(opts: {
+  productId:     string;
+  productName:   string;
+  clientName:    string;
+  clientEmail:   string;
+  packageName:   string;
+  durationLabel: string;
+  amount:        number;
+}) {
+  const amountStr = formatRand(opts.amount);
+  const rows: Array<[string, string]> = [
+    ["Reference",  `<span style="font-family:monospace">${opts.productId}</span>`],
+    ["Partner",    `${opts.clientName} (${opts.clientEmail})`],
+    ["Product",    opts.productName],
+    ["Package",    opts.packageName],
+    ["Duration",   opts.durationLabel],
+    ["Amount",     `<strong style="color:#2B6B45">${amountStr}</strong>`],
+  ];
+
+  // Admin email
+  await sendToAll([ADMIN_EMAIL], {
+    subject:     `✅ Listing payment received — ${opts.packageName} package — ${amountStr}`,
+    template:    "product_listing_paid_admin",
+    referenceId: opts.productId,
+    text:        `Listing payment received\nRef: ${opts.productId}\nPartner: ${opts.clientName} (${opts.clientEmail})\nProduct: ${opts.productName}\nPackage: ${opts.packageName} (${opts.durationLabel})\nAmount: ${amountStr}`,
+    html:        emailWrapper(`✅ New listing payment — ${amountStr}`, detailTable(rows)),
+  });
+
+  // Customer / partner email
+  if (opts.clientEmail) {
+    await sendToAll([opts.clientEmail], {
+      subject:     `Your Umuhle listing is being set up — ${opts.packageName} package`,
+      template:    "product_listing_paid_customer",
+      referenceId: opts.productId,
+      text:        `Hi ${opts.clientName},\n\nThank you! Your payment of ${amountStr} for the ${opts.packageName} package has been received.\n\n"${opts.productName}" is now under review and will go live in the Umuhle shop for ${opts.durationLabel} once approved.\n\nUmuhle`,
+      html:        emailWrapper(`Your listing is being set up 🛍️`, `
+        <p style="margin:0 0 1.25rem">Hi ${opts.clientName},</p>
+        <p style="margin:0 0 1.25rem">Payment of <strong>${amountStr}</strong> for your <strong>${opts.packageName}</strong> package has been received.</p>
+        ${detailTable([
+          ["Product",  opts.productName],
+          ["Live for", opts.durationLabel],
+          ["Ref",      `<span style="font-family:monospace">${opts.productId}</span>`],
+        ])}
+        <p style="margin:1rem 0 0;font-size:0.875rem;color:#666">"${opts.productName}" is now under review and will appear in the shop once our team approves it — usually within 24 hours. 💜</p>`),
+    });
+  }
+}
+
 // ── Salon subscription confirmed ──────────────────────────────────────────────
 
 export async function sendSalonPaidEmail(opts: {

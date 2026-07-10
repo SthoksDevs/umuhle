@@ -38,7 +38,7 @@ export async function createPendingOrder(
 
   const { data: products, error: productErr } = await supabase
     .from("products")
-    .select("id, name, price, stock_count, is_active, moderation_status")
+    .select("id, name, price, stock_count, is_active, moderation_status, expires_at")
     .in("id", productIds);
 
   if (productErr || !products) {
@@ -53,6 +53,12 @@ export async function createPendingOrder(
     if (!product) return { error: `Product ${item.productId} not found` };
     if (!product.is_active) return { error: `${product.name} is no longer available` };
     if (product.moderation_status !== "approved") return { error: `${product.name} is not available` };
+    // Belt-and-braces: the shop grid already hides expired listings, but a
+    // product sitting in someone's cart since before it expired shouldn't
+    // still be purchasable — there's no cron job flipping is_active off.
+    if (product.expires_at && new Date(product.expires_at) < new Date()) {
+      return { error: `${product.name} is no longer available` };
+    }
     if (product.stock_count < item.quantity) return { error: `Insufficient stock for ${product.name}` };
     totalAmount += product.price * item.quantity;
     lines.push({ product_id: product.id, quantity: item.quantity, unit_price: product.price, name: product.name });

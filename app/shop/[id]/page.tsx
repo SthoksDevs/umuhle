@@ -107,6 +107,7 @@ export default function ProductDetailPage() {
         .eq("id", id)
         .eq("is_active", true)
         .eq("moderation_status", "approved")
+        .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
         .single();
 
       if (error || !data) {
@@ -124,6 +125,7 @@ export default function ProductDetailPage() {
         .select("*")
         .eq("is_active", true)
         .eq("moderation_status", "approved")
+        .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
         .eq("category", data.category ?? "")
         .neq("id", id)
         .limit(4);

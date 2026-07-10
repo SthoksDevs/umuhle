@@ -94,6 +94,7 @@ interface ProductRow {
   height_cm: number | null;
   partner?: { full_name: string; email: string };
   is_umuhle_product?: boolean;
+  listing_status?: string | null;
 }
 
 interface WithdrawalRow {
@@ -909,7 +910,16 @@ function ProductsReviewTab({ supabase }: { supabase: ReturnType<typeof createCli
 
   const updateMod = async (id: string, status: string) => {
     setActionLoading(id);
-    await supabase.from("products").update({ moderation_status: status, is_active: status === "approved" }).eq("id", id);
+    // Content approval alone isn't enough to go live anymore — a product
+    // also needs its listing fee paid (listing_status "active"). Legacy
+    // rows and Umuhle's own products have no listing_status set, so they're
+    // ungated exactly as before.
+    const product = products.find((p) => p.id === id);
+    const feePaid = !product?.listing_status || product.listing_status === "active";
+    await supabase.from("products").update({
+      moderation_status: status,
+      is_active: status === "approved" && feePaid,
+    }).eq("id", id);
     setProducts((prev) => prev.filter((p) => p.id !== id));
     setActionLoading(null);
   };

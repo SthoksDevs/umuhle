@@ -132,6 +132,8 @@ export interface Review {
   reviewer?: Profile;
 }
 
+export type ListingStatus = "pending_payment" | "active" | "expired" | "cancelled";
+
 export interface Product {
   id: string;
   partner_id: string;
@@ -146,6 +148,14 @@ export interface Product {
   moderation_score: number | null;
   created_at: string;
   partner?: Profile;
+  // ── Listing fee fields (added alongside the products/ads pricing merge) ──
+  // Nullable/optional so legacy rows (created before this change) and
+  // Umuhle's own skipVerify products keep working without a value here.
+  package?: AdPackageId | null;
+  listing_status?: ListingStatus | null;
+  starts_at?: string | null;
+  expires_at?: string | null;
+  payfast_payment_id?: string | null;
 }
 
 export interface CartItem {
@@ -296,6 +306,11 @@ export const ACCOUNT_TYPES: { id: AccountType; label: string; blurb: string }[] 
   { id: "business_partner", label: "Business Partner", blurb: "Sell beauty products" },
 ];
 
+// These four tiers are the ONE pricing model behind every paid listing on
+// Umuhle — whether that listing is a product or a general ad. "ads" here
+// means "listing slots" (kept as `ads` rather than renamed, so every
+// existing call site that reads pkg.ads — payfast/initiate, payfast/notify,
+// emails — keeps working unchanged).
 export const AD_PACKAGES = [
   { id: "starter",  name: "Starter",  price: 2000,  ads: 1,  weeks: 6,  label: "6 weeks" },
   { id: "growth",   name: "Growth",   price: 4500,  ads: 3,  weeks: 12, label: "3 months" },
@@ -304,3 +319,8 @@ export const AD_PACKAGES = [
 ] as const;
 
 export type AdPackageId = "starter" | "growth" | "business" | "premium";
+
+// Semantic alias — use this name in new "listing" (product-or-ad) code.
+// Same array, same object identity, so the two names never drift apart.
+export const LISTING_PACKAGES = AD_PACKAGES;
+export type ListingPackageId = AdPackageId;

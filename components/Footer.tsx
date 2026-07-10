@@ -38,6 +38,7 @@ export default function Footer() {
             <Link href="/privacy-policy" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>Privacy Policy</Link>
             <Link href="/terms-and-conditions" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>Terms</Link>
             <Link href="/returns" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>Returns Policy</Link>
+            <Link href="/fees" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>Fees</Link>
           </div>
         </div>
 

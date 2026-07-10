@@ -183,6 +183,10 @@ export default function ShopPage() {
           .select("*")
           .eq("is_active", true)
           .eq("moderation_status", "approved")
+          // Legacy rows have expires_at = null (grandfathered, no expiry).
+          // Paid listings disappear once their package runs out — there's
+          // no cron job flipping is_active, so this is enforced here.
+          .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
           .order("created_at", { ascending: false });
 
         if (fetchErr) throw fetchErr;

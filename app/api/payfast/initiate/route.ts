@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildPaymentParams, PAYFAST_URL } from "@/lib/payfast";
 import { createClient } from "@/lib/supabase/server";
-import { AD_PACKAGES } from "@/types";
+import { AD_PACKAGES, LISTING_PACKAGES } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 import { createPendingOrder } from "@/lib/orders";
 
@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const type: "booking" | "order" | "ad" | "salon" = body.type ?? "booking";
+  const type: "booking" | "order" | "ad" | "salon" | "product_listing" = body.type ?? "booking";
 
   // Prefer the explicit env var; fall back to the request host so it also
   // works on preview deployments without re-setting the env var.
@@ -46,6 +46,8 @@ export async function POST(req: NextRequest) {
         return await initiateOrder(supabase, user.id, profile, firstName, lastName, body, baseUrl);
       case "ad":
         return await initiateAd(supabase, user.id, profile, firstName, lastName, body, baseUrl);
+      case "product_listing":
+        return await initiateProductListing(supabase, user.id, profile, firstName, lastName, body, baseUrl);
       case "salon":
         return await initiateSalon(supabase, user.id, profile, firstName, lastName, body, baseUrl);
       default:
@@ -214,6 +216,59 @@ async function initiateAd(
     email:           profile.email,
     baseUrl,
     customStr1:      "ad",
+  });
+
+  return NextResponse.json({ payfastUrl: PAYFAST_URL, params });
+}
+
+// ── Product listing ───────────────────────────────────────────────────────────
+// The product row already exists at this point (ProductForm inserted it with
+// listing_status: "pending_payment" before handing off here) — this just
+// attaches a package + amount to it and builds the PayFast redirect, mirroring
+// initiateAd() above. Reuses products.id as the PayFast m_payment_id, same as
+// initiateAd reuses the ad's own id.
+
+async function initiateProductListing(
+  supabase: Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>,
+  userId: string,
+  profile: { email: string },
+  firstName: string,
+  lastName: string,
+  body: Record<string, string>,
+  baseUrl: string
+) {
+  const { productId, packageId } = body;
+
+  const pkg = LISTING_PACKAGES.find((p) => p.id === packageId);
+  if (!pkg) return NextResponse.json({ error: "Invalid package" }, { status: 400 });
+
+  const { data: product } = await supabase
+    .from("products")
+    .select("id, name, partner_id, listing_status")
+    .eq("id", productId)
+    .eq("partner_id", userId)
+    .single();
+
+  if (!product) return NextResponse.json({ error: "Product not found" }, { status: 404 });
+  if (!["pending_payment", "expired"].includes(product.listing_status ?? "")) {
+    return NextResponse.json({ error: "This product isn't awaiting payment" }, { status: 400 });
+  }
+
+  await supabase
+    .from("products")
+    .update({ package: packageId, listing_status: "pending_payment" })
+    .eq("id", productId);
+
+  const params = buildPaymentParams({
+    paymentId:       productId,
+    amount:          pkg.price,
+    itemName:        `Umuhle Listing — ${pkg.name} Package`,
+    itemDescription: `"${product.name}" — ${pkg.ads} listing slot(s) for ${pkg.label}`,
+    firstName,
+    lastName,
+    email:           profile.email,
+    baseUrl,
+    customStr1:      "product_listing",
   });
 
   return NextResponse.json({ payfastUrl: PAYFAST_URL, params });

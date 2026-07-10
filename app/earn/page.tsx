@@ -6,13 +6,15 @@ import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import Footer from "@/components/Footer";
 import SiteHeader from "@/components/SiteHeader";
+import { LISTING_PACKAGES } from "@/types";
 
-const AD_PACKAGES = [
-  { id: "starter",  name: "Starter",  price: "R20",  ads: 1,  duration: "6 weeks",  featured: false },
-  { id: "growth",   name: "Growth",   price: "R45",  ads: 3,  duration: "3 months", featured: true  },
-  { id: "business", name: "Business", price: "R75",  ads: 6,  duration: "4 months", featured: false },
-  { id: "premium",  name: "Premium",  price: "R115", ads: 10, duration: "6 months", featured: false },
-];
+// Same four tiers used to price every product listing (see My Shop in the
+// dashboard) — reused here for display so this page can't drift out of
+// sync with the real pricing.
+const AD_PACKAGES = LISTING_PACKAGES.map(p => ({
+  id: p.id, name: p.name, price: `R${(p.price / 100).toFixed(0)}`, ads: p.ads, duration: p.label,
+  featured: p.id === "growth",
+}));
 
 export default function EarnPage() {
   const supabase = createClient();
@@ -61,7 +63,7 @@ export default function EarnPage() {
           Earn with <em style={{ color: "var(--plum)", fontStyle: "italic" }}>umuhle</em>
         </h1>
         <p style={{ color: "var(--grey)", maxWidth: 540, marginBottom: "2.5rem", lineHeight: 1.7, fontSize: "1rem" }}>
-          Share your unique referral code with any beauty professional. When they sign up and purchase their first advertisement, you earn <strong>R10</strong>. No cap on referrals. Withdraw once you reach <strong>R100</strong>.
+          Share your unique referral code with any beauty professional. When they sign up and list their first product, you earn <strong>R10</strong>. No cap on referrals. Withdraw once you reach <strong>R100</strong>.
         </p>
 
         {/* ── Referral code card ──
@@ -114,7 +116,7 @@ export default function EarnPage() {
           <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.2rem", marginBottom: "1rem" }}>Earning rules</h3>
           {[
             ["Reward per partner",  "R10 per qualifying referral"],
-            ["When you earn",       "When your referred partner pays for their first advertisement"],
+            ["When you earn",       "When your referred partner pays to list their first product"],
             ["Minimum withdrawal",  "R100"],
             ["Payout schedule",     "Mondays, Wednesdays & Fridays"],
             ["Who can refer",       "Any Umuhle user"],
@@ -127,9 +129,9 @@ export default function EarnPage() {
           ))}
         </div>
 
-        {/* Ad packages */}
-        <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.6rem", color: "var(--onyx)", marginBottom: "0.5rem" }}>Partner Ad packages</h2>
-        <p style={{ color: "var(--grey)", marginBottom: "1.5rem", fontSize: "0.9rem" }}>Share these packages with potential partners — your referral triggers their first purchase reward.</p>
+        {/* Listing packages */}
+        <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.6rem", color: "var(--onyx)", marginBottom: "0.5rem" }}>Partner listing packages</h2>
+        <p style={{ color: "var(--grey)", marginBottom: "1.5rem", fontSize: "0.9rem" }}>Share these packages with potential partners — your referral triggers when they pay to list their first product.</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(190px,1fr))", gap: "1rem", marginBottom: "3rem" }}>
           {AD_PACKAGES.map(pkg => (
             <div key={pkg.id} style={{ position: "relative", border: pkg.featured ? "2px solid var(--plum)" : "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem 1.25rem", background: "#fff" }}>
@@ -138,7 +140,7 @@ export default function EarnPage() {
               )}
               <p style={{ fontWeight: 600, marginBottom: 4, fontSize: "0.95rem" }}>{pkg.name}</p>
               <p style={{ fontSize: "1.8rem", fontWeight: 700, color: "var(--plum)", margin: "0 0 4px" }}>{pkg.price}</p>
-              <p style={{ fontSize: "0.8rem", color: "var(--grey)", margin: 0 }}>{pkg.ads} Ad{pkg.ads > 1 ? "s" : ""} · {pkg.duration}</p>
+              <p style={{ fontSize: "0.8rem", color: "var(--grey)", margin: 0 }}>Live for {pkg.duration}</p>
             </div>
           ))}
         </div>
@@ -149,7 +151,7 @@ export default function EarnPage() {
             Are you a beauty <em style={{ color: "var(--plum)", fontStyle: "italic" }}>professional</em>?
           </h2>
           <p style={{ color: "var(--grey)", maxWidth: 400, margin: "0 auto 1.5rem", fontSize: "0.95rem" }}>
-            Become an Umuhle Partner. Sell products, run advertisements, and list your salon.
+            Become an Umuhle Partner. Sell products, list your salon, and get discovered.
           </p>
           <Link href="/?auth=register">
             <button className="btn-plum">Become a Partner</button>
