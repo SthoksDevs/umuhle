@@ -140,7 +140,7 @@ export default function EarnPage() {
               )}
               <p style={{ fontWeight: 600, marginBottom: 4, fontSize: "0.95rem" }}>{pkg.name}</p>
               <p style={{ fontSize: "1.8rem", fontWeight: 700, color: "var(--plum)", margin: "0 0 4px" }}>{pkg.price}</p>
-              <p style={{ fontSize: "0.8rem", color: "var(--grey)", margin: 0 }}>Live for {pkg.duration}</p>
+              <p style={{ fontSize: "0.8rem", color: "var(--grey)", margin: 0 }}>{pkg.ads} product{pkg.ads > 1 ? "s" : ""} · {pkg.duration} each</p>
             </div>
           ))}
         </div>
@@ -153,7 +153,7 @@ export default function EarnPage() {
           <p style={{ color: "var(--grey)", maxWidth: 400, margin: "0 auto 1.5rem", fontSize: "0.95rem" }}>
             Become an Umuhle Partner. Sell products, list your salon, and get discovered.
           </p>
-          <Link href="/?auth=register">
+          <Link href="?auth=register">
             <button className="btn-plum">Become a Partner</button>
           </Link>
         </div>

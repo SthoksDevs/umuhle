@@ -1,7 +1,7 @@
 // components/SiteHeader.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -10,6 +10,7 @@ import type { User } from "@supabase/supabase-js";
 import type { Profile } from "@/types";
 import { useCart } from "@/lib/cart-context";
 import { useProductWishlist } from "@/lib/product-wishlist-context";
+import AuthModal from "@/components/AuthModal";
 
 const ICON = "/umuhle-icon.png";
 
@@ -77,8 +78,9 @@ export default function SiteHeader({
     if (onSignInClick) {
       onSignInClick();
     } else {
-      const next = pathname && pathname !== "/" ? `&next=${encodeURIComponent(pathname)}` : "";
-      router.push(`/?auth=login${next}`);
+      // Add ?auth=login to wherever we already are — AuthModal (rendered
+      // below) reacts to this immediately, no navigation to "/" needed.
+      router.push(`${pathname || "/"}?auth=login`);
     }
   };
 
@@ -195,6 +197,15 @@ export default function SiteHeader({
           )}
         </div>
       )}
+
+      {/* Present on every page that renders SiteHeader — this is the actual
+          fix for "other pages redirect to the homepage": the modal no
+          longer needs to live only on "/". Suspense is required because
+          AuthModal reads useSearchParams(); fallback is null since there's
+          nothing to show until we know whether ?auth= is set. */}
+      <Suspense fallback={null}>
+        <AuthModal />
+      </Suspense>
     </>
   );
 }

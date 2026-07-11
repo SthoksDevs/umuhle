@@ -277,7 +277,7 @@ export default function StoresPage() {
           <p style={{ color: "var(--grey)", maxWidth: 420, margin: "0 auto 1.5rem", fontSize: "0.95rem" }}>
             List your store on Umuhle and get discovered by clients booking hair, nail, makeup and lash appointments near them.
           </p>
-          <Link href="/?auth=register"><button className="btn-plum">List a Store</button></Link>
+          <Link href="?auth=register"><button className="btn-plum">List a Store</button></Link>
         </div>
       </main>
       <Footer />

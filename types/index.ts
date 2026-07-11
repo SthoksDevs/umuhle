@@ -134,6 +134,22 @@ export interface Review {
 
 export type ListingStatus = "pending_payment" | "active" | "expired" | "cancelled";
 
+// One row per package PURCHASE (not per product) — a partner can spend its
+// slots on multiple products over time. See use_listing_slot() in the
+// 2026-07-10 migration.
+export interface ListingPackageRow {
+  id: string;
+  partner_id: string;
+  package: AdPackageId;
+  weeks: number;
+  slots_total: number;
+  slots_used: number;
+  status: "pending_payment" | "active" | "cancelled";
+  payfast_payment_id: string | null;
+  purchased_at: string | null;
+  created_at: string;
+}
+
 export interface Product {
   id: string;
   partner_id: string;
@@ -153,6 +169,7 @@ export interface Product {
   // Umuhle's own skipVerify products keep working without a value here.
   package?: AdPackageId | null;
   listing_status?: ListingStatus | null;
+  listing_package_id?: string | null;
   starts_at?: string | null;
   expires_at?: string | null;
   payfast_payment_id?: string | null;

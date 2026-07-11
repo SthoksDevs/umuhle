@@ -2292,6 +2292,7 @@ interface PartnerProductRow {
   height_cm: number | null;
   package: string | null;
   listing_status: string | null;
+  listing_package_id: string | null;
   starts_at: string | null;
   expires_at: string | null;
 }
@@ -2441,6 +2442,7 @@ function ProductsManager({ user }: { user: { id: string } }) {
             productName={paymentTarget.name}
             mode={paymentTarget.mode}
             onCancel={() => setPaymentTarget(null)}
+            onUsedSlot={() => { setPaymentTarget(null); loadProducts(); }}
           />
         </div>
       )}
@@ -2800,7 +2802,7 @@ function DashboardContent() {
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) { router.replace("/?auth=login"); return; }
+      if (!user) { router.replace("/dashboard?auth=login"); return; }
       setUser(user);
       fetchProfile(user.id);
     });

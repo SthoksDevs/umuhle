@@ -360,7 +360,11 @@ export async function POST(req: NextRequest) {
 
       // ── PRODUCT LISTING ─────────────────────────────────────────────────────
       // Same shape as the "ad" case above — same packages, same durations —
-      // just updating `products` instead of `ads`. The one extra wrinkle:
+      // just updating `products` instead of `ads`. One payment here creates a
+      // listing_packages credit bank (slots_total = pkg.ads, e.g. Growth = 3)
+      // and immediately spends 1 slot on the product that was being paid for;
+      // the other slots stay available for future products at no extra
+      // charge (see use_listing_slot() in the 2026-07-10 migration).
       // is_active only flips to true here if content moderation already
       // cleared the product (a partner can pay before or after admin
       // reviews it; whichever finishes last is what makes it visible).
@@ -370,7 +374,7 @@ export async function POST(req: NextRequest) {
         const now = new Date();
         const { data: product } = await supabase
           .from("products")
-          .select("package, name, moderation_status, partner:profiles!partner_id(full_name, email)")
+          .select("package, name, partner_id, moderation_status, partner:profiles!partner_id(full_name, email)")
           .eq("id", paymentId)
           .eq("listing_status", "pending_payment")
           .single();
@@ -388,12 +392,29 @@ export async function POST(req: NextRequest) {
         };
         const pkg       = product.package ?? "starter";
         const weeks     = WEEKS[pkg] ?? 6;
+        const slotsTotal = LISTING_PACKAGES.find((p) => p.id === pkg)?.ads ?? 1;
         const expiresAt = new Date(now.getTime() + weeks * 7 * 24 * 60 * 60 * 1000);
+
+        const { data: pkgRow } = await supabase
+          .from("listing_packages")
+          .insert({
+            partner_id:         product.partner_id,
+            package:            pkg,
+            weeks,
+            slots_total:        slotsTotal,
+            slots_used:         1, // this payment's product consumes the first slot immediately
+            status:             "active",
+            payfast_payment_id: pfPaymentId,
+            purchased_at:       now.toISOString(),
+          })
+          .select("id")
+          .single();
 
         await supabase
           .from("products")
           .update({
             listing_status:      "active",
+            listing_package_id:  pkgRow?.id ?? null,
             payfast_payment_id:  pfPaymentId,
             starts_at:           now.toISOString(),
             expires_at:          expiresAt.toISOString(),
@@ -412,6 +433,7 @@ export async function POST(req: NextRequest) {
             clientEmail:    (partnerRow as { email: string } | undefined)?.email ?? "",
             packageName:    pkg.charAt(0).toUpperCase() + pkg.slice(1),
             durationLabel:  DURATION_LABELS[pkg] ?? `${weeks} weeks`,
+            slotsTotal,
             amount:         LISTING_PACKAGES.find((p) => p.id === pkg)?.price ?? 2000,
           });
           console.log("[PayFast ITN] Product listing paid emails done.");

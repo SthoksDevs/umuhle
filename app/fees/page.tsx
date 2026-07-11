@@ -53,21 +53,21 @@ export default function FeesPage() {
 
           <Section title="Listing a Product — from R20">
             <p>
-              To keep the shop genuine and reviewed, every product listing runs on a simple package price —
-              paid once, up front, per product. This single fee covers moderation review <em>and</em> keeps the
-              product visible/promoted in the shop for the length of the package. There&apos;s no separate
-              &ldquo;advertising&rdquo; fee on top — listing it is what promotes it.
+              To keep the shop genuine and reviewed, every product listing runs on a simple package price.
+              Buying a package with more than one product slot means the rest are banked on your account — use
+              them on other products any time, at no extra charge. There&apos;s no separate &ldquo;advertising&rdquo;
+              fee on top — listing a product is what promotes it.
             </p>
             <div className="mt-2 divide-y divide-[#f0eaf7] rounded-2xl border border-[#f0eaf7] px-4">
-              <Row label="Starter" value="R20" sub="Live for 6 weeks — the minimum" />
-              <Row label="Growth" value="R45" sub="Live for 3 months" />
-              <Row label="Business" value="R75" sub="Live for 4 months" />
-              <Row label="Premium" value="R115" sub="Live for 6 months" />
+              <Row label="Starter" value="R20" sub="1 product · 6 weeks — the minimum" />
+              <Row label="Growth" value="R45" sub="3 products · 3 months each" />
+              <Row label="Business" value="R75" sub="6 products · 4 months each" />
+              <Row label="Premium" value="R115" sub="10 products · 6 months each" />
             </div>
             <p className="text-sm text-slate-500">
-              Each package covers that one product. Picking a longer package just means not having to renew as
-              often — it doesn&apos;t change what you keep from a sale (see commission, below). When a listing
-              expires it's automatically hidden from the shop until it's renewed.
+              Picking a longer package just means not having to renew as often — it doesn&apos;t change what you
+              keep from a sale (see commission, below). When a listing expires it&apos;s automatically hidden
+              from the shop until it&apos;s renewed.
             </p>
           </Section>
 
@@ -124,7 +124,7 @@ export default function FeesPage() {
           <Section title="Everything at a Glance">
             <div className="divide-y divide-[#f0eaf7] rounded-2xl border border-[#f0eaf7] px-4">
               <Row label="Browsing, booking, buying" value="Free" />
-              <Row label="Product listing" value="From R20" sub="Per product, minimum 6 weeks" />
+              <Row label="Product listing" value="From R20" sub="1–10 products per package, minimum 6 weeks each" />
               <Row label="Commission on sales &amp; bookings" value="5.5%" sub="Only charged when something actually sells" />
               <Row label="Salon listing" value="R35 / year" sub="Optional" />
               <Row label="Salon gallery photo" value="R5 each" sub="Free via Instagram sync" />

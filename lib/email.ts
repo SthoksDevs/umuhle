@@ -561,6 +561,7 @@ export async function sendProductListingPaidEmail(opts: {
   clientEmail:   string;
   packageName:   string;
   durationLabel: string;
+  slotsTotal:    number;
   amount:        number;
 }) {
   const amountStr = formatRand(opts.amount);
@@ -568,7 +569,7 @@ export async function sendProductListingPaidEmail(opts: {
     ["Reference",  `<span style="font-family:monospace">${opts.productId}</span>`],
     ["Partner",    `${opts.clientName} (${opts.clientEmail})`],
     ["Product",    opts.productName],
-    ["Package",    opts.packageName],
+    ["Package",    `${opts.packageName} (${opts.slotsTotal} product${opts.slotsTotal > 1 ? "s" : ""})`],
     ["Duration",   opts.durationLabel],
     ["Amount",     `<strong style="color:#2B6B45">${amountStr}</strong>`],
   ];
@@ -578,17 +579,18 @@ export async function sendProductListingPaidEmail(opts: {
     subject:     `✅ Listing payment received — ${opts.packageName} package — ${amountStr}`,
     template:    "product_listing_paid_admin",
     referenceId: opts.productId,
-    text:        `Listing payment received\nRef: ${opts.productId}\nPartner: ${opts.clientName} (${opts.clientEmail})\nProduct: ${opts.productName}\nPackage: ${opts.packageName} (${opts.durationLabel})\nAmount: ${amountStr}`,
+    text:        `Listing payment received\nRef: ${opts.productId}\nPartner: ${opts.clientName} (${opts.clientEmail})\nProduct: ${opts.productName}\nPackage: ${opts.packageName} (${opts.slotsTotal} products, ${opts.durationLabel})\nAmount: ${amountStr}`,
     html:        emailWrapper(`✅ New listing payment — ${amountStr}`, detailTable(rows)),
   });
 
   // Customer / partner email
+  const slotsRemaining = opts.slotsTotal - 1;
   if (opts.clientEmail) {
     await sendToAll([opts.clientEmail], {
       subject:     `Your Umuhle listing is being set up — ${opts.packageName} package`,
       template:    "product_listing_paid_customer",
       referenceId: opts.productId,
-      text:        `Hi ${opts.clientName},\n\nThank you! Your payment of ${amountStr} for the ${opts.packageName} package has been received.\n\n"${opts.productName}" is now under review and will go live in the Umuhle shop for ${opts.durationLabel} once approved.\n\nUmuhle`,
+      text:        `Hi ${opts.clientName},\n\nThank you! Your payment of ${amountStr} for the ${opts.packageName} package has been received.\n\n"${opts.productName}" is now under review and will go live in the Umuhle shop for ${opts.durationLabel} once approved.${slotsRemaining > 0 ? `\n\nYou have ${slotsRemaining} more product slot${slotsRemaining > 1 ? "s" : ""} left on this package — list another product any time from My Shop and it won't cost you again.` : ""}\n\nUmuhle`,
       html:        emailWrapper(`Your listing is being set up 🛍️`, `
         <p style="margin:0 0 1.25rem">Hi ${opts.clientName},</p>
         <p style="margin:0 0 1.25rem">Payment of <strong>${amountStr}</strong> for your <strong>${opts.packageName}</strong> package has been received.</p>
@@ -597,7 +599,8 @@ export async function sendProductListingPaidEmail(opts: {
           ["Live for", opts.durationLabel],
           ["Ref",      `<span style="font-family:monospace">${opts.productId}</span>`],
         ])}
-        <p style="margin:1rem 0 0;font-size:0.875rem;color:#666">"${opts.productName}" is now under review and will appear in the shop once our team approves it — usually within 24 hours. 💜</p>`),
+        <p style="margin:1rem 0 0;font-size:0.875rem;color:#666">"${opts.productName}" is now under review and will appear in the shop once our team approves it — usually within 24 hours. 💜</p>
+        ${slotsRemaining > 0 ? `<p style="margin:0.75rem 0 0;font-size:0.875rem;color:#666">You've got <strong>${slotsRemaining} more product slot${slotsRemaining > 1 ? "s" : ""}</strong> left on this package — list another product from <strong>My Shop</strong> any time and it's already paid for.</p>` : ""}`),
     });
   }
 }

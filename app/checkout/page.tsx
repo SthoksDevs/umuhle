@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Suspense } from "react";
 import { useCart } from "@/lib/cart-context";
 import { createClient } from "@/lib/supabase/client";
 import GooglePayButton from "@/components/GooglePayButton";
@@ -10,6 +10,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Footer from "@/components/Footer";
+import AuthModal from "@/components/AuthModal";
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
@@ -261,7 +262,7 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) { router.replace("/?auth=login&next=%2Fcheckout"); return; }
+      if (!user) { router.replace("/checkout?auth=login"); return; }
       setUser(user);
       supabase.from("profiles").select("*").eq("id", user.id).single().then(({ data }) => {
         if (data) {
@@ -428,6 +429,10 @@ export default function CheckoutPage() {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <Image src={ICON} alt="Umuhle" width={48} height={48} style={{ borderRadius: "50%" }} />
+        {/* Checkout doesn't use SiteHeader (deliberately minimal nav to
+            reduce distraction), so AuthModal needs mounting directly here —
+            otherwise the ?auth=login redirect below has nothing to render. */}
+        <Suspense fallback={null}><AuthModal /></Suspense>
       </div>
     );
   }
@@ -611,6 +616,7 @@ export default function CheckoutPage() {
       </main>
 
       <Footer />
+      <Suspense fallback={null}><AuthModal /></Suspense>
     </div>
   );
 }

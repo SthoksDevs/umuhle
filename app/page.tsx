@@ -9,24 +9,7 @@ import Image from "next/image";
 import Link from "next/link";
 import Footer from "@/components/Footer";
 import SiteHeader from "@/components/SiteHeader";
-
-// ── Pixel helpers ─────────────────────────────────────────────────────────────
-declare global {
-  interface Window {
-    ttq?: { track: (e: string, p?: Record<string, unknown>) => void };
-    fbq?: (cmd: string, event: string, params?: Record<string, unknown>) => void;
-    gtag?: (...a: unknown[]) => void;
-  }
-}
-function ttq(event: string, params?: Record<string, unknown>) {
-  if (typeof window !== "undefined" && window.ttq) window.ttq.track(event, params);
-}
-function fbq(event: string, params?: Record<string, unknown>) {
-  if (typeof window !== "undefined" && window.fbq) window.fbq("track", event, params);
-}
-function gTag(event: string, params?: Record<string, unknown>) {
-  if (typeof window !== "undefined" && window.gtag) window.gtag("event", event, params);
-}
+import { gTag, fbq, ttq } from "@/lib/analytics";
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
@@ -258,11 +241,6 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategories, setActiveCategories] = useState<Category[]>([]);
 
-  // Where to send the user after a successful login/signup — defaults to
-  // /dashboard, but preserves wherever they came from (e.g. the shop page)
-  // when present via ?next=
-  const [nextUrl, setNextUrl] = useState<string | null>(null);
-
   // Cart
   const [cart, setCart]           = useState<CartItem[]>([]);
   const [showCart, setShowCart]   = useState(false);
@@ -270,12 +248,6 @@ export default function Home() {
   // Wishlist — artist IDs the signed-in user has saved
   const [wishlistIds, setWishlistIds] = useState<Set<string>>(new Set());
 
-  // Auth modal
-  const [showAuth, setShowAuth]   = useState(false);
-  const [authMode, setAuthMode] = useState<"login" | "register" | "forgot">("login");
-  const [authLoading, setAuthLoading] = useState(false);
-  const [authError, setAuthError] = useState("");
-  const [authForm, setAuthForm]   = useState({ email: "", password: "", name: "", phone: "" });
   // Mobile nav - handled by SiteHeader
 
   // Booking
@@ -305,19 +277,6 @@ export default function Home() {
     });
     return () => subscription.unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("auth") === "login") { setShowAuth(true); setAuthMode("login"); }
-    if (params.get("auth") === "register") { setShowAuth(true); setAuthMode("register"); }
-    const n = params.get("next");
-    if (n && n.startsWith("/")) setNextUrl(n);
-    // Clear error hash from OAuth failures so UI stays clean
-    if (window.location.hash.includes("error")) {
-      window.history.replaceState({}, "", window.location.pathname);
-    }
   }, []);
 
   // Load the signed-in user's wishlist (for heart states on artist cards), and
@@ -355,9 +314,7 @@ export default function Home() {
       // Remember the intent, keep them on the homepage after they sign in
       // (rather than dropping them on the dashboard), then replay the save.
       setPendingWishlistAdd(artistId);
-      setNextUrl("/");
-      setShowAuth(true);
-      setAuthMode("login");
+      router.push("/?auth=login");
       return;
     }
     const wasSaved = wishlistIds.has(artistId);
@@ -413,105 +370,6 @@ export default function Home() {
     return () => clearTimeout(t);
   }, [fetchArtists]);
 
-  // ── Auth handlers ────────────────────────────────────────────────────────
-  const handleOAuth = async (provider: "google" | "facebook") => {
-    setAuthLoading(true);
-    await supabase.auth.signInWithOAuth({
-      provider,
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(nextUrl || "/dashboard")}`,
-      },
-    });
-  };
-
-  const handleEmailAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthLoading(true);
-    setAuthError("");
-    try {
-      if (authMode === "login") {
-        // Support login with email or WhatsApp (phone number → look up email)
-        const identifier = authForm.email.trim();
-        const isPhone = /^[0-9+\s()-]{7,}$/.test(identifier) && !identifier.includes("@");
-        if (isPhone) {
-          // Look up account by phone then sign in
-          const { data: profileData } = await supabase
-            .from("profiles")
-            .select("email")
-            .eq("phone", identifier.replace(/\D/g, "").replace(/^0/, "27"))
-            .maybeSingle();
-          if (!profileData?.email) throw new Error("No account found with that WhatsApp number.");
-          const { error } = await supabase.auth.signInWithPassword({ email: profileData.email, password: authForm.password });
-          if (error) throw error;
-        } else {
-          const { error } = await supabase.auth.signInWithPassword({ email: identifier, password: authForm.password });
-          if (error) throw error;
-        }
-        setShowAuth(false);
-        gTag("login", { method: "email" });
-        fbq("Login");
-        // Take the user back to where they were (e.g. the shop page) rather
-        // than always landing on the dashboard.
-        router.push(nextUrl || "/dashboard");
-      } else {
-        const { error } = await supabase.auth.signUp({
-          email: authForm.email,
-          password: authForm.password,
-          options: {
-            data: {
-              full_name: authForm.name,
-              phone: authForm.phone,
-              account_type: "customer",
-            },
-            emailRedirectTo: `${window.location.origin}/auth/callback`,
-          },
-        });
-        if (error) throw error;
-        setAuthError("Check your email to confirm your account.");
-        gTag("sign_up", { method: "email" });
-        fbq("CompleteRegistration");
-        ttq("CompleteRegistration");
-      }
-    } catch (err: unknown) {
-      setAuthError(err instanceof Error ? err.message : "Something went wrong");
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
-  const handleForgotPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const identifier = authForm.email.trim();
-    if (!identifier) {
-      setAuthError("Enter your email or WhatsApp number.");
-      return;
-    }
-    setAuthLoading(true);
-    setAuthError("");
-    try {
-      const isPhone = /^[0-9+\s()-]{7,}$/.test(identifier) && !identifier.includes("@");
-      let emailToReset = identifier;
-      if (isPhone) {
-        const { data: profileData } = await supabase
-          .from("profiles")
-          .select("email")
-          .eq("phone", identifier.replace(/\D/g, "").replace(/^0/, "27"))
-          .maybeSingle();
-        if (!profileData?.email) throw new Error("No account found with that WhatsApp number.");
-        emailToReset = profileData.email;
-      }
-      const { error } = await supabase.auth.resetPasswordForEmail(emailToReset, {
-        redirectTo: `${window.location.origin}/reset-password`,
-      });
-      if (error) throw error;
-      setAuthError("Password reset link sent. Check your email.");
-    } catch (err: unknown) {
-      setAuthError(err instanceof Error ? err.message : "Something went wrong");
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
   const addToCart = (item: CartItem) => {
     setCart(prev => [...prev, item]);
     ttq("AddToCart", { contents: [{ content_id: item.id, content_name: item.name }], value: item.price / 100, currency: "ZAR" });
@@ -530,7 +388,6 @@ export default function Home() {
       <SiteHeader
         initialUser={user}
         initialProfile={profile}
-        onSignInClick={() => { setShowAuth(true); setAuthMode("login"); }}
       />
 
       {/* ── Page ── */}
@@ -595,7 +452,7 @@ export default function Home() {
                     isWishlisted={wishlistIds.has(artist.id)}
                     onToggleWishlist={() => toggleWishlist(artist.id)}
                     onBook={() => {
-                      if (!user) { setNextUrl("/"); setShowAuth(true); setAuthMode("login"); return; }
+                      if (!user) { router.push("/?auth=login"); return; }
                       setSelectedArtist(artist);
                       ttq("ViewContent", { contents: [{ content_id: artist.id, content_name: artist.display_name }] });
                       fbq("ViewContent", { content_ids: [artist.id], content_name: artist.display_name });
@@ -656,209 +513,6 @@ export default function Home() {
                 </Link>
               </div>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* ── Auth modal ── */}
-      {showAuth && (
-        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) { setShowAuth(false); setAuthError(""); } }}>
-          <div style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 420, boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
-            <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.6rem", marginBottom: "0.25rem" }}>
-              {authMode === "login" ? "Welcome back" : authMode === "forgot" ? "Reset password" : "Create account"}
-            </h2>
-            <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-              {authMode === "login" ? "Sign in to book your next appointment." : authMode === "forgot" ? "Enter your email or WhatsApp number to receive a reset link." : "Join Umuhle — it's free."}
-            </p>
-
-            {/* OAuth */}
-            {authMode !== "forgot" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1.5rem" }}>
-              <button onClick={() => handleOAuth("google")} disabled={authLoading} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "1.5px solid #E0E0E0", background: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}>
-                <svg width="20" height="20" viewBox="0 0 48 48">
-                  <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.2l6.7-6.7C35.8 2.4 30.2 0 24 0 14.8 0 6.9 5.4 3 13.3l7.8 6.1C12.6 13.1 17.9 9.5 24 9.5z"/>
-                  <path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.5c-.5 2.8-2.1 5.2-4.5 6.8l7 5.4c4.1-3.8 6.5-9.4 6.5-16.2z"/>
-                  <path fill="#FBBC05" d="M10.8 28.5A14.6 14.6 0 0 1 9.5 24c0-1.6.3-3.1.7-4.5L2.4 13.4A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.7l8.2-6.2z"/>
-                  <path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.2-5.5l-7-5.4c-2 1.4-4.6 2.2-8.2 2.2-6.1 0-11.3-4.1-13.2-9.7l-8.2 6.2C6.9 42.6 14.8 48 24 48z"/>
-                </svg>
-                Continue with Google
-              </button>
-              <button onClick={() => handleOAuth("facebook")} disabled={authLoading} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "none", background: "#1877F2", color: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff">
-                  <path d="M24 12a12 12 0 1 0-13.875 11.85v-8.385H7.08V12h3.045V9.356c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874V12h3.328l-.532 3.465h-2.796v8.385A12 12 0 0 0 24 12z"/>
-                </svg>
-                Continue with Facebook
-              </button>
-            </div>
-            )}
-
-            {authMode !== "forgot" && (
-            <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1.5rem" }}>
-              <div style={{ flex: 1, height: 1, background: "#E0E0E0" }} />
-              <span style={{ fontSize: "0.8rem", color: "var(--light)" }}>or</span>
-              <div style={{ flex: 1, height: 1, background: "#E0E0E0" }} />
-            </div>
-            )}
-
-            <form
-              onSubmit={
-                authMode === "forgot"
-                  ? handleForgotPassword
-                  : handleEmailAuth
-              }
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "0.75rem",
-              }}
-            >
-              {authMode === "register" && (
-                <>
-                  <input
-                    placeholder="Full name"
-                    value={authForm.name}
-                    onChange={e =>
-                      setAuthForm(f => ({
-                        ...f,
-                        name: e.target.value,
-                      }))
-                    }
-                    required
-                    style={{
-                      padding: "0.75rem 1rem",
-                      borderRadius: 12,
-                      border: "1.5px solid #E0E0E0",
-                      fontSize: "0.9rem",
-                    }}
-                  />
-
-                  <input
-                    placeholder="Phone number (e.g. 082 123 4567)"
-                    value={authForm.phone}
-                    onChange={e =>
-                      setAuthForm(f => ({
-                        ...f,
-                        phone: e.target.value,
-                      }))
-                    }
-                    style={{
-                      padding: "0.75rem 1rem",
-                      borderRadius: 12,
-                      border: "1.5px solid #E0E0E0",
-                      fontSize: "0.9rem",
-                    }}
-                  />
-
-                </>
-              )}
-
-              <input
-                type={authMode === "register" ? "email" : "text"}
-                placeholder={authMode === "register" ? "Email address" : "Email or WhatsApp number"}
-                value={authForm.email}
-                onChange={e =>
-                  setAuthForm(f => ({
-                    ...f,
-                    email: e.target.value,
-                  }))
-                }
-                required
-                style={{
-                  padding: "0.75rem 1rem",
-                  borderRadius: 12,
-                  border: "1.5px solid #E0E0E0",
-                  fontSize: "0.9rem",
-                }}
-              />
-
-              {authMode !== "forgot" && (
-                <>
-                  <input
-                    type="password"
-                    placeholder="Password"
-                    value={authForm.password}
-                    onChange={e =>
-                      setAuthForm(f => ({
-                        ...f,
-                        password: e.target.value,
-                      }))
-                    }
-                    required
-                    style={{
-                      padding: "0.75rem 1rem",
-                      borderRadius: 12,
-                      border: "1.5px solid #E0E0E0",
-                      fontSize: "0.9rem",
-                    }}
-                  />
-
-                  {authMode === "login" && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAuthMode("forgot");
-                        setAuthError("");
-                      }}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        padding: 0,
-                        textAlign: "right",
-                        color: "var(--plum)",
-                        cursor: "pointer",
-                        fontSize: "0.85rem",
-                        alignSelf: "flex-end",
-                      }}
-                    >
-                      Forgot password?
-                    </button>
-                  )}
-                </>
-              )}
-
-              {authError && (
-                <p
-                  style={{
-                    color: authError.includes("Check your email")
-                      ? "var(--forest)"
-                      : "#E53935",
-                    fontSize: "0.85rem",
-                    margin: 0,
-                  }}
-                >
-                  {authError}
-                </p>
-              )}
-
-              <button
-                type="submit"
-                className="btn-plum"
-                style={{ marginTop: "0.25rem" }}
-                disabled={authLoading}
-              >
-                {authLoading
-                  ? "Please wait…"
-                  : authMode === "login"
-                  ? "Sign in"
-                  : authMode === "forgot"
-                  ? "Send reset link"
-                  : "Create account"}
-              </button>
-            </form>
-
-            <p style={{ textAlign: "center", marginTop: "1.25rem", fontSize: "0.875rem", color: "var(--grey)" }}>
-              {authMode === "forgot" ? "Remember your password?" : authMode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
-              <button onClick={() => { setAuthMode(authMode === "register" ? "login" : authMode === "forgot" ? "login" : "register"); setAuthError(""); }} style={{ background: "none", border: "none", color: "var(--plum)", fontWeight: 500, cursor: "pointer" }}>
-                {authMode === "forgot" ? "Sign in" : authMode === "login" ? "Sign up" : "Sign in"}
-              </button>
-            </p>
-
-            <p style={{ textAlign: "center", marginTop: "0.75rem", fontSize: "0.75rem", color: "var(--light)" }}>
-              By continuing you agree to our{" "}
-              <Link href="/terms-and-conditions" style={{ color: "var(--plum)" }} onClick={() => setShowAuth(false)}>Terms</Link>
-              {" "}and{" "}
-              <Link href="/privacy-policy" style={{ color: "var(--plum)" }} onClick={() => setShowAuth(false)}>Privacy Policy</Link>
-            </p>
           </div>
         </div>
       )}
