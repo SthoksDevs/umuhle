@@ -1,43 +1,52 @@
 // lib/payments/gateways.ts
 //
-// Central on/off switch per payment gateway.
+// Single source of truth for which payment gateways are switched on.
 //
-// Setting one of the env vars below to "false" takes that gateway out of
-// service for NEW payment attempts: its /initiate route (or, for Google
-// Pay, its combined initiate+charge route) starts returning 503 instead of
-// starting a checkout. Nothing else needs to change — the fulfillment
-// logic in lib/payments/handlers/* has no idea which gateways are enabled,
-// it only reacts to PaymentEvents, so every other gateway keeps working
-// exactly as before.
+// This is deliberately opt-OUT, not opt-in: an unset env var means the
+// gateway is enabled. That way the existing deployment keeps working with
+// zero config changes, and pausing a gateway later is a one-line env var
+// flip (e.g. HAPPYPAY_ENABLED=false) rather than something that has to be
+// explicitly turned on everywhere first.
 //
-// Deliberately NOT gated here: a gateway's webhook/notify route. If a
-// gateway is disabled mid-flight, any payment that was already started
-// against it should still be able to settle and update its order/booking
-// correctly — "paused" means "stop starting new payments here", not "stop
-// honouring ones already in progress".
+// IMPORTANT: only the *initiate* routes consult this — never the
+// notify/webhook routes (see lib/payments/fulfillment.ts). A payment that
+// was already started while a gateway was live must still be allowed to
+// complete (or fail) correctly even if the gateway gets paused a minute
+// later. Otherwise "pausing" a gateway would strand in-flight customer
+// payments instead of just stopping new ones from starting.
 //
-// This is intentionally just env vars for now (no DB table, no admin UI) —
-// enough to prove a gateway can be pulled out cleanly. If/when there's a
-// need to flip these at runtime without a redeploy, swap the body of
-// isGatewayEnabled() for a `site_config` lookup; every caller stays the
-// same.
+// Today this only gates NEW checkouts. It doesn't yet stop an already-live
+// gateway from being selected mid-refund or similar — there's no such flow
+// in this codebase yet, so that's not a gap in practice, just a boundary
+// worth knowing about if one gets added later.
 
-import type { GatewayName } from "./types";
+export type PaymentGateway = "payfast" | "happypay" | "ozow";
 
-const ENV_FLAGS: Record<GatewayName, string> = {
+export const PAYMENT_GATEWAYS: readonly PaymentGateway[] = ["payfast", "happypay", "ozow"];
+
+const ENABLED_ENV_VAR: Record<PaymentGateway, string> = {
   payfast: "PAYFAST_ENABLED",
   happypay: "HAPPYPAY_ENABLED",
   ozow: "OZOW_ENABLED",
-  google_pay: "GOOGLE_PAY_ENABLED",
 };
 
-/** Enabled by default — a gateway only turns off if its flag is explicitly "false". */
-export function isGatewayEnabled(gateway: GatewayName): boolean {
-  return process.env[ENV_FLAGS[gateway]] !== "false";
+const GATEWAY_LABEL: Record<PaymentGateway, string> = {
+  payfast: "PayFast",
+  happypay: "HappyPay",
+  ozow: "Ozow",
+};
+
+export function isGatewayEnabled(gateway: PaymentGateway): boolean {
+  const raw = process.env[ENABLED_ENV_VAR[gateway]];
+  if (raw === undefined || raw === "") return true; // unset = on
+  return raw.toLowerCase() !== "false" && raw !== "0";
 }
 
-export function listEnabledGateways(): GatewayName[] {
-  return (Object.keys(ENV_FLAGS) as GatewayName[]).filter(isGatewayEnabled);
+/** Every gateway currently switched on, in a stable display order. */
+export function enabledGateways(): PaymentGateway[] {
+  return PAYMENT_GATEWAYS.filter(isGatewayEnabled);
 }
 
-export const GATEWAY_DISABLED_MESSAGE = "This payment method is currently unavailable — please choose another.";
+export function gatewayLabel(gateway: PaymentGateway): string {
+  return GATEWAY_LABEL[gateway];
+}

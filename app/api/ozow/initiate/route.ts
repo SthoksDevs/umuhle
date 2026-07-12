@@ -4,11 +4,14 @@ import { createClient } from "@/lib/supabase/server";
 import { createOzowPaymentRequest } from "@/lib/ozow";
 import { createPendingOrder } from "@/lib/orders";
 import { randomUUID } from "crypto";
-import { isGatewayEnabled, GATEWAY_DISABLED_MESSAGE } from "@/lib/payments/gateways";
+import { isGatewayEnabled, gatewayLabel } from "@/lib/payments/gateways";
 
 export async function POST(req: NextRequest) {
   if (!isGatewayEnabled("ozow")) {
-    return NextResponse.json({ error: GATEWAY_DISABLED_MESSAGE }, { status: 503 });
+    return NextResponse.json(
+      { error: `${gatewayLabel("ozow")} is temporarily unavailable. Please choose a different payment method.` },
+      { status: 503 }
+    );
   }
 
   const supabase = await createClient();
@@ -58,7 +61,7 @@ export async function POST(req: NextRequest) {
     cancelUrl: `${baseUrl}/payment/cancel?ref=${orderId}&method=ozow`,
     errorUrl: `${baseUrl}/payment/failed?ref=${orderId}&method=ozow`,
     successUrl: `${baseUrl}/payment/success?ref=${orderId}&method=ozow`,
-    notifyUrl: `${baseUrl}/api/ozow/notify?order_id=${orderId}&secret=${webhookSecret}`,
+    notifyUrl: `${baseUrl}/api/ozow/notify?type=order&id=${orderId}&secret=${webhookSecret}`,
   });
 
   if (!result.success || !result.redirectUrl) {

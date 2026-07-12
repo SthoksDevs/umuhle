@@ -1,27 +1,10 @@
 // app/api/orders/google-pay/route.ts
-//
-// NOTE ON PRODUCTION READINESS: in test mode (NEXT_PUBLIC_GOOGLE_PAY_ENV
-// != "PRODUCTION"), this route treats ANY token as a successful payment —
-// there is no real charge happening. That's fine for development but is a
-// live "free order" exploit if this ever runs in test mode against
-// production data. Before going live, the "processing" branch below needs
-// a real gateway integration (e.g. decrypt the token via Peach Payments,
-// charge the card, and only THEN call processPaymentEvent from that
-// gateway's own webhook/confirmation callback — exactly like PayFast/
-// HappyPay/Ozow do). Flagging this prominently rather than fixing it
-// silently, since it needs a real payment processor account to close out.
-
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { createPendingOrder } from "@/lib/orders";
-import { processPaymentEvent } from "@/lib/payments/fulfillment";
-import { isGatewayEnabled, GATEWAY_DISABLED_MESSAGE } from "@/lib/payments/gateways";
+import { sendTextMessage } from "@/lib/whatsapp";
 
 export async function POST(req: NextRequest) {
-  if (!isGatewayEnabled("google_pay")) {
-    return NextResponse.json({ error: GATEWAY_DISABLED_MESSAGE }, { status: 503 });
-  }
-
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
@@ -59,35 +42,32 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: created.error }, { status: 400 });
   }
 
-  const { orderId } = created.result;
+  const { orderId, totalAmount } = created.result;
 
   if (isTest) {
-    // In test mode: immediately treat this as a completed payment (token is
-    // not a real charge) and run it through the same fulfillment path every
-    // other gateway uses — this is what makes stock decrement, commission
-    // splits, the paid email, and the WhatsApp confirmation all happen for
-    // Google Pay orders too, instead of the bespoke (and incomplete) inline
-    // update this route used to do.
+    // In test mode: immediately mark paid (token is not a real payment)
     const adminSupabase = await createServiceClient();
-    const result = await processPaymentEvent(adminSupabase, {
-      type: "order",
-      paymentId: orderId,
-      outcome: "completed",
-      gateway: "google_pay",
-      gatewayPaymentId: `gp_test_${token.slice(0, 12)}`,
-    });
-    if (!result.ok) {
-      console.error("[Google Pay] Fulfillment error:", result.reason);
-    }
+    await adminSupabase
+      .from("orders")
+      .update({ status: "paid", gateway_order_id: `gp_test_${token.slice(0, 12)}` })
+      .eq("id", orderId);
   } else {
-    // TODO: In production, decrypt the Google Pay token using your payment
-    // gateway (e.g. Peach Payments) and charge the card before marking
-    // paid. For now we record the token and mark processing — no
-    // fulfillment runs until a real gateway confirms the charge.
+    // TODO: In production, decrypt the Google Pay token using your payment gateway
+    // (e.g. Peach Payments) and charge the card before marking paid.
+    // For now we record the token and mark processing.
     await supabase
       .from("orders")
       .update({ status: "processing", gateway_order_id: token.slice(0, 64) })
       .eq("id", orderId);
+  }
+
+  // WhatsApp confirmation
+  const notifyPhone = contactWhatsapp ?? profile.phone;
+  if (notifyPhone) {
+    await sendTextMessage(
+      notifyPhone,
+      `*Order Confirmed!*\n\nHi ${contactName ?? profile.full_name ?? "there"}, your Umuhle order has been confirmed via Google Pay.\n\nOrder ID: ${orderId}\nTotal: R${(totalAmount / 100).toFixed(0)}\n\nWe'll send you delivery updates here. Thank you! 💜`
+    );
   }
 
   return NextResponse.json({ orderId });

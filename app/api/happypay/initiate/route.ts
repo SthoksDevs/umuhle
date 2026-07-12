@@ -4,11 +4,14 @@ import { createClient } from "@/lib/supabase/server";
 import { createHappyPayOrder } from "@/lib/happypay";
 import { createPendingOrder } from "@/lib/orders";
 import { randomUUID } from "crypto";
-import { isGatewayEnabled, GATEWAY_DISABLED_MESSAGE } from "@/lib/payments/gateways";
+import { isGatewayEnabled, gatewayLabel } from "@/lib/payments/gateways";
 
 export async function POST(req: NextRequest) {
   if (!isGatewayEnabled("happypay")) {
-    return NextResponse.json({ error: GATEWAY_DISABLED_MESSAGE }, { status: 503 });
+    return NextResponse.json(
+      { error: `${gatewayLabel("happypay")} is temporarily unavailable. Please choose a different payment method.` },
+      { status: 503 }
+    );
   }
 
   const supabase = await createClient();
@@ -53,8 +56,8 @@ export async function POST(req: NextRequest) {
     orderId,
     totalCents: totalAmount,
     products: lines.map((l) => ({ quantity: l.quantity, price: l.unit_price / 100, name: l.name })),
-    successWebhook: `${baseUrl}/api/happypay/webhook/success?order_id=${orderId}&secret=${webhookSecret}`,
-    failureWebhook: `${baseUrl}/api/happypay/webhook/failure?order_id=${orderId}&secret=${webhookSecret}`,
+    successWebhook: `${baseUrl}/api/happypay/webhook/success?type=order&id=${orderId}&secret=${webhookSecret}`,
+    failureWebhook: `${baseUrl}/api/happypay/webhook/failure?type=order&id=${orderId}&secret=${webhookSecret}`,
     successReturnUrl: `${baseUrl}/payment/success?ref=${orderId}&method=happypay`,
     failReturnUrl: `${baseUrl}/payment/cancel?ref=${orderId}&method=happypay`,
   });

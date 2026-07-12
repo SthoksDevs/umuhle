@@ -5,11 +5,14 @@ import { createClient } from "@/lib/supabase/server";
 import { AD_PACKAGES, LISTING_PACKAGES } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 import { createPendingOrder } from "@/lib/orders";
-import { isGatewayEnabled, GATEWAY_DISABLED_MESSAGE } from "@/lib/payments/gateways";
+import { isGatewayEnabled, gatewayLabel } from "@/lib/payments/gateways";
 
 export async function POST(req: NextRequest) {
   if (!isGatewayEnabled("payfast")) {
-    return NextResponse.json({ error: GATEWAY_DISABLED_MESSAGE }, { status: 503 });
+    return NextResponse.json(
+      { error: `${gatewayLabel("payfast")} is temporarily unavailable. Please choose a different payment method.` },
+      { status: 503 }
+    );
   }
 
   const supabase = await createClient();

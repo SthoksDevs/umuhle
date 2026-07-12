@@ -243,14 +243,17 @@ export default function CheckoutPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [payMethod, setPayMethod] = useState<PayMethod>("payfast");
-  // Which gateways are currently switched on (see lib/payments/gateways.ts).
-  // Starts as "all of them" so the page doesn't flash empty while loading,
-  // then narrows once /api/payments/methods responds.
-  const [enabledMethods, setEnabledMethods] = useState<PayMethod[]>(["payfast", "ozow", "happypay", "google_pay"]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [discount, setDiscount] = useState(0);
   const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
+  // Defaults to "everything on" so there's no flash of a shorter list while
+  // /api/payments/gateways is loading — the common case is nothing paused.
+  // google_pay isn't part of the pause system (lib/payments/gateways.ts
+  // only covers PayFast/HappyPay/Ozow) so it's always included here.
+  const [availableGateways, setAvailableGateways] = useState<Set<PayMethod>>(
+    new Set<PayMethod>(["payfast", "ozow", "happypay", "google_pay"])
+  );
 
   const [form, setForm] = useState({
     name: "",
@@ -285,25 +288,28 @@ export default function CheckoutPage() {
   }, [loading, count, router]);
 
   useEffect(() => {
-    fetch("/api/payments/methods")
+    fetch("/api/payments/gateways")
       .then((res) => res.json())
-      .then((data: { enabled: PayMethod[] }) => {
-        if (Array.isArray(data.enabled) && data.enabled.length > 0) {
-          setEnabledMethods(data.enabled);
-        }
+      .then((data: { gateways: string[] }) => {
+        setAvailableGateways(new Set<PayMethod>([...(data.gateways as PayMethod[]), "google_pay"]));
       })
       .catch(() => {
-        // If this fails, keep the "all enabled" default rather than hiding
-        // every payment option — clicking one still gets a clear error
-        // from its /initiate route if it's actually disabled.
+        // If this fails, keep showing every method rather than hiding all
+        // payment options over a transient network error.
       });
   }, []);
 
+  // If the pre-selected default (or a previous selection) turns out to be
+  // paused, fall back to whatever's actually available instead of leaving
+  // a disabled option selected.
   useEffect(() => {
-    if (enabledMethods.length > 0 && !enabledMethods.includes(payMethod)) {
-      setPayMethod(enabledMethods[0]);
-    }
-  }, [enabledMethods, payMethod]);
+    if (availableGateways.has(payMethod)) return;
+    const fallback = (["payfast", "ozow", "happypay", "google_pay"] as PayMethod[]).find((m) =>
+      availableGateways.has(m)
+    );
+    if (fallback) setPayMethod(fallback);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableGateways]);
 
   const shippingAddress = [form.address, form.suburb, form.city, form.province, form.postalCode]
     .filter(Boolean)
@@ -538,7 +544,7 @@ export default function CheckoutPage() {
                   { id: "ozow" as PayMethod, label: "Ozow", sub: "Instant EFT — pay straight from your bank app" },
                   { id: "happypay" as PayMethod, label: "HappyPay", sub: "Buy now, pay later — split into instalments" },
                   { id: "google_pay" as PayMethod, label: "Google Pay", sub: "Pay instantly with your saved Google card" },
-                ].filter((opt) => enabledMethods.includes(opt.id)).map((opt) => (
+                ].filter((opt) => availableGateways.has(opt.id)).map((opt) => (
                   <button key={opt.id} onClick={() => setPayMethod(opt.id)}
                     style={{ display: "flex", alignItems: "center", gap: "1rem", padding: "1rem 1.25rem", borderRadius: 14, border: `1.5px solid ${payMethod === opt.id ? "var(--plum)" : "rgba(155,127,184,0.2)"}`, background: payMethod === opt.id ? "var(--plum-t)" : "#fff", textAlign: "left", cursor: "pointer" }}>
                     <div style={{ width: 20, height: 20, borderRadius: "50%", border: `2px solid ${payMethod === opt.id ? "var(--plum)" : "#E0E0E0"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>

@@ -270,12 +270,12 @@ export async function notifyOrderPaid(opts: {
   orderId: string;
   itemCount: number;
   totalAmount: number; // cents
-  paymentMethod: "payfast" | "happypay" | "google_pay" | "ozow";
+  paymentMethod: "payfast" | "happypay" | "ozow" | "google_pay";
 }) {
   const methodLabel =
     opts.paymentMethod === "happypay" ? "HappyPay (Pay in installments)"
-    : opts.paymentMethod === "google_pay" ? "Google Pay"
     : opts.paymentMethod === "ozow" ? "Ozow (Instant EFT)"
+    : opts.paymentMethod === "google_pay" ? "Google Pay"
     : "Card/EFT via PayFast";
 
   const msg =
