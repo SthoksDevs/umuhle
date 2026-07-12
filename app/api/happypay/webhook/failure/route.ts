@@ -1,11 +1,18 @@
 // app/api/happypay/webhook/failure/route.ts
+//
+// This route's only job is HappyPay-specific: verify the per-order secret,
+// then hand off to the shared fulfillment path — same "cancelled" outcome
+// PayFast and Ozow produce for a failed order, so the order gets the same
+// failure email every other gateway sends.
+
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
+import { processPaymentEvent } from "@/lib/payments/fulfillment";
 
 export async function POST(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const orderId = searchParams.get("order_id");
-  const secret  = searchParams.get("secret");
+  const secret = searchParams.get("secret");
 
   if (!orderId || !secret) {
     return NextResponse.json({ error: "Missing params" }, { status: 400 });
@@ -15,7 +22,7 @@ export async function POST(req: NextRequest) {
 
   const { data: order } = await supabase
     .from("orders")
-    .select("id, status, gateway_webhook_secret")
+    .select("id, gateway_webhook_secret")
     .eq("id", orderId)
     .single();
 
@@ -24,8 +31,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid secret" }, { status: 401 });
   }
 
-  if (order.status === "pending_payment") {
-    await supabase.from("orders").update({ status: "cancelled" }).eq("id", orderId);
+  const result = await processPaymentEvent(supabase, {
+    type: "order",
+    paymentId: orderId,
+    outcome: "cancelled",
+    gateway: "happypay",
+  });
+
+  if (!result.ok) {
+    console.error("[HappyPay webhook] Fulfillment error:", result.reason);
   }
 
   return NextResponse.json({ ok: true });

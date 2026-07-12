@@ -1,12 +1,20 @@
 // app/api/happypay/webhook/success/route.ts
+//
+// This route's only job is HappyPay-specific: verify the per-order secret,
+// then hand off to the shared fulfillment path. Previously this route had
+// its own hand-rolled copy of "mark the order paid" that had drifted from
+// PayFast/Ozow's — it never decremented stock and never sent the order
+// confirmation email. Going through processPaymentEvent() fixes both, for
+// free, by construction (there's only one "order paid" implementation now).
+
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
-import { recordOrderItemSplits } from "@/lib/payouts";
+import { processPaymentEvent } from "@/lib/payments/fulfillment";
 
 export async function POST(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const orderId = searchParams.get("order_id");
-  const secret  = searchParams.get("secret");
+  const secret = searchParams.get("secret");
 
   if (!orderId || !secret) {
     return NextResponse.json({ error: "Missing params" }, { status: 400 });
@@ -17,7 +25,7 @@ export async function POST(req: NextRequest) {
   // Verify the per-order webhook secret
   const { data: order } = await supabase
     .from("orders")
-    .select("id, status, gateway_webhook_secret, client_id, total_amount")
+    .select("id, gateway_webhook_secret")
     .eq("id", orderId)
     .single();
 
@@ -25,42 +33,16 @@ export async function POST(req: NextRequest) {
   if (order.gateway_webhook_secret !== secret) {
     return NextResponse.json({ error: "Invalid secret" }, { status: 401 });
   }
-  if (order.status === "paid") {
-    // Idempotent — already processed
-    return NextResponse.json({ ok: true });
-  }
 
-  await supabase
-    .from("orders")
-    .update({ status: "paid" })
-    .eq("id", orderId);
+  const result = await processPaymentEvent(supabase, {
+    type: "order",
+    paymentId: orderId,
+    outcome: "completed",
+    gateway: "happypay",
+  });
 
-  // Record each item's 5.5% commission / 94.5% partner payout split now that
-  // payment has cleared. Wallets aren't credited until the order is later
-  // marked "delivered" — see lib/payouts.ts.
-  try {
-    await recordOrderItemSplits(supabase, orderId);
-  } catch (e) {
-    console.error("[HappyPay webhook] Failed to record order commission split:", e);
-  }
-
-  // Send WhatsApp confirmation
-  try {
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("full_name, phone")
-      .eq("id", order.client_id)
-      .single();
-
-    if (profile?.phone) {
-      const { sendTextMessage } = await import("@/lib/whatsapp");
-      await sendTextMessage(
-        profile.phone,
-        `*Order Confirmed!*\n\nHi ${profile.full_name ?? "there"}, your Umuhle order has been confirmed via HappyPay.\n\nOrder ID: ${orderId}\nTotal: R${(order.total_amount / 100).toFixed(0)}\n\nWe'll send you delivery updates here. Thank you! 💜`
-      );
-    }
-  } catch (err) {
-    console.error("WhatsApp notify error:", err);
+  if (!result.ok) {
+    console.error("[HappyPay webhook] Fulfillment error:", result.reason);
   }
 
   return NextResponse.json({ ok: true });

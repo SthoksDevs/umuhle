@@ -243,6 +243,10 @@ export default function CheckoutPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [payMethod, setPayMethod] = useState<PayMethod>("payfast");
+  // Which gateways are currently switched on (see lib/payments/gateways.ts).
+  // Starts as "all of them" so the page doesn't flash empty while loading,
+  // then narrows once /api/payments/methods responds.
+  const [enabledMethods, setEnabledMethods] = useState<PayMethod[]>(["payfast", "ozow", "happypay", "google_pay"]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [discount, setDiscount] = useState(0);
@@ -279,6 +283,27 @@ export default function CheckoutPage() {
   useEffect(() => {
     if (!loading && count === 0) router.replace("/shop");
   }, [loading, count, router]);
+
+  useEffect(() => {
+    fetch("/api/payments/methods")
+      .then((res) => res.json())
+      .then((data: { enabled: PayMethod[] }) => {
+        if (Array.isArray(data.enabled) && data.enabled.length > 0) {
+          setEnabledMethods(data.enabled);
+        }
+      })
+      .catch(() => {
+        // If this fails, keep the "all enabled" default rather than hiding
+        // every payment option — clicking one still gets a clear error
+        // from its /initiate route if it's actually disabled.
+      });
+  }, []);
+
+  useEffect(() => {
+    if (enabledMethods.length > 0 && !enabledMethods.includes(payMethod)) {
+      setPayMethod(enabledMethods[0]);
+    }
+  }, [enabledMethods, payMethod]);
 
   const shippingAddress = [form.address, form.suburb, form.city, form.province, form.postalCode]
     .filter(Boolean)
@@ -513,7 +538,7 @@ export default function CheckoutPage() {
                   { id: "ozow" as PayMethod, label: "Ozow", sub: "Instant EFT — pay straight from your bank app" },
                   { id: "happypay" as PayMethod, label: "HappyPay", sub: "Buy now, pay later — split into instalments" },
                   { id: "google_pay" as PayMethod, label: "Google Pay", sub: "Pay instantly with your saved Google card" },
-                ].map((opt) => (
+                ].filter((opt) => enabledMethods.includes(opt.id)).map((opt) => (
                   <button key={opt.id} onClick={() => setPayMethod(opt.id)}
                     style={{ display: "flex", alignItems: "center", gap: "1rem", padding: "1rem 1.25rem", borderRadius: 14, border: `1.5px solid ${payMethod === opt.id ? "var(--plum)" : "rgba(155,127,184,0.2)"}`, background: payMethod === opt.id ? "var(--plum-t)" : "#fff", textAlign: "left", cursor: "pointer" }}>
                     <div style={{ width: 20, height: 20, borderRadius: "50%", border: `2px solid ${payMethod === opt.id ? "var(--plum)" : "#E0E0E0"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>

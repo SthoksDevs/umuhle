@@ -9,14 +9,26 @@
 //   2. Ozow's own Hash field (see lib/ozow.ts → validateOzowResponse) —
 //      proves the payload wasn't tampered with in transit.
 //
+// Once verified, this route's job is done — it translates Ozow's status
+// string into a gateway-agnostic PaymentEvent and hands off to
+// processPaymentEvent(). What "order paid" actually does (stock, splits,
+// email, WhatsApp) lives in lib/payments/handlers/order.ts, shared with
+// every other gateway.
+//
 // Always return 200 to Ozow once we've read the payload, even on internal
 // errors — otherwise Ozow will keep retrying indefinitely.
 
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { validateOzowResponse } from "@/lib/ozow";
-import { sendOrderPaidEmail, sendOrderFailedEmail } from "@/lib/email";
-import { recordOrderItemSplits } from "@/lib/payouts";
+import { processPaymentEvent } from "@/lib/payments/fulfillment";
+import type { PaymentOutcome } from "@/lib/payments/fulfillment";
+
+const OUTCOME_MAP: Record<string, PaymentOutcome | undefined> = {
+  Complete: "completed",
+  Cancelled: "cancelled",
+  Error: "failed",
+};
 
 export async function POST(req: NextRequest) {
   console.log("[Ozow Notify] ── Incoming notification ──");
@@ -44,10 +56,7 @@ export async function POST(req: NextRequest) {
 
   const { data: order } = await supabase
     .from("orders")
-    .select(`
-      id, status, gateway_webhook_secret, total_amount, shipping_address,
-      client:profiles!orders_client_id_fkey(full_name, email, phone)
-    `)
+    .select("id, gateway_webhook_secret")
     .eq("id", orderId)
     .single();
 
@@ -66,103 +75,24 @@ export async function POST(req: NextRequest) {
   }
 
   const status = payload.Status; // expect "Complete" | "Cancelled" | "Error" | "Pending"
+  const outcome = OUTCOME_MAP[status];
   console.log("[Ozow Notify] Order:", orderId, "| Status:", status, "| Ozow TransactionId:", payload.TransactionId);
 
-  if (order.status !== "pending_payment") {
-    // Ozow retries notifications — stay idempotent.
-    console.log("[Ozow Notify] Order already processed, status:", order.status);
+  if (!outcome) {
+    console.log("[Ozow Notify] Status is Pending or unrecognised — no action taken, awaiting final notification.");
     return NextResponse.json({ ok: true });
   }
 
-  const clientRow = Array.isArray(order.client) ? order.client[0] : order.client;
+  const result = await processPaymentEvent(supabase, {
+    type: "order",
+    paymentId: orderId,
+    outcome,
+    gateway: "ozow",
+    gatewayPaymentId: payload.TransactionId,
+  });
 
-  try {
-    if (status === "Complete") {
-      const { data: orderItems } = await supabase
-        .from("order_items")
-        .select("product_id, quantity, unit_price, product:products(name)")
-        .eq("order_id", orderId);
-
-      await supabase
-        .from("orders")
-        .update({ status: "paid", gateway_order_id: payload.TransactionId ?? order.id })
-        .eq("id", orderId)
-        .eq("status", "pending_payment");
-
-      if (orderItems) {
-        for (const item of orderItems) {
-          await supabase.rpc("decrement_stock", {
-            p_product_id: item.product_id,
-            p_qty: item.quantity,
-          });
-        }
-      }
-
-      // Record each item's 5.5% commission / 94.5% partner payout split now
-      // that payment has cleared. Wallets aren't credited until the order is
-      // later marked "delivered" — see lib/payouts.ts.
-      try {
-        await recordOrderItemSplits(supabase, orderId);
-      } catch (e) {
-        console.error("[Ozow Notify] Failed to record order commission split:", e);
-      }
-
-      try {
-        console.log("[Ozow Notify] Sending order paid email...");
-        await sendOrderPaidEmail({
-          orderId,
-          clientName: clientRow?.full_name ?? "Unknown",
-          clientEmail: clientRow?.email ?? "",
-          totalAmount: order.total_amount,
-          shippingAddress: order.shipping_address ?? undefined,
-          items: (orderItems ?? []).map((i) => ({
-            name: (Array.isArray(i.product) ? i.product[0] : i.product)?.name ?? "Product",
-            quantity: i.quantity,
-            unit_price: i.unit_price,
-          })),
-        });
-        console.log("[Ozow Notify] Order paid email done.");
-      } catch (e) {
-        console.error("[Ozow Notify] Order paid email error:", e);
-      }
-
-      if (clientRow?.phone) {
-        try {
-          const { sendTextMessage } = await import("@/lib/whatsapp");
-          await sendTextMessage(
-            clientRow.phone,
-            `*Order Confirmed!*\n\nHi ${clientRow.full_name ?? "there"}, your Umuhle order has been confirmed via Ozow.\n\nOrder ID: ${orderId}\nTotal: R${(order.total_amount / 100).toFixed(0)}\n\nWe'll send you delivery updates here. Thank you! 💜`
-          );
-        } catch (e) {
-          console.error("[Ozow Notify] WhatsApp notify error:", e);
-        }
-      }
-    } else if (status === "Cancelled" || status === "Error") {
-      await supabase
-        .from("orders")
-        .update({ status: "cancelled" })
-        .eq("id", orderId)
-        .eq("status", "pending_payment");
-
-      try {
-        console.log("[Ozow Notify] Sending order failed/cancelled email...");
-        await sendOrderFailedEmail({
-          orderId,
-          clientName: clientRow?.full_name ?? "Unknown",
-          clientEmail: clientRow?.email ?? "",
-          totalAmount: order.total_amount,
-          reason: status === "Cancelled" ? "cancelled" : "failed",
-        });
-        console.log("[Ozow Notify] Order failed/cancelled email done.");
-      } catch (e) {
-        console.error("[Ozow Notify] Order failed email error:", e);
-      }
-    } else {
-      console.log("[Ozow Notify] Status is Pending or unrecognised — no action taken, awaiting final notification.");
-    }
-  } catch (err) {
-    console.error("[Ozow Notify] Processing error (caught):", err);
-    // Still return 200 — Ozow will retry on non-200 forever.
+  if (!result.ok) {
+    console.error("[Ozow Notify] Fulfillment error:", result.reason);
   }
 
   console.log("[Ozow Notify] ── Handler complete, returning 200 OK ──");

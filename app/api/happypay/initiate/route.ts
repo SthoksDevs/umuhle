@@ -4,8 +4,13 @@ import { createClient } from "@/lib/supabase/server";
 import { createHappyPayOrder } from "@/lib/happypay";
 import { createPendingOrder } from "@/lib/orders";
 import { randomUUID } from "crypto";
+import { isGatewayEnabled, GATEWAY_DISABLED_MESSAGE } from "@/lib/payments/gateways";
 
 export async function POST(req: NextRequest) {
+  if (!isGatewayEnabled("happypay")) {
+    return NextResponse.json({ error: GATEWAY_DISABLED_MESSAGE }, { status: 503 });
+  }
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
