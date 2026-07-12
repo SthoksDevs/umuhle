@@ -67,7 +67,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const { data: { user } } = await session.auth.getUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { data: booking } = await session
+    // Identity is already verified above via auth.getUser() (cookie-backed,
+    // doesn't depend on table RLS). The lookup below only needs to read the
+    // booking to check ownership in application code, so it uses the
+    // service client rather than the caller's own session — otherwise this
+    // check would silently fail for a legitimate artist if `bookings` RLS
+    // doesn't happen to permit reading a booking where they're the artist
+    // but not the client.
+    service = await createServiceClient();
+
+    const { data: booking } = await service
       .from("bookings")
       .select("id, artist:artists(profile_id)")
       .eq("id", bookingId)
@@ -77,8 +86,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (!booking || artistRow?.profile_id !== user.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-
-    service = await createServiceClient();
   }
 
   const { data: updated, error } = await service

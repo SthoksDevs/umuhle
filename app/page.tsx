@@ -9,6 +9,7 @@ import Image from "next/image";
 import Link from "next/link";
 import Footer from "@/components/Footer";
 import SiteHeader from "@/components/SiteHeader";
+import StarRating from "@/components/StarRating";
 import { gTag, fbq, ttq } from "@/lib/analytics";
 
 const ICON = "/umuhle-icon.png";
@@ -568,9 +569,8 @@ function ArtistCard({ artist, onBook, isWishlisted, onToggleWishlist }: { artist
       <div style={{ padding: "1rem" }}>
         <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1.05rem", marginBottom: "0.25rem" }}>{artist.display_name}</h3>
         <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginBottom: "0.5rem" }}>{artist.suburb}</p>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.75rem" }}>
-          <span style={{ color: "#F4B400", fontSize: "0.85rem" }}>★ {artist.rating.toFixed(1)}</span>
-          <span style={{ fontSize: "0.75rem", color: "var(--light)" }}>{artist.review_count} reviews</span>
+        <div style={{ marginBottom: "0.75rem" }}>
+          <StarRating rating={artist.rating} reviewCount={artist.review_count} size={13} />
         </div>
         <button className="btn-plum" style={{ width: "100%", padding: "0.6rem" }} onClick={onBook}>Book now</button>
       </div>
@@ -579,6 +579,8 @@ function ArtistCard({ artist, onBook, isWishlisted, onToggleWishlist }: { artist
 }
 
 // ─── Booking drawer ───────────────────────────────────────────────────────────
+type ArtistReview = { id: string; rating: number; comment: string | null; created_at: string; reviewer?: { full_name: string; avatar_url: string | null } };
+
 function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }: { artist: Artist; onClose: () => void; user: User; isWishlisted: boolean; onToggleWishlist: () => Promise<void> }) {
   const supabase = createClient();
   type Service = { id: string; name: string; price: number; duration_minutes: number };
@@ -592,12 +594,21 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
   const [step, setStep]           = useState<"services" | "datetime" | "confirm">("services");
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState("");
+  const [reviews, setReviews]     = useState<ArtistReview[]>([]);
 
   useEffect(() => {
     supabase.from("services").select("id, name, price, duration_minutes").eq("artist_id", artist.id).eq("is_active", true)
       .then(({ data }) => setServices((data ?? []) as Service[]));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artist.id]);
+
+  useEffect(() => {
+    if (!artist.review_count) { setReviews([]); return; }
+    fetch(`/api/reviews?artistId=${artist.id}&limit=5`)
+      .then(res => res.ok ? res.json() : { reviews: [] })
+      .then(data => setReviews(data.reviews ?? []))
+      .catch(() => setReviews([]));
+  }, [artist.id, artist.review_count]);
 
   const handleBook = async () => {
     if (!selected) return;
@@ -632,7 +643,11 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
           <Image src={artist.avatar_url ?? "/umuhle-icon.png"} alt={artist.display_name} width={56} height={56} style={{ borderRadius: "50%", objectFit: "cover" }} />
           <div>
             <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1.2rem", margin: 0 }}>{artist.display_name}</h3>
-            <p style={{ color: "var(--grey)", fontSize: "0.85rem", margin: 0 }}>{artist.suburb} · ★ {artist.rating.toFixed(1)}</p>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginTop: "0.2rem" }}>
+              <span style={{ color: "var(--grey)", fontSize: "0.85rem" }}>{artist.suburb}</span>
+              <span style={{ color: "var(--light)" }}>·</span>
+              <StarRating rating={artist.rating} reviewCount={artist.review_count} size={12} />
+            </div>
           </div>
           <button
             onClick={() => onToggleWishlist()}
@@ -660,6 +675,24 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
                 </button>
               ))}
             </div>
+
+            {reviews.length > 0 && (
+              <div style={{ marginTop: "1.75rem", paddingTop: "1.5rem", borderTop: "1px solid rgba(155,127,184,0.15)" }}>
+                <h4 style={{ fontWeight: 500, marginBottom: "1rem", fontSize: "0.95rem" }}>What clients say</h4>
+                <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+                  {reviews.map(r => (
+                    <div key={r.id}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "0.3rem" }}>
+                        <Image src={r.reviewer?.avatar_url ?? ICON} alt="" width={28} height={28} style={{ borderRadius: "50%", objectFit: "cover" }} />
+                        <span style={{ fontWeight: 500, fontSize: "0.85rem" }}>{r.reviewer?.full_name?.split(" ")[0] ?? "Umuhle client"}</span>
+                        <StarRating rating={r.rating} showValue={false} size={11} />
+                      </div>
+                      {r.comment && <p style={{ fontSize: "0.85rem", color: "var(--grey)", lineHeight: 1.5, margin: 0, paddingLeft: "2.2rem" }}>{r.comment}</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         )}
 

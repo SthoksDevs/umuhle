@@ -11,6 +11,8 @@ import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
 import ProductForm, { productToForm, type ProductFormData } from "@/components/ProductForm";
 import ListingPackagePicker from "@/components/ListingPackagePicker";
+import StarRating from "@/components/StarRating";
+import ReviewModal, { type SubmittedReview } from "@/components/ReviewModal";
 import { useCart } from "@/lib/cart-context";
 import { useProductWishlist } from "@/lib/product-wishlist-context";
 import { PAYOUT_HOLD_DAYS, getNextPayoutDate, formatPayoutDate } from "@/lib/payouts";
@@ -39,8 +41,13 @@ type ServiceTypeId = typeof SERVICE_TYPES[number]["id"];
 
 type BookingWithRelations = Booking & {
   artist?: Artist & { profile?: Profile };
+  client?: Pick<Profile, "full_name" | "avatar_url" | "phone">;
   service?: { name: string; duration_minutes: number };
 };
+
+// booking_id -> the review the current user already left for it, if any.
+// Shared shape returned by GET /api/reviews?bookingIds=...
+type MyReviewMap = Record<string, { rating: number; comment: string | null; created_at: string }>;
 
 type WishlistArtist = {
   artist_id: string;
@@ -140,7 +147,11 @@ function PillNav<T extends string>({
 }
 
 // ─── Booking card ─────────────────────────────────────────────────────────────
-function BookingCard({ booking }: { booking: BookingWithRelations }) {
+function BookingCard({ booking, myReview, onRate }: {
+  booking: BookingWithRelations;
+  myReview?: { rating: number; comment: string | null } | null;
+  onRate?: () => void;
+}) {
   const status = STATUS_STYLES[booking.status] ?? STATUS_STYLES.confirmed;
   const artist = booking.artist;
   const service = booking.service;
@@ -185,6 +196,21 @@ function BookingCard({ booking }: { booking: BookingWithRelations }) {
             <p style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--plum)" }}>{fmt(booking.total_amount)}</p>
           </div>
         </div>
+
+        {booking.status === "completed" && (myReview || onRate) && (
+          <div style={{ marginTop: "0.85rem", paddingTop: "0.85rem", borderTop: "1px dashed rgba(155,127,184,0.2)" }}>
+            {myReview ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <span style={{ fontSize: "0.78rem", color: "var(--grey)" }}>Your review:</span>
+                <StarRating rating={myReview.rating} showValue={false} size={13} />
+              </div>
+            ) : (
+              <button onClick={onRate} className="btn-outline" style={{ padding: "0.4rem 1.1rem", fontSize: "0.8rem" }}>
+                Rate your artist
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -214,9 +240,8 @@ function WishlistCard({ item, onRemove }: { item: WishlistArtist; onRemove: (id:
       <div style={{ padding: "1rem" }}>
         <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1rem", marginBottom: "0.2rem" }}>{artist.display_name}</h3>
         <p style={{ fontSize: "0.78rem", color: "var(--grey)", marginBottom: "0.5rem" }}>{artist.suburb} · {artist.category}</p>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.75rem" }}>
-          <span style={{ color: "#F4B400", fontSize: "0.82rem" }}>★ {(artist.rating ?? 0).toFixed(1)}</span>
-          <span style={{ fontSize: "0.72rem", color: "var(--light)" }}>{artist.review_count ?? 0} reviews</span>
+        <div style={{ marginBottom: "0.75rem" }}>
+          <StarRating rating={artist.rating ?? 0} reviewCount={artist.review_count ?? 0} size={12} />
         </div>
         <Link href={`/?artist=${artist.id}`}><button className="btn-plum" style={{ width: "100%", padding: "0.55rem", fontSize: "0.85rem" }}>Book now</button></Link>
       </div>
@@ -2129,11 +2154,14 @@ function PocPopup({ onSave, onDismiss }: { onSave: (name: string, phone: string)
 // ─── Bookings tab with PoC section ─────────────────────────────────────────────
 function BookingsTab({ user, profile, onUpdateProfile }: { user: User; profile: Profile; onUpdateProfile: (p: Profile) => void }) {
   const supabase = createClient();
+  const [bookingRole, setBookingRole] = useState<"client" | "artist">("client");
   const [bookings, setBookings] = useState<BookingWithRelations[]>([]);
   const [bookingsLoading, setBookingsLoading] = useState(false);
   const [bookingFilter, setBookingFilter] = useState<"upcoming" | "past" | "all">("upcoming");
   const [showPocPopup, setShowPocPopup] = useState(false);
   const [pocSaving, setPocSaving] = useState(false);
+  const [myReviews, setMyReviews] = useState<MyReviewMap>({});
+  const [reviewTarget, setReviewTarget] = useState<BookingWithRelations | null>(null);
 
   const hasPoc = !!(profile.poc_name && profile.poc_phone);
 
@@ -2149,11 +2177,23 @@ function BookingsTab({ user, profile, onUpdateProfile }: { user: User; profile: 
     if (bookingFilter === "upcoming") query = query.gte("booking_date", today).in("status", ["confirmed", "pending_payment", "in_progress"]);
     else if (bookingFilter === "past") query = query.or(`booking_date.lt.${today},status.in.(completed,cancelled,no_show)`);
     const { data } = await query.limit(50);
-    setBookings((data ?? []) as unknown as BookingWithRelations[]);
+    const rows = (data ?? []) as unknown as BookingWithRelations[];
+    setBookings(rows);
     setBookingsLoading(false);
+
+    const completedIds = rows.filter(b => b.status === "completed").map(b => b.id);
+    if (completedIds.length > 0) {
+      const res = await fetch(`/api/reviews?bookingIds=${completedIds.join(",")}`);
+      if (res.ok) { const data = await res.json(); setMyReviews(data.reviews ?? {}); }
+    }
   }, [user.id, bookingFilter, supabase]);
 
-  useEffect(() => { fetchBookings(); }, [fetchBookings]);
+  useEffect(() => { if (bookingRole === "client") fetchBookings(); }, [fetchBookings, bookingRole]);
+
+  const handleReviewSubmitted = (bookingId: string, review: SubmittedReview) => {
+    setMyReviews(prev => ({ ...prev, [bookingId]: { ...review, created_at: new Date().toISOString() } }));
+    setReviewTarget(null);
+  };
 
   const handleSavePoc = async (name: string, phone: string) => {
     setPocSaving(true);
@@ -2180,6 +2220,26 @@ function BookingsTab({ user, profile, onUpdateProfile }: { user: User; profile: 
 
   return (
     <section>
+      {/* ── Client / artist role toggle (only shown to people with an artist profile) ── */}
+      {profile.is_artist && (
+        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem" }}>
+          {([
+            { id: "client" as const, label: "My Bookings", icon: "📅" },
+            { id: "artist" as const, label: "Client Bookings", icon: "💇" },
+          ]).map(t => (
+            <button key={t.id} onClick={() => setBookingRole(t.id)}
+              style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 1.1rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.25)", cursor: "pointer",
+                background: bookingRole === t.id ? "var(--plum)" : "transparent", color: bookingRole === t.id ? "#fff" : "var(--onyx)", fontSize: "0.875rem", fontWeight: 500, transition: "all 0.15s" }}>
+              <span>{t.icon}</span>{t.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {bookingRole === "artist" && <ClientBookingsPanel user={user} />}
+
+      {bookingRole === "client" && (
+      <>
       {/* ── Point of Contact section ── */}
       <div style={{
         background: hasPoc ? "#E8F5E9" : "var(--plum-t)",
@@ -2257,7 +2317,9 @@ function BookingsTab({ user, profile, onUpdateProfile }: { user: User; profile: 
       )}
       {!bookingsLoading && bookings.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-          {bookings.map(b => <BookingCard key={b.id} booking={b} />)}
+          {bookings.map(b => (
+            <BookingCard key={b.id} booking={b} myReview={myReviews[b.id] ?? null} onRate={() => setReviewTarget(b)} />
+          ))}
         </div>
       )}
 
@@ -2268,6 +2330,226 @@ function BookingsTab({ user, profile, onUpdateProfile }: { user: User; profile: 
         />
       )}
       {pocSaving && <div style={{ display: "none" }} />}
+      </>
+      )}
+
+      {reviewTarget && (
+        <ReviewModal
+          bookingId={reviewTarget.id}
+          revieweeName={reviewTarget.artist?.display_name ?? "your artist"}
+          revieweeAvatarUrl={reviewTarget.artist?.avatar_url}
+          role="client"
+          onClose={() => setReviewTarget(null)}
+          onSubmitted={(review) => handleReviewSubmitted(reviewTarget.id, review)}
+        />
+      )}
+    </section>
+  );
+}
+
+// ─── Client bookings (artist side) ─────────────────────────────────────────────
+// The flip side of BookingsTab above: bookings where the current user is the
+// ARTIST being booked, not the client. Nothing like this existed before —
+// artists had no way to see who had booked them. Reuses the same status
+// palette and card shell as the client view, plus lets the artist progress
+// a booking to completed (or no-show) and then rate the client.
+
+function ClientBookingCard({ booking, myReview, onRate, onMarkStatus, actionLoading }: {
+  booking: BookingWithRelations;
+  myReview?: { rating: number; comment: string | null } | null;
+  onRate: () => void;
+  onMarkStatus: (id: string, status: "completed" | "no_show") => void;
+  actionLoading: boolean;
+}) {
+  const status = STATUS_STYLES[booking.status] ?? STATUS_STYLES.confirmed;
+  const client = booking.client;
+  const service = booking.service;
+
+  return (
+    <div style={{
+      border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 18,
+      background: "#fff", padding: "1.25rem", display: "flex", gap: "1rem",
+      alignItems: "flex-start", transition: "box-shadow 0.2s",
+    }}
+      onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.boxShadow = "0 8px 32px rgba(155,127,184,0.12)"}
+      onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.boxShadow = ""}
+    >
+      <div style={{ flexShrink: 0 }}>
+        <Image src={client?.avatar_url ?? ICON} alt={client?.full_name ?? "Client"} width={56} height={56} style={{ borderRadius: "50%", objectFit: "cover", border: "2px solid var(--plum-t)" }} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.5rem", flexWrap: "wrap" }}>
+          <div>
+            <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1rem", marginBottom: "0.1rem" }}>{client?.full_name ?? "Client"}</h3>
+            <p style={{ fontSize: "0.82rem", color: "var(--grey)", margin: 0 }}>{service?.name ?? "Service"} · {service?.duration_minutes ?? 60} min</p>
+          </div>
+          <span style={{ borderRadius: 100, padding: "0.2rem 0.75rem", fontSize: "0.72rem", fontWeight: 600, background: status.bg, color: status.color, whiteSpace: "nowrap", flexShrink: 0 }}>{status.label}</span>
+        </div>
+        <div style={{ display: "flex", gap: "1.5rem", marginTop: "0.75rem", flexWrap: "wrap" }}>
+          <div>
+            <p style={{ fontSize: "0.72rem", color: "var(--light)", marginBottom: "0.15rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Date</p>
+            <p style={{ fontSize: "0.88rem", fontWeight: 500 }}>{formatDate(booking.booking_date)}</p>
+          </div>
+          <div>
+            <p style={{ fontSize: "0.72rem", color: "var(--light)", marginBottom: "0.15rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Time</p>
+            <p style={{ fontSize: "0.88rem", fontWeight: 500 }}>{booking.booking_time}</p>
+          </div>
+          {client?.phone && (
+            <div>
+              <p style={{ fontSize: "0.72rem", color: "var(--light)", marginBottom: "0.15rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Contact</p>
+              <p style={{ fontSize: "0.88rem", fontWeight: 500 }}>{client.phone}</p>
+            </div>
+          )}
+          <div>
+            <p style={{ fontSize: "0.72rem", color: "var(--light)", marginBottom: "0.15rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Total</p>
+            <p style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--plum)" }}>{fmt(booking.total_amount)}</p>
+          </div>
+        </div>
+
+        {booking.status === "confirmed" && (
+          <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.85rem", paddingTop: "0.85rem", borderTop: "1px dashed rgba(155,127,184,0.2)" }}>
+            <button onClick={() => onMarkStatus(booking.id, "completed")} disabled={actionLoading} className="btn-plum" style={{ padding: "0.4rem 1.1rem", fontSize: "0.8rem" }}>
+              Mark completed
+            </button>
+            <button onClick={() => onMarkStatus(booking.id, "no_show")} disabled={actionLoading} className="btn-outline" style={{ padding: "0.4rem 1.1rem", fontSize: "0.8rem", borderColor: "#E53935", color: "#E53935" }}>
+              Client no-show
+            </button>
+          </div>
+        )}
+
+        {booking.status === "completed" && (
+          <div style={{ marginTop: "0.85rem", paddingTop: "0.85rem", borderTop: "1px dashed rgba(155,127,184,0.2)" }}>
+            {myReview ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <span style={{ fontSize: "0.78rem", color: "var(--grey)" }}>Your rating:</span>
+                <StarRating rating={myReview.rating} showValue={false} size={13} />
+              </div>
+            ) : (
+              <button onClick={onRate} className="btn-outline" style={{ padding: "0.4rem 1.1rem", fontSize: "0.8rem" }}>
+                Rate this client
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ClientBookingsPanel({ user }: { user: User }) {
+  const [hasArtistProfile, setHasArtistProfile] = useState(true);
+  const [bookings, setBookings] = useState<BookingWithRelations[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<"upcoming" | "past" | "all">("upcoming");
+  const [myReviews, setMyReviews] = useState<MyReviewMap>({});
+  const [reviewTarget, setReviewTarget] = useState<BookingWithRelations | null>(null);
+  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  const fetchBookings = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    const res = await fetch(`/api/bookings/mine?filter=${filter}`);
+    if (!res.ok) { setLoading(false); return; }
+    const data = await res.json();
+    const rows = (data.bookings ?? []) as BookingWithRelations[];
+    setHasArtistProfile(!!data.artistId);
+    setBookings(rows);
+    setLoading(false);
+
+    const completedIds = rows.filter(b => b.status === "completed").map(b => b.id);
+    if (completedIds.length > 0) {
+      const reviewRes = await fetch(`/api/reviews?bookingIds=${completedIds.join(",")}`);
+      if (reviewRes.ok) { const d = await reviewRes.json(); setMyReviews(d.reviews ?? {}); }
+    }
+  }, [filter]);
+
+  useEffect(() => { fetchBookings(); }, [fetchBookings]);
+
+  const handleMarkStatus = async (id: string, status: "completed" | "no_show") => {
+    setActionLoadingId(id);
+    setError("");
+    try {
+      const res = await fetch(`/api/bookings/${id}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Couldn't update this booking.");
+      await fetchBookings();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong");
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  if (!loading && !hasArtistProfile) {
+    return (
+      <div style={{ textAlign: "center", padding: "4rem 1rem", background: "#fff", borderRadius: 20, border: "1.5px solid rgba(155,127,184,0.12)" }}>
+        <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>💇</div>
+        <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.2rem", marginBottom: "0.5rem" }}>No artist profile yet</h3>
+        <p style={{ color: "var(--grey)", fontSize: "0.9rem" }}>Set up your services under the Services tab to start receiving bookings from clients.</p>
+      </div>
+    );
+  }
+
+  return (
+    <section>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: "0.75rem" }}>
+        <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem" }}>
+          {filter === "upcoming" ? "Upcoming client bookings" : filter === "past" ? "Past client bookings" : "All client bookings"}
+        </h2>
+        <div style={{ display: "flex", gap: "0.35rem" }}>
+          {(["upcoming", "past", "all"] as const).map(f => (
+            <button key={f} onClick={() => setFilter(f)} style={{ borderRadius: 100, border: `1.5px solid ${filter === f ? "var(--plum)" : "rgba(155,127,184,0.25)"}`, padding: "0.35rem 0.9rem", fontSize: "0.8rem", fontWeight: filter === f ? 500 : 400, background: filter === f ? "var(--plum-t)" : "#fff", color: filter === f ? "var(--plum)" : "var(--grey)", cursor: "pointer", textTransform: "capitalize" }}>{f}</button>
+          ))}
+        </div>
+      </div>
+
+      {error && <p style={{ color: "#E53935", fontSize: "0.85rem", marginBottom: "1rem" }}>{error}</p>}
+
+      {loading && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          {[...Array(3)].map((_, i) => <div key={i} style={{ height: 120, borderRadius: 18, background: "var(--plum-t)", animation: "pulse 1.5s ease-in-out infinite" }} />)}
+        </div>
+      )}
+      {!loading && bookings.length === 0 && (
+        <div style={{ textAlign: "center", padding: "4rem 1rem", background: "#fff", borderRadius: 20, border: "1.5px solid rgba(155,127,184,0.12)" }}>
+          <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>💇</div>
+          <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.2rem", marginBottom: "0.5rem" }}>No bookings here yet</h3>
+          <p style={{ color: "var(--grey)", fontSize: "0.9rem" }}>Bookings clients make with you will show up here.</p>
+        </div>
+      )}
+      {!loading && bookings.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          {bookings.map(b => (
+            <ClientBookingCard
+              key={b.id}
+              booking={b}
+              myReview={myReviews[b.id] ?? null}
+              onRate={() => setReviewTarget(b)}
+              onMarkStatus={handleMarkStatus}
+              actionLoading={actionLoadingId === b.id}
+            />
+          ))}
+        </div>
+      )}
+
+      {reviewTarget && (
+        <ReviewModal
+          bookingId={reviewTarget.id}
+          revieweeName={reviewTarget.client?.full_name ?? "this client"}
+          revieweeAvatarUrl={reviewTarget.client?.avatar_url}
+          role="artist"
+          onClose={() => setReviewTarget(null)}
+          onSubmitted={(review) => {
+            setMyReviews(prev => ({ ...prev, [reviewTarget.id]: { ...review, created_at: new Date().toISOString() } }));
+            setReviewTarget(null);
+          }}
+        />
+      )}
     </section>
   );
 }
