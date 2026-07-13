@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { AD_PACKAGES, LISTING_PACKAGES } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 import { createPendingOrder } from "@/lib/orders";
+import { createBookingIntent } from "@/lib/bookings";
 import { isGatewayEnabled, gatewayLabel } from "@/lib/payments/gateways";
 
 export async function POST(req: NextRequest) {
@@ -83,49 +84,19 @@ async function initiateBooking(
 ) {
   const { serviceId, artistId, bookingDate, bookingTime, notes, meetingAddress, clientPocName, clientPocPhone } = body;
 
-  const { data: service } = await supabase
-    .from("services")
-    .select("id, name, price, duration_minutes, artist_id")
-    .eq("id", serviceId)
-    .single();
-
-  if (!service) return NextResponse.json({ error: "Service not found" }, { status: 404 });
-
-  const { data: artist } = await supabase
-    .from("artists")
-    .select("display_name, point_of_contact_name, point_of_contact_phone")
-    .eq("id", artistId)
-    .single();
-
-  // Use a fresh UUID as the payment ID — this is stored in booking_intents,
-  // NOT in the bookings table yet.
-  const intentId = uuidv4();
-
-  const { error: intentErr } = await supabase.from("booking_intents").insert({
-    id:               intentId,
-    client_id:        userId,
-    artist_id:        artistId,
-    service_id:       serviceId,
-    booking_date:     bookingDate,
-    booking_time:     bookingTime,
-    meeting_address:  meetingAddress || null,
-    total_amount:     service.price,
-    notes:            notes || null,
-    client_poc_name:  clientPocName || null,
-    client_poc_phone: clientPocPhone || null,
-    artist_poc_name:  artist?.point_of_contact_name || null,
-    artist_poc_phone: artist?.point_of_contact_phone || null,
-    status:           "pending",
+  const created = await createBookingIntent(supabase, userId, {
+    paymentMethod: "payfast",
+    serviceId, artistId, bookingDate, bookingTime, meetingAddress, notes, clientPocName, clientPocPhone,
   });
-
-  if (intentErr) {
-    console.error("booking_intents insert error:", intentErr);
-    return NextResponse.json({ error: "Could not create booking intent" }, { status: 500 });
+  if ("error" in created) {
+    const status = created.error === "Service not found" ? 404 : 500;
+    return NextResponse.json({ error: created.error }, { status });
   }
+  const { intentId, amount, service, artist } = created.result;
 
   const params = buildPaymentParams({
     paymentId:       intentId,
-    amount:          service.price,
+    amount,
     itemName:        `Booking: ${service.name}`,
     itemDescription: `${artist?.display_name ?? ""} — ${bookingDate} at ${bookingTime}`,
     firstName,

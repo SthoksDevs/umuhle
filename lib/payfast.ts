@@ -117,14 +117,22 @@ export function buildPaymentParams(options: {
   lastName: string;
   email: string;
   baseUrl: string;
-  customStr1?: string; // payment_type: "booking"|"order"|"ad"|"salon"
+  customStr1?: string; // payment_type: "booking"|"order"|"ad"|"salon"|"product_listing"
   customStr2?: string; // extra reference
 }): Record<string, string> {
+  // Carried on both redirects so /payment/cancelled (and /payment/failed,
+  // for other gateways) know what row to check without guessing across
+  // five tables — see app/api/payments/finalize/route.ts. `method` isn't
+  // strictly needed here since the cancelled/failed pages already default
+  // it to "payfast", but it's included explicitly rather than relying on
+  // that default staying in sync.
+  const resultQuery = `${options.customStr1 ? `&type=${options.customStr1}` : ""}&method=payfast`;
+
   const params: Record<string, string> = {
     merchant_id: process.env.PAYFAST_MERCHANT_ID!,
     merchant_key: process.env.PAYFAST_MERCHANT_KEY!,
-    return_url: `${options.baseUrl}/payment/success?ref=${options.paymentId}`,
-    cancel_url: `${options.baseUrl}/payment/cancelled?ref=${options.paymentId}`,
+    return_url: `${options.baseUrl}/payment/success?ref=${options.paymentId}${resultQuery}`,
+    cancel_url: `${options.baseUrl}/payment/cancelled?ref=${options.paymentId}${resultQuery}`,
     notify_url: `${options.baseUrl}/api/payfast/notify`,
     name_first: options.firstName,
     name_last: options.lastName,

@@ -4,7 +4,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { useEffect, Suspense } from "react";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
 
@@ -13,6 +13,23 @@ const ICON = "/umuhle-icon.png";
 function FailedContent() {
   const params = useSearchParams();
   const ref    = params.get("ref");
+  const type   = params.get("type");
+  const method = params.get("method") ?? "payfast";
+
+  // Safety net alongside the real webhook — see
+  // app/api/payments/finalize/route.ts for why this exists and why it's
+  // safe to call even when the webhook already landed. `type` is absent on
+  // checkouts started before this fix shipped, in which case this no-ops.
+  useEffect(() => {
+    if (!ref || !type) return;
+    fetch("/api/payments/finalize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ref, type, gateway: method, outcome: "failed" }),
+    }).catch(() => {
+      // Best-effort — nothing to show the customer either way.
+    });
+  }, [ref, type, method]);
 
   return (
     <div style={{ minHeight: "100vh", background: "#FFF5F5", display: "flex", alignItems: "center", justifyContent: "center", padding: "2rem" }}>

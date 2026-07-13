@@ -40,19 +40,15 @@ const DURATION_LABELS: Record<string, string> = {
 };
 
 /**
- * Only PayFast currently writes its own payment id onto the
- * booking/ad/product/salon-subscription rows themselves (the
- * `payfast_payment_id` columns). Those columns predate multi-gateway
- * support and are still named after PayFast specifically, so we only
- * populate them for PayFast events rather than putting e.g. a HappyPay
- * order id in a column called payfast_payment_id.
+ * `bookings.payfast_payment_id` predates multi-gateway support and is still
+ * named after PayFast specifically — kept (PayFast-only) for backward
+ * compatibility with anything already querying it, and supplemented below
+ * by the gateway-neutral `payment_method` / `gateway_order_id` columns that
+ * every gateway now writes to, the same pattern `orders` already used.
  *
- * This isn't a functional gap today — HappyPay/Ozow don't sell bookings,
- * ads, salon subscriptions, or listings yet, only shop orders (see the
- * initiate routes) — but it means nothing needs fixing here if that
- * changes; the natural companion change at that point is a small migration
- * generalizing those columns, done together with whatever adds initiate
- * support for the new type+gateway combination.
+ * `ads`, `product_listing` (products), and `salon` (salon_subscription_payments)
+ * still only ever come from PayFast — HappyPay/Ozow don't sell those (see
+ * the initiate routes) — so this stays PayFast-only for those three types.
  */
 function legacyPayfastColumn(event: PaymentEvent): { payfast_payment_id: string | null } | Record<string, never> {
   return event.gateway === "payfast" ? { payfast_payment_id: event.gatewayPaymentId ?? null } : {};
@@ -133,6 +129,8 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
         client_poc_phone: intent.client_poc_phone,
         artist_poc_name: intent.artist_poc_name,
         artist_poc_phone: intent.artist_poc_phone,
+        payment_method: event.gateway,
+        gateway_order_id: event.gatewayPaymentId ?? null,
         ...legacyPayfastColumn(event),
       })
       .select(`

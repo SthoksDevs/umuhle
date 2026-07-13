@@ -20,6 +20,15 @@ const CAT_ICONS: Record<string, string> = { hair: "✂", nails: "◈", makeup: "
 
 type CartItem = { id: string; name: string; price: number };
 
+// ── Booking payment gateway picker ──────────────────────────────────────────
+// Mirrors the PayMethod pattern in app/checkout/page.tsx, minus google_pay
+// (not part of lib/payments/gateways.ts's pause system, and not wired up
+// for bookings — see BookingDrawer below).
+type BookingPayMethod = "payfast" | "ozow" | "happypay";
+const BOOKING_GATEWAY_LABEL: Record<BookingPayMethod, string> = {
+  payfast: "PayFast", ozow: "Ozow", happypay: "HappyPay",
+};
+
 // ── Pending "add to wishlist" intent ────────────────────────────────────────
 // Same idea as the cart's pending-add: if a logged-out visitor taps the heart
 // on an artist card, we remember which artist they meant, send them through
@@ -595,6 +604,12 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState("");
   const [reviews, setReviews]     = useState<ArtistReview[]>([]);
+  const [payMethod, setPayMethod] = useState<BookingPayMethod>("payfast");
+  // Defaults to "everything on" so there's no flash of a shorter list while
+  // /api/payments/gateways is loading — mirrors app/checkout/page.tsx.
+  const [availableGateways, setAvailableGateways] = useState<Set<BookingPayMethod>>(
+    new Set<BookingPayMethod>(["payfast", "ozow", "happypay"])
+  );
 
   useEffect(() => {
     supabase.from("services").select("id, name, price, duration_minutes").eq("artist_id", artist.id).eq("is_active", true)
@@ -610,7 +625,28 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
       .catch(() => setReviews([]));
   }, [artist.id, artist.review_count]);
 
-  const handleBook = async () => {
+  useEffect(() => {
+    fetch("/api/payments/gateways")
+      .then((res) => res.json())
+      .then((data: { gateways: string[] }) => {
+        setAvailableGateways(new Set<BookingPayMethod>(data.gateways as BookingPayMethod[]));
+      })
+      .catch(() => {
+        // If this fails, keep showing every method rather than hiding all
+        // payment options over a transient network error.
+      });
+  }, []);
+
+  // If the pre-selected default (or a previous selection) turns out to be
+  // paused, fall back to whatever's actually available.
+  useEffect(() => {
+    if (availableGateways.has(payMethod)) return;
+    const fallback = (["payfast", "ozow", "happypay"] as BookingPayMethod[]).find((m) => availableGateways.has(m));
+    if (fallback) setPayMethod(fallback);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableGateways]);
+
+  const handlePayFast = async () => {
     if (!selected) return;
     setLoading(true); setError("");
     try {
@@ -632,6 +668,44 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
       setLoading(false);
     }
   };
+
+  const handleOzow = async () => {
+    if (!selected) return;
+    setLoading(true); setError("");
+    try {
+      const res = await fetch("/api/ozow/initiate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "booking", serviceId: selected.id, artistId: artist.id, bookingDate: date, bookingTime: time, meetingAddress: address, clientPocName: pocName, clientPocPhone: pocPhone }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Ozow payment failed");
+      window.location.href = data.redirectUrl;
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+      setLoading(false);
+    }
+  };
+
+  const handleHappyPay = async () => {
+    if (!selected) return;
+    setLoading(true); setError("");
+    try {
+      const res = await fetch("/api/happypay/initiate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "booking", serviceId: selected.id, artistId: artist.id, bookingDate: date, bookingTime: time, meetingAddress: address, clientPocName: pocName, clientPocPhone: pocPhone }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "HappyPay payment failed");
+      window.location.href = data.redirectUrl;
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+      setLoading(false);
+    }
+  };
+
+  const handleBookingPay = payMethod === "payfast" ? handlePayFast : payMethod === "ozow" ? handleOzow : handleHappyPay;
 
   const minDate = new Date(); minDate.setDate(minDate.getDate() + 1);
   const inputStyle: React.CSSProperties = { padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", width: "100%", boxSizing: "border-box" };
@@ -730,12 +804,37 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
                 <span style={{ fontWeight: 700, color: "var(--plum)" }}>{fmt(selected.price)}</span>
               </div>
             </div>
+
+            <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.5rem" }}>Payment method</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", marginBottom: "1.25rem" }}>
+              {([
+                { id: "payfast" as BookingPayMethod, label: "PayFast", sub: "Card, EFT, Instant EFT, SnapScan & more" },
+                { id: "ozow" as BookingPayMethod, label: "Ozow", sub: "Instant EFT — pay straight from your bank app" },
+                { id: "happypay" as BookingPayMethod, label: "HappyPay", sub: "Buy now, pay later — split into instalments" },
+              ]).filter((opt) => availableGateways.has(opt.id)).map((opt) => (
+                <button key={opt.id} onClick={() => setPayMethod(opt.id)}
+                  style={{ display: "flex", alignItems: "center", gap: "0.85rem", padding: "0.85rem 1rem", borderRadius: 12, border: `1.5px solid ${payMethod === opt.id ? "var(--plum)" : "rgba(155,127,184,0.2)"}`, background: payMethod === opt.id ? "var(--plum-t)" : "#fff", textAlign: "left", cursor: "pointer" }}>
+                  <div style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${payMethod === opt.id ? "var(--plum)" : "#E0E0E0"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    {payMethod === opt.id && <div style={{ width: 9, height: 9, borderRadius: "50%", background: "var(--plum)" }} />}
+                  </div>
+                  <div>
+                    <p style={{ fontWeight: 500, fontSize: "0.9rem", margin: 0 }}>{opt.label}</p>
+                    <p style={{ fontSize: "0.75rem", color: "var(--grey)", margin: 0 }}>{opt.sub}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+
             {error && <p style={{ color: "#E53935", fontSize: "0.85rem", marginBottom: "1rem" }}>{error}</p>}
             <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginBottom: "1.25rem" }}>
-              You will be redirected to PayFast to complete payment securely. Once paid, you will receive a WhatsApp confirmation.
+              You will be redirected to {BOOKING_GATEWAY_LABEL[payMethod]} to complete payment securely. Once paid, you will receive a WhatsApp confirmation.
             </p>
-            <button className="btn-plum" style={{ width: "100%", padding: "0.875rem" }} onClick={handleBook} disabled={loading}>
-              {loading ? "Redirecting to PayFast…" : `Pay ${fmt(selected.price)} securely`}
+            <button className="btn-plum" style={{ width: "100%", padding: "0.875rem" }} onClick={handleBookingPay} disabled={loading}>
+              {loading
+                ? "Redirecting…"
+                : payMethod === "happypay"
+                  ? "Pay later with HappyPay"
+                  : `Pay ${fmt(selected.price)} with ${BOOKING_GATEWAY_LABEL[payMethod]}`}
             </button>
           </>
         )}
