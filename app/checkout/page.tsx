@@ -571,9 +571,9 @@ export default function CheckoutPage() {
                 </div>
               </div>
             </div>
-            
+
             {/* Payment method */}
-            <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem" }}>
+            <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem", marginBottom: "1rem" }}>
               <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>Payment method</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
                 {[
