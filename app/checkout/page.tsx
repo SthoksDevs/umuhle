@@ -535,30 +535,6 @@ export default function CheckoutPage() {
               }}
             />
 
-            {/* Payment method */}
-            <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem" }}>
-              <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>Payment method</h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                {[
-                  { id: "payfast" as PayMethod, label: "PayFast", sub: "Card, EFT, Instant EFT, SnapScan & more" },
-                  { id: "ozow" as PayMethod, label: "Ozow", sub: "Instant EFT — pay straight from your bank app" },
-                  { id: "happypay" as PayMethod, label: "HappyPay", sub: "Buy now, pay later — split into instalments" },
-                  { id: "google_pay" as PayMethod, label: "Google Pay", sub: "Pay instantly with your saved Google card" },
-                ].filter((opt) => availableGateways.has(opt.id)).map((opt) => (
-                  <button key={opt.id} onClick={() => setPayMethod(opt.id)}
-                    style={{ display: "flex", alignItems: "center", gap: "1rem", padding: "1rem 1.25rem", borderRadius: 14, border: `1.5px solid ${payMethod === opt.id ? "var(--plum)" : "rgba(155,127,184,0.2)"}`, background: payMethod === opt.id ? "var(--plum-t)" : "#fff", textAlign: "left", cursor: "pointer" }}>
-                    <div style={{ width: 20, height: 20, borderRadius: "50%", border: `2px solid ${payMethod === opt.id ? "var(--plum)" : "#E0E0E0"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      {payMethod === opt.id && <div style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--plum)" }} />}
-                    </div>
-                    <div>
-                      <p style={{ fontWeight: 500, fontSize: "0.95rem", margin: 0 }}>{opt.label}</p>
-                      <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: 0 }}>{opt.sub}</p>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
             {error && (
               <div style={{ background: "#FFF3F3", border: "1.5px solid #FFCDD2", borderRadius: 12, padding: "1rem 1.25rem" }}>
                 <p style={{ color: "#C62828", fontSize: "0.875rem", margin: 0 }}>{error}</p>
@@ -593,6 +569,30 @@ export default function CheckoutPage() {
                   <span>Total</span>
                   <span style={{ color: "var(--plum)" }}>{fmt(total)}</span>
                 </div>
+              </div>
+            </div>
+            
+            {/* Payment method */}
+            <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem" }}>
+              <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>Payment method</h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                {[
+                  { id: "payfast" as PayMethod, label: "PayFast", sub: "Card, EFT, Instant EFT, SnapScan & more" },
+                  { id: "ozow" as PayMethod, label: "Ozow", sub: "Instant EFT — pay straight from your bank app" },
+                  { id: "happypay" as PayMethod, label: "HappyPay", sub: "Buy now, pay later — split into instalments" },
+                  { id: "google_pay" as PayMethod, label: "Google Pay", sub: "Pay instantly with your saved Google card" },
+                ].filter((opt) => availableGateways.has(opt.id)).map((opt) => (
+                  <button key={opt.id} onClick={() => setPayMethod(opt.id)}
+                    style={{ display: "flex", alignItems: "center", gap: "1rem", padding: "1rem 1.25rem", borderRadius: 14, border: `1.5px solid ${payMethod === opt.id ? "var(--plum)" : "rgba(155,127,184,0.2)"}`, background: payMethod === opt.id ? "var(--plum-t)" : "#fff", textAlign: "left", cursor: "pointer" }}>
+                    <div style={{ width: 20, height: 20, borderRadius: "50%", border: `2px solid ${payMethod === opt.id ? "var(--plum)" : "#E0E0E0"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      {payMethod === opt.id && <div style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--plum)" }} />}
+                    </div>
+                    <div>
+                      <p style={{ fontWeight: 500, fontSize: "0.95rem", margin: 0 }}>{opt.label}</p>
+                      <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: 0 }}>{opt.sub}</p>
+                    </div>
+                  </button>
+                ))}
               </div>
             </div>
 
