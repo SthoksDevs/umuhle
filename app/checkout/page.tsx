@@ -232,6 +232,80 @@ function CouponSection({
   );
 }
 
+// ── Payment method display data ───────────────────────────────────────────────
+// Presentation-only: labels, copy, and badges shown on the payment method
+// cards below. This does not affect which gateways are actually available
+// (that's still driven entirely by `availableGateways`, from
+// /api/payments/gateways) or how a method is submitted (see the handle*
+// functions further down, which are untouched).
+interface PaymentOption {
+  id: PayMethod;
+  label: string;
+  description: string;
+  badges: string[];
+}
+
+const PAYMENT_OPTIONS: PaymentOption[] = [
+  {
+    id: "payfast",
+    label: "PayFast",
+    description: "Secure card, EFT and digital wallet payments",
+    badges: ["Visa", "Mastercard", "Instant EFT", "SnapScan"],
+  },
+  {
+    id: "ozow",
+    label: "Ozow",
+    description: "Pay instantly from your bank account",
+    badges: ["Instant EFT"],
+  },
+  {
+    id: "happypay",
+    label: "HappyPay",
+    description: "Buy now, pay later with instalments",
+    badges: ["Pay in instalments"],
+  },
+  {
+    id: "google_pay",
+    label: "Google Pay",
+    description: "Pay using your saved Google payment methods",
+    badges: ["Google Pay"],
+  },
+];
+
+// Local brand assets — drop the real files in place at these paths:
+//   /public/payment/payfast.svg
+//   /public/payment/ozow.svg
+//   /public/payment/happypay.svg
+//   /public/payment/google-pay.svg
+// GatewayLogo below falls back to a neutral card glyph if a file is
+// missing or fails to load, so an absent logo never breaks the layout.
+const GATEWAY_LOGOS: Record<PayMethod, string> = {
+  payfast: "/payment/payfast.svg",
+  ozow: "/payment/ozow.svg",
+  happypay: "/payment/happypay.svg",
+  google_pay: "/payment/google-pay.svg",
+};
+
+function GatewayLogo({ id }: { id: PayMethod }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <span className="payment-method-logo" aria-hidden="true">
+      {failed ? (
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="5" width="20" height="14" rx="2.5" />
+          <path d="M2 10h20" />
+          <path d="M6 15h4" />
+        </svg>
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element -- small local
+        // brand SVG with an onError fallback; next/image's optimizer blocks
+        // SVG sources without extra next.config setup.
+        <img src={GATEWAY_LOGOS[id]} alt="" onError={() => setFailed(true)} />
+      )}
+    </span>
+  );
+}
+
 // ── Main checkout page ────────────────────────────────────────────────────────
 
 export default function CheckoutPage() {
@@ -455,6 +529,7 @@ export default function CheckoutPage() {
   };
 
   const isFormValid = form.name.trim() && form.whatsapp.trim() && form.address.trim() && form.city.trim();
+  const selectedPaymentOption = PAYMENT_OPTIONS.find((opt) => opt.id === payMethod);
 
   if (loading) {
     return (
@@ -575,26 +650,44 @@ export default function CheckoutPage() {
             {/* Payment method */}
             <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem", marginBottom: "1rem" }}>
               <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>Payment method</h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                {[
-                  { id: "payfast" as PayMethod, label: "PayFast", sub: "Card, EFT, Instant EFT, SnapScan & more" },
-                  { id: "ozow" as PayMethod, label: "Ozow", sub: "Instant EFT — pay straight from your bank app" },
-                  { id: "happypay" as PayMethod, label: "HappyPay", sub: "Buy now, pay later — split into instalments" },
-                  { id: "google_pay" as PayMethod, label: "Google Pay", sub: "Pay instantly with your saved Google card" },
-                ].filter((opt) => availableGateways.has(opt.id)).map((opt) => (
-                  <button key={opt.id} onClick={() => setPayMethod(opt.id)}
-                    style={{ display: "flex", alignItems: "center", gap: "1rem", padding: "1rem 1.25rem", borderRadius: 14, border: `1.5px solid ${payMethod === opt.id ? "var(--plum)" : "rgba(155,127,184,0.2)"}`, background: payMethod === opt.id ? "var(--plum-t)" : "#fff", textAlign: "left", cursor: "pointer" }}>
-                    <div style={{ width: 20, height: 20, borderRadius: "50%", border: `2px solid ${payMethod === opt.id ? "var(--plum)" : "#E0E0E0"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      {payMethod === opt.id && <div style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--plum)" }} />}
-                    </div>
-                    <div>
-                      <p style={{ fontWeight: 500, fontSize: "0.95rem", margin: 0 }}>{opt.label}</p>
-                      <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: 0 }}>{opt.sub}</p>
-                    </div>
-                  </button>
-                ))}
+              <div className="payment-method-list">
+                {PAYMENT_OPTIONS.filter((opt) => availableGateways.has(opt.id)).map((opt) => {
+                  const selected = payMethod === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setPayMethod(opt.id)}
+                      aria-pressed={selected}
+                      className={`payment-method-card${selected ? " payment-method-card--selected" : ""}`}
+                    >
+                      {selected && (
+                        <span className="payment-method-check" aria-hidden="true">
+                          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        </span>
+                      )}
+                      <GatewayLogo id={opt.id} />
+                      <p className="payment-method-name">{opt.label}</p>
+                      <p className="payment-method-desc">{opt.description}</p>
+                      <div className="payment-method-badges">
+                        {opt.badges.map((badge) => (
+                          <span key={badge} className="payment-method-badge">{badge}</span>
+                        ))}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
+
+            {/* Selected payment summary */}
+            {selectedPaymentOption && (
+              <p className="payment-selected-summary">
+                Selected payment: <span className="payment-selected-summary-value">{selectedPaymentOption.label}</span>
+              </p>
+            )}
 
             {/* Pay buttons */}
             {payMethod === "payfast" && (

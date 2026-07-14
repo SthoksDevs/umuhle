@@ -184,6 +184,133 @@ button { cursor: pointer; font-family: var(--font-body); }
   }
 }
 
+/* ── Checkout: payment method cards ── */
+.payment-method-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.payment-method-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-radius: 14px;
+  border: 1.5px solid rgba(155, 127, 184, 0.18);
+  background: #fff;
+  text-align: left;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.payment-method-card:hover {
+  border-color: rgba(155, 127, 184, 0.45);
+  box-shadow: 0 4px 16px rgba(155, 127, 184, 0.14);
+  transform: translateY(-1px);
+}
+
+.payment-method-card:focus-visible {
+  outline: 2px solid var(--plum);
+  outline-offset: 2px;
+}
+
+.payment-method-card--selected,
+.payment-method-card--selected:hover {
+  border-color: var(--plum);
+  background: var(--plum-t);
+}
+
+.payment-method-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: #FAFAFA;
+  border: 1px solid rgba(155, 127, 184, 0.12);
+  color: var(--light);
+  overflow: hidden;
+}
+
+.payment-method-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 6px;
+  box-sizing: border-box;
+}
+
+.payment-method-check {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--plum);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(122, 95, 153, 0.35);
+}
+
+.payment-method-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--onyx);
+  margin: 0;
+}
+
+.payment-method-desc {
+  font-size: 0.8rem;
+  color: var(--grey);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.payment-method-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.payment-method-badge {
+  display: inline-flex;
+  align-items: center;
+  background: #F1F0F2;
+  color: var(--grey);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0.35rem 0.6rem;
+  border-radius: 100px;
+  white-space: nowrap;
+}
+
+.payment-method-card--selected .payment-method-badge {
+  background: rgba(255, 255, 255, 0.75);
+}
+
+/* ── Checkout: selected payment summary ── */
+.payment-selected-summary {
+  font-size: 0.8rem;
+  color: var(--grey);
+  padding: 0 0.15rem;
+  margin-bottom: 0.75rem;
+}
+
+.payment-selected-summary-value {
+  color: var(--plum-d);
+  font-weight: 600;
+}
+
 /* ── Multi-select highlight ── */
 select[multiple] option:checked {
   background: var(--plum-t);
