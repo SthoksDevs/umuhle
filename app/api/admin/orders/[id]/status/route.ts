@@ -13,7 +13,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { creditOrderPayouts } from "@/lib/payouts";
+import { creditOrderPayouts, type OrderPayoutItemResult } from "@/lib/payouts";
 
 const ORDER_STATUSES = ["pending_payment", "paid", "processing", "shipped", "delivered", "cancelled"] as const;
 type OrderStatus = typeof ORDER_STATUSES[number];
@@ -70,7 +70,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: error?.message ?? "Order not found" }, { status: 404 });
   }
 
-  let payout: { creditedItems: number; skipped: number } | null = null;
+  let payout: { creditedItems: number; skipped: number; results: OrderPayoutItemResult[] } | null = null;
   if (status === "delivered") {
     try {
       payout = await creditOrderPayouts(service, orderId);

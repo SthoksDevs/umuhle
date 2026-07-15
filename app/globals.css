@@ -184,45 +184,172 @@ button { cursor: pointer; font-family: var(--font-body); }
   }
 }
 
-/* ── Checkout: payment method cards ── */
-.payment-method-list {
-  display: flex;
-  flex-direction: column;
+/* ── Checkout: payment method grid (2 per row) ── */
+.payment-method-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 0.75rem;
 }
 
-.payment-method-card {
+.payment-tile {
   position: relative;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   width: 100%;
-  gap: 0.5rem;
-  padding: 1rem;
+  gap: 0.55rem;
+  padding: 1rem 0.75rem 0.85rem;
   border-radius: 14px;
   border: 1.5px solid rgba(155, 127, 184, 0.18);
   background: #fff;
-  text-align: left;
   font-family: var(--font-body);
   cursor: pointer;
   transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
 }
 
-.payment-method-card:hover {
+.payment-tile:hover {
   border-color: rgba(155, 127, 184, 0.45);
   box-shadow: 0 4px 16px rgba(155, 127, 184, 0.14);
   transform: translateY(-1px);
 }
 
-.payment-method-card:focus-visible {
+.payment-tile:focus-visible {
   outline: 2px solid var(--plum);
   outline-offset: 2px;
 }
 
-.payment-method-card--selected,
-.payment-method-card--selected:hover {
+.payment-tile--selected,
+.payment-tile--selected:hover {
   border-color: var(--plum);
   background: var(--plum-t);
+}
+
+.payment-tile-logo-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 52px;
+  border-radius: 10px;
+  background: #FAFAFA;
+  border: 1px solid rgba(155, 127, 184, 0.12);
+  color: var(--light);
+  overflow: hidden;
+}
+
+.payment-tile-logo-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 8px;
+  box-sizing: border-box;
+  /* Unselected gateways read as greyed-out/inactive; the chosen one snaps
+     to full colour so the grid reads at a glance without needing to rely
+     on the corner check alone. */
+  filter: grayscale(1);
+  opacity: 0.5;
+  transition: filter 0.2s ease, opacity 0.2s ease;
+}
+
+.payment-tile--selected .payment-tile-logo-wrap img {
+  filter: grayscale(0);
+  opacity: 1;
+}
+
+.payment-tile-check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--plum);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(122, 95, 153, 0.35);
+}
+
+.payment-tile-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--onyx);
+  margin: 0;
+}
+
+/* ── Checkout: selected gateway detail card ── */
+.payment-detail-card {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.9rem 1rem;
+  margin-top: 0.85rem;
+  border-radius: 14px;
+  background: var(--plum-t);
+  border: 1.5px solid rgba(155, 127, 184, 0.18);
+}
+
+.payment-detail-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid rgba(155, 127, 184, 0.12);
+  overflow: hidden;
+}
+
+.payment-detail-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 6px;
+  box-sizing: border-box;
+}
+
+.payment-detail-copy {
+  min-width: 0;
+}
+
+.payment-detail-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--onyx);
+  margin: 0 0 0.15rem;
+}
+
+.payment-detail-tagline {
+  font-size: 0.78rem;
+  color: var(--grey);
+  margin: 0;
+}
+
+/* ── Checkout: consolidated payment methods panel ──
+   PayFast fans out to many underlying networks, so its own card shows the
+   full logo collage; single-method gateways (Ozow, HappyPay, Google Pay)
+   show their one badge in the same panel shape for visual consistency. */
+.payment-methods-panel {
+  margin-top: 0.75rem;
+  padding: 0.85rem;
+  border-radius: 14px;
+  border: 1.5px solid rgba(155, 127, 184, 0.15);
+  background: #FAFAFA;
+}
+
+.payment-methods-panel img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 150px;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.payment-methods-panel .payment-method-badges {
+  justify-content: flex-start;
 }
 
 .payment-method-logo {
@@ -247,34 +374,6 @@ button { cursor: pointer; font-family: var(--font-body); }
   box-sizing: border-box;
 }
 
-.payment-method-check {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: var(--plum);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 6px rgba(122, 95, 153, 0.35);
-}
-
-.payment-method-name {
-  font-weight: 600;
-  font-size: 0.95rem;
-  color: var(--onyx);
-  margin: 0;
-}
-
-.payment-method-desc {
-  font-size: 0.8rem;
-  color: var(--grey);
-  line-height: 1.4;
-  margin: 0;
-}
-
 .payment-method-badges {
   display: flex;
   flex-wrap: wrap;
@@ -292,10 +391,6 @@ button { cursor: pointer; font-family: var(--font-body); }
   padding: 0.35rem 0.6rem;
   border-radius: 100px;
   white-space: nowrap;
-}
-
-.payment-method-card--selected .payment-method-badge {
-  background: rgba(255, 255, 255, 0.75);
 }
 
 /* ── Checkout: selected payment summary ── */

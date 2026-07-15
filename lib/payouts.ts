@@ -129,7 +129,22 @@ export async function creditBookingPayout(
   });
 
   if (rpcError) return { credited: false, reason: rpcError.message };
-  if (!creditedFlag) return { credited: false, reason: "Already credited" };
+
+  if (!creditedFlag) {
+    // The database says this (source_type, source_id) was already credited
+    // — but this booking's own payout_credited_at is still null, or we
+    // wouldn't have gotten this far (see the guard above). That mismatch
+    // means an earlier attempt got as far as crediting the wallet but never
+    // came back to flag it here, e.g. a crash between the two steps.
+    // Resync rather than leaving it stuck showing "Payout pending…"
+    // forever for money that's actually already sitting in the wallet.
+    await supabase
+      .from("bookings")
+      .update({ commission_cents: commissionCents, payout_cents: payoutCents, payout_credited_at: new Date().toISOString() })
+      .eq("id", bookingId)
+      .is("payout_credited_at", null);
+    return { credited: false, reason: "Already credited" };
+  }
 
   await supabase
     .from("bookings")
@@ -190,41 +205,69 @@ export async function recordOrderItemSplits(supabase: SupabaseClient, orderId: s
   }
 }
 
+export interface OrderPayoutItemResult {
+  itemId: string;
+  productName: string;
+  status: "credited" | "skipped";
+  reason?: string;
+}
+
 /**
  * Credits every partner's wallet for their items in a delivered order.
  * Idempotent per line item — safe to call every time an order's status is
- * set to "delivered".
+ * set to "delivered" (including re-saving "delivered" again as a manual
+ * retry — see the admin order detail page's "Retry wallet crediting").
+ *
+ * Returns a per-item breakdown (not just two counts) so the admin UI can
+ * show exactly what happened instead of a silent "skipped: 1" with no way
+ * to tell why.
  */
 export async function creditOrderPayouts(
   supabase: SupabaseClient,
   orderId: string
-): Promise<{ creditedItems: number; skipped: number }> {
+): Promise<{ creditedItems: number; skipped: number; results: OrderPayoutItemResult[] }> {
   const { data: order } = await supabase
     .from("orders")
     .select("id, status, discount_cents")
     .eq("id", orderId)
     .single();
 
-  if (!order || order.status !== "delivered") return { creditedItems: 0, skipped: 0 };
+  if (!order || order.status !== "delivered") return { creditedItems: 0, skipped: 0, results: [] };
 
   const { data: items } = await supabase
     .from("order_items")
     .select("id, quantity, unit_price, commission_cents, payout_cents, payout_credited_at, product:products(partner_id, name, is_umuhle_product)")
     .eq("order_id", orderId);
 
-  if (!items || items.length === 0) return { creditedItems: 0, skipped: 0 };
+  if (!items || items.length === 0) return { creditedItems: 0, skipped: 0, results: [] };
 
   const subtotal = items.reduce((s, i) => s + i.unit_price * i.quantity, 0);
   const discount = order.discount_cents ?? 0;
 
   let creditedItems = 0;
   let skipped = 0;
+  const results: OrderPayoutItemResult[] = [];
 
   for (const item of items) {
-    if (item.payout_credited_at) { skipped++; continue; }
-
     const product = Array.isArray(item.product) ? item.product[0] : item.product;
-    if (!product?.partner_id || product.is_umuhle_product) { skipped++; continue; }
+    const productName = product?.name ?? "product";
+
+    if (item.payout_credited_at) {
+      skipped++;
+      results.push({ itemId: item.id, productName, status: "skipped", reason: "Already credited" });
+      continue;
+    }
+
+    if (!product?.partner_id) {
+      skipped++;
+      results.push({ itemId: item.id, productName, status: "skipped", reason: "No partner linked to this product" });
+      continue;
+    }
+    if (product.is_umuhle_product) {
+      skipped++;
+      results.push({ itemId: item.id, productName, status: "skipped", reason: "Umuhle-direct product — no partner payout" });
+      continue;
+    }
 
     const lineGross = item.unit_price * item.quantity;
     const { commissionCents, payoutCents } =
@@ -237,13 +280,31 @@ export async function creditOrderPayouts(
     const { data: creditedFlag, error: rpcError } = await supabase.rpc("credit_wallet_earning", {
       p_profile_id: product.partner_id,
       p_amount_cents: payoutCents,
-      p_description: `Order payout — ${product.name ?? "product"} × ${item.quantity} (${fmtR(lineGross)} less 5.5% Umuhle commission)`,
+      p_description: `Order payout — ${productName} × ${item.quantity} (${fmtR(lineGross)} less 5.5% Umuhle commission)`,
       p_source_type: "order_item",
       p_source_id: item.id,
       p_hold_days: PAYOUT_HOLD_DAYS,
     });
 
-    if (rpcError || !creditedFlag) { skipped++; continue; }
+    if (rpcError) {
+      skipped++;
+      results.push({ itemId: item.id, productName, status: "skipped", reason: rpcError.message });
+      continue;
+    }
+
+    if (!creditedFlag) {
+      // Same resync as creditBookingPayout: the wallet already has this
+      // credit from an earlier attempt, but this item's own flag never got
+      // set. Fix the flag rather than leaving it looking un-paid forever.
+      await supabase
+        .from("order_items")
+        .update({ commission_cents: commissionCents, payout_cents: payoutCents, payout_credited_at: new Date().toISOString() })
+        .eq("id", item.id)
+        .is("payout_credited_at", null);
+      skipped++;
+      results.push({ itemId: item.id, productName, status: "skipped", reason: "Already credited" });
+      continue;
+    }
 
     await supabase
       .from("order_items")
@@ -255,7 +316,8 @@ export async function creditOrderPayouts(
       .eq("id", item.id);
 
     creditedItems++;
+    results.push({ itemId: item.id, productName, status: "credited" });
   }
 
-  return { creditedItems, skipped };
+  return { creditedItems, skipped, results };
 }

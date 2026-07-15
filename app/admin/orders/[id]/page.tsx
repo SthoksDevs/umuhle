@@ -40,6 +40,19 @@ interface OrderItemRow {
   product?: { id: string; name: string; image_url: string | null; category: string | null } | null;
 }
 
+interface PayoutItemResult {
+  itemId: string;
+  productName: string;
+  status: "credited" | "skipped";
+  reason?: string;
+}
+
+interface PayoutResult {
+  creditedItems: number;
+  skipped: number;
+  results: PayoutItemResult[];
+}
+
 interface OrderDetail {
   id: string;
   client_id: string;
@@ -100,6 +113,8 @@ export default function AdminOrderDetailPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [payoutResult, setPayoutResult] = useState<PayoutResult | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   // ── Admin gate ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -142,35 +157,65 @@ export default function AdminOrderDetailPage() {
     if (authChecked) loadOrder();
   }, [authChecked, loadOrder]);
 
+  const postStatus = async (status: OrderStatus) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) { setStatusError("Not authenticated."); return null; }
+
+    // Routed through a server endpoint (rather than a direct client-side
+    // update) because marking an order "delivered" is also what credits
+    // each partner's payout — see /api/admin/orders/[id]/status.
+    const res = await fetch(`/api/admin/orders/${order!.id}/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ status }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      setStatusError(json?.error ?? "Couldn't update this order.");
+      return null;
+    }
+    return json as { payout: PayoutResult | null };
+  };
+
   const handleUpdateStatus = async () => {
     if (!order || statusDraft === order.status) return;
     setSaving(true);
     setStatusError(null);
+    setPayoutResult(null);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-      if (!token) { setStatusError("Not authenticated."); return; }
-
-      // Routed through a server endpoint (rather than a direct client-side
-      // update) because marking an order "delivered" is also what credits
-      // each partner's payout — see /api/admin/orders/[id]/status.
-      const res = await fetch(`/api/admin/orders/${order.id}/status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ status: statusDraft }),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        setStatusError(json?.error ?? "Couldn't update this order.");
-        return;
-      }
+      const json = await postStatus(statusDraft);
+      if (!json) return;
       setOrder({ ...order, status: statusDraft });
+      setPayoutResult(json.payout);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch {
       setStatusError("Couldn't update this order. Please try again.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  // For an order that's already "delivered" but shows items still awaiting
+  // payout (payout_credited_at never got set — e.g. the wallet-crediting
+  // function errored the first time), re-saving "delivered" through the
+  // same dropdown does nothing because statusDraft already equals
+  // order.status. This re-runs crediting directly without needing a fake
+  // status change — safe to click any number of times, since
+  // creditOrderPayouts() only ever acts on items it hasn't already credited.
+  const handleRetryPayout = async () => {
+    if (!order) return;
+    setRetrying(true);
+    setStatusError(null);
+    try {
+      const json = await postStatus("delivered");
+      if (!json) return;
+      setPayoutResult(json.payout);
+    } catch {
+      setStatusError("Couldn't retry wallet crediting. Please try again.");
+    } finally {
+      setRetrying(false);
     }
   };
 
@@ -256,8 +301,33 @@ export default function AdminOrderDetailPage() {
               Marking this delivered will credit each partner&apos;s wallet with their 94.5% share (5.5% commission kept by Umuhle).
             </p>
           )}
+          {order.status === "delivered" && (
+            <button
+              onClick={handleRetryPayout}
+              disabled={retrying}
+              className="btn-outline"
+              style={{ padding: "0.5rem 1.1rem", fontSize: "0.8rem" }}
+            >
+              {retrying ? "Retrying…" : "Retry wallet crediting"}
+            </button>
+          )}
           {statusError && (
             <p style={{ width: "100%", fontSize: "0.8rem", color: "#BF360C", margin: 0 }}>{statusError}</p>
+          )}
+          {payoutResult && (
+            <div style={{ width: "100%", background: "#FAFAFA", borderRadius: 12, padding: "0.85rem 1rem", fontSize: "0.8rem" }}>
+              <p style={{ margin: "0 0 0.5rem", fontWeight: 600, color: "var(--onyx)" }}>
+                Wallet crediting: {payoutResult.creditedItems} credited, {payoutResult.skipped} skipped
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                {payoutResult.results.map((r) => (
+                  <p key={r.itemId} style={{ margin: 0, color: r.status === "credited" ? "#2E7D32" : "#E65100" }}>
+                    {r.status === "credited" ? "✓" : "•"} {r.productName}
+                    {r.reason ? <span style={{ color: "var(--light)" }}> — {r.reason}</span> : null}
+                  </p>
+                ))}
+              </div>
+            </div>
           )}
         </div>
 

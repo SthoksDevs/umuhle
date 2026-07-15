@@ -242,6 +242,7 @@ interface PaymentOption {
   id: PayMethod;
   label: string;
   description: string;
+  tagline: string;
   badges: string[];
 }
 
@@ -250,24 +251,28 @@ const PAYMENT_OPTIONS: PaymentOption[] = [
     id: "payfast",
     label: "PayFast",
     description: "Secure card, EFT and digital wallet payments",
+    tagline: "Cards & Instant EFT with PayFast",
     badges: ["Visa", "Mastercard", "Instant EFT", "SnapScan"],
   },
   {
     id: "ozow",
     label: "Ozow",
     description: "Pay instantly from your bank account",
+    tagline: "Instant EFT with Ozow",
     badges: ["Instant EFT"],
   },
   {
     id: "happypay",
     label: "HappyPay",
     description: "Buy now, pay later with instalments",
+    tagline: "Buy Now, Pay Later with HappyPay",
     badges: ["Pay in instalments"],
   },
   {
     id: "google_pay",
     label: "Google Pay",
     description: "Pay using your saved Google payment methods",
+    tagline: "Fast, secure checkout with Google Pay",
     badges: ["Google Pay"],
   },
 ];
@@ -286,10 +291,10 @@ const GATEWAY_LOGOS: Record<PayMethod, string> = {
   google_pay: "/payment/google-pay.svg",
 };
 
-function GatewayLogo({ id }: { id: PayMethod }) {
+function GatewayLogo({ id, className = "payment-method-logo" }: { id: PayMethod; className?: string }) {
   const [failed, setFailed] = useState(false);
   return (
-    <span className="payment-method-logo" aria-hidden="true">
+    <span className={className} aria-hidden="true">
       {failed ? (
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
           <rect x="2" y="5" width="20" height="14" rx="2.5" />
@@ -650,7 +655,10 @@ export default function CheckoutPage() {
             {/* Payment method */}
             <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem", marginBottom: "1rem" }}>
               <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>Payment method</h3>
-              <div className="payment-method-list">
+
+              {/* Grid of brand images — 2 per row. Selected = full colour
+                  with a corner tick; unselected = greyscaled. */}
+              <div className="payment-method-grid">
                 {PAYMENT_OPTIONS.filter((opt) => availableGateways.has(opt.id)).map((opt) => {
                   const selected = payMethod === opt.id;
                   return (
@@ -659,27 +667,55 @@ export default function CheckoutPage() {
                       type="button"
                       onClick={() => setPayMethod(opt.id)}
                       aria-pressed={selected}
-                      className={`payment-method-card${selected ? " payment-method-card--selected" : ""}`}
+                      aria-label={`${opt.label} — ${opt.description}`}
+                      className={`payment-tile${selected ? " payment-tile--selected" : ""}`}
                     >
                       {selected && (
-                        <span className="payment-method-check" aria-hidden="true">
+                        <span className="payment-tile-check" aria-hidden="true">
                           <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                             <polyline points="20 6 9 17 4 12" />
                           </svg>
                         </span>
                       )}
-                      <GatewayLogo id={opt.id} />
-                      <p className="payment-method-name">{opt.label}</p>
-                      <p className="payment-method-desc">{opt.description}</p>
-                      <div className="payment-method-badges">
-                        {opt.badges.map((badge) => (
-                          <span key={badge} className="payment-method-badge">{badge}</span>
-                        ))}
-                      </div>
+                      <GatewayLogo id={opt.id} className="payment-tile-logo-wrap" />
+                      <span className="payment-tile-name">{opt.label}</span>
                     </button>
                   );
                 })}
               </div>
+
+              {/* Selected gateway details — logo + a one-line description of
+                  what it offers. */}
+              {selectedPaymentOption && (
+                <div className="payment-detail-card">
+                  <GatewayLogo id={selectedPaymentOption.id} className="payment-detail-logo" />
+                  <div className="payment-detail-copy">
+                    <p className="payment-detail-title">{selectedPaymentOption.label}</p>
+                    <p className="payment-detail-tagline">{selectedPaymentOption.tagline}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Consolidated methods — PayFast fans out to many networks,
+                  so show the full logo collage; other gateways show their
+                  one badge in the same panel shape. */}
+              {selectedPaymentOption?.id === "payfast" ? (
+                <div className="payment-methods-panel">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src="/payment/payfast-payment-methods-collage.webp"
+                    alt="Payment methods supported by PayFast: Visa, Mastercard, Instant EFT, SnapScan and more"
+                  />
+                </div>
+              ) : selectedPaymentOption ? (
+                <div className="payment-methods-panel">
+                  <div className="payment-method-badges">
+                    {selectedPaymentOption.badges.map((badge) => (
+                      <span key={badge} className="payment-method-badge">{badge}</span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             {/* Selected payment summary */}

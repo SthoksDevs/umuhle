@@ -41,7 +41,14 @@ function formatRand(cents: number) {
   return `R${(cents / 100).toFixed(2)}`;
 }
 
-/** Write one row to email_log. Never throws. */
+/**
+ * Write one row to email_log. Never throws.
+ *
+ * Stores the fully-rendered html/text alongside the metadata — that's what
+ * lets /api/cron/resend-emails replay a failed send exactly as originally
+ * composed, without re-fetching the underlying order/booking/etc. (which
+ * may have changed, or been deleted, by the time the retry runs).
+ */
 async function log(opts: {
   to:           string;
   subject:      string;
@@ -49,6 +56,8 @@ async function log(opts: {
   referenceId?: string;
   status:       "sent" | "failed";
   errorMsg?:    string;
+  html?:        string;
+  text?:        string;
 }) {
   try {
     await serviceClient().from("email_log").insert({
@@ -58,6 +67,8 @@ async function log(opts: {
       reference_id: opts.referenceId ?? null,
       status:       opts.status,
       error_msg:    opts.errorMsg ?? null,
+      html_body:    opts.html ?? null,
+      text_body:    opts.text ?? null,
     });
   } catch (e) {
     console.error("email_log write failed:", e);
@@ -96,33 +107,6 @@ async function send(opts: {
   const transporter = createTransport();
 
   try {
-    console.log("[EMAIL] Verifying SMTP connection...");
-
-    await transporter.verify();
-
-    console.log("[EMAIL] SMTP verification successful.");
-
-  } catch (err) {
-
-    const message =
-      err instanceof Error ? err.message : String(err);
-
-    console.error("[EMAIL] SMTP VERIFY FAILED");
-    console.error(message);
-
-    await log({
-      to: opts.to,
-      subject: opts.subject,
-      template: opts.template,
-      referenceId: opts.referenceId,
-      status: "failed",
-      errorMsg: `SMTP verify failed: ${message}`,
-    });
-
-    throw err;
-  }
-
-  try {
 
     console.log("[EMAIL] Sending email...");
 
@@ -144,6 +128,8 @@ async function send(opts: {
       template: opts.template,
       referenceId: opts.referenceId,
       status: "sent",
+      html: opts.html,
+      text: opts.text,
     });
 
     console.log("[EMAIL] Logged successful send.");
@@ -163,6 +149,8 @@ async function send(opts: {
       referenceId: opts.referenceId,
       status: "failed",
       errorMsg: message,
+      html: opts.html,
+      text: opts.text,
     });
 
     throw err;
@@ -217,6 +205,89 @@ async function sendToAll(
   console.log("==================================================");
 }
 
+// ── Resending a previously-failed email ────────────────────────────────────────
+// Used by /api/cron/resend-emails (see that route for the daily schedule and
+// the query that decides which rows are eligible). This module only knows
+// how to safely replay ONE row — policy (how old, how many retries, how
+// many per run) lives in the route, not here.
+
+export interface FailedEmailRow {
+  id: string;
+  to_address: string;
+  subject: string;
+  template: string;
+  reference_id: string | null;
+  html_body: string | null;
+  text_body: string | null;
+  retry_count: number | null;
+}
+
+export interface ResendOutcome {
+  id: string;
+  ok: boolean;
+  reason?: string;
+}
+
+/**
+ * Re-attempts a single previously-failed email_log row byte-for-byte — it
+ * replays the html/text that was captured at the original send time rather
+ * than re-deriving content from the order/booking/etc., which may have
+ * changed (or been deleted) by the time a retry runs, days later.
+ *
+ * On success: writes a fresh email_log row for the new attempt (so the full
+ * history stays intact — original failure + successful resend both visible
+ * in the Emails tab) and stamps `resent_at` on the ORIGINAL row so the
+ * dashboard can show "✓ Resent" instead of retrying it again tomorrow.
+ *
+ * On failure: bumps `retry_count` on the original row so the cron can stop
+ * retrying a permanently-bad address after a few days instead of forever.
+ *
+ * Never throws — always resolves with an outcome for the caller to tally.
+ */
+export async function resendFailedEmail(row: FailedEmailRow): Promise<ResendOutcome> {
+  if (!row.html_body && !row.text_body) {
+    // Rows logged before this feature shipped (or the admin_otp path, which
+    // is deliberately never resent) have nothing safe to replay.
+    return { id: row.id, ok: false, reason: "No stored content to resend." };
+  }
+
+  const service = serviceClient();
+
+  try {
+    const transporter = createTransport();
+    await transporter.sendMail({
+      from: `"Umuhle" <${process.env.SMTP_FROM ?? ADMIN_EMAIL}>`,
+      to: row.to_address,
+      subject: row.subject,
+      html: row.html_body ?? undefined,
+      text: row.text_body ?? undefined,
+    });
+
+    await log({
+      to: row.to_address,
+      subject: row.subject,
+      template: row.template,
+      referenceId: row.reference_id ?? undefined,
+      status: "sent",
+      html: row.html_body ?? undefined,
+      text: row.text_body ?? undefined,
+    });
+
+    await service.from("email_log").update({ resent_at: new Date().toISOString() }).eq("id", row.id);
+
+    return { id: row.id, ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    await service
+      .from("email_log")
+      .update({ retry_count: (row.retry_count ?? 0) + 1, error_msg: `Retry failed: ${message}` })
+      .eq("id", row.id);
+
+    return { id: row.id, ok: false, reason: message };
+  }
+}
+
 // ── Admin OTP ──────────────────────────────────────────────────────────────────
 // Used by app/api/admin/otp/route.ts. Previously that route sent OTP emails
 // with its own private nodemailer call and never wrote to `email_log`, which
@@ -256,6 +327,14 @@ function emailWrapper(title: string, body: string) {
         Umuhle · Beauty booking & shopping platform · <a href="https://umuhle.co.za" style="color:#9B7FB8;text-decoration:none">umuhle.co.za</a>
       </p>
     </div>`;
+}
+
+// Always resolves to the CURRENT status of the order/booking, regardless of
+// how long ago the email was sent (or resent) — see app/track/[type]/[id]/route.ts.
+// Unlike the one-time gateway return_url query params, this link stays
+// meaningful even in a resend days later.
+function trackUrl(type: "order" | "booking", id: string) {
+  return `https://umuhle.co.za/track/${type}/${id}`;
 }
 
 function detailTable(rows: Array<[string, string]>) {
@@ -308,7 +387,7 @@ export async function sendBookingConfirmedEmail(opts: {
       subject:     `Your booking is confirmed — ${opts.serviceName} with ${opts.artistName}`,
       template:    "booking_confirmed_customer",
       referenceId: opts.bookingId,
-      text:        `Hi ${opts.clientName},\n\nYour booking is confirmed!\n\nArtist: ${opts.artistName}\nService: ${opts.serviceName}\nDate: ${opts.date} at ${opts.time}\nAmount paid: ${amountStr}${opts.meetingAddress ? `\nLocation: ${opts.meetingAddress}` : ""}\n\nYou'll also receive a WhatsApp message shortly. See you then!\n\nUmuhle`,
+      text:        `Hi ${opts.clientName},\n\nYour booking is confirmed!\n\nArtist: ${opts.artistName}\nService: ${opts.serviceName}\nDate: ${opts.date} at ${opts.time}\nAmount paid: ${amountStr}${opts.meetingAddress ? `\nLocation: ${opts.meetingAddress}` : ""}\n\nYou'll also receive a WhatsApp message shortly. See you then!\n\nView your booking: ${trackUrl("booking", opts.bookingId)}\n\nUmuhle`,
       html:        emailWrapper(`Your booking is confirmed 🎉`, `
         <p style="margin:0 0 1.25rem">Hi ${opts.clientName},</p>
         <p style="margin:0 0 1.25rem">Your booking is confirmed and payment of <strong>${amountStr}</strong> has been received.</p>
@@ -319,7 +398,8 @@ export async function sendBookingConfirmedEmail(opts: {
           ["Amount paid", `<strong style="color:#2B6B45">${amountStr}</strong>`],
           ...(opts.meetingAddress ? [["Location", opts.meetingAddress] as [string, string]] : []),
         ])}
-        <p style="margin:1rem 0 0;font-size:0.875rem;color:#666">You'll also receive a WhatsApp message with the details. See you then! 💜</p>`),
+        <p style="margin:1rem 0 0;font-size:0.875rem;color:#666">You'll also receive a WhatsApp message with the details. See you then! 💜</p>
+        <p style="margin:1rem 0 0"><a href="${trackUrl("booking", opts.bookingId)}" style="color:#9B7FB8;font-weight:600;text-decoration:none">View your booking status →</a></p>`),
     });
   }
 }
@@ -366,9 +446,10 @@ export async function sendBookingFailedEmail(opts: {
         : `Payment failed — ${opts.serviceName}`,
       template:    `booking_payment_${opts.reason}_customer`,
       referenceId: opts.bookingId,
-      text:        isCancel
-        ? `Hi ${opts.clientName},\n\nYour payment for ${opts.serviceName} on ${opts.date} at ${opts.time} was cancelled. No charge was made and no booking was created.\n\nYou can try again at umuhle.co.za.\n\nUmuhle`
-        : `Hi ${opts.clientName},\n\nYour payment for ${opts.serviceName} on ${opts.date} at ${opts.time} could not be processed. No charge was made.\n\nPlease check your card details and try again, or contact your bank. If the problem persists, email us at info@umuhle.co.za.\n\nUmuhle`,
+      text:        (isCancel
+        ? `Hi ${opts.clientName},\n\nYour payment for ${opts.serviceName} on ${opts.date} at ${opts.time} was cancelled. No charge was made and no booking was created.\n\nYou can try again at umuhle.co.za.`
+        : `Hi ${opts.clientName},\n\nYour payment for ${opts.serviceName} on ${opts.date} at ${opts.time} could not be processed. No charge was made.\n\nPlease check your card details and try again, or contact your bank. If the problem persists, email us at info@umuhle.co.za.`
+      ) + `\n\nCheck this booking's status: ${trackUrl("booking", opts.bookingId)}\n\nUmuhle`,
       html:        emailWrapper(
         isCancel ? "Payment cancelled" : "Payment failed",
         `<p style="margin:0 0 1rem">Hi ${opts.clientName},</p>
@@ -376,10 +457,11 @@ export async function sendBookingFailedEmail(opts: {
            ? `Your payment for <strong>${opts.serviceName}</strong> on ${opts.date} at ${opts.time} was cancelled. No charge was made and no booking was created.`
            : `Your payment for <strong>${opts.serviceName}</strong> on ${opts.date} at ${opts.time} could not be processed. No charge was made.`
          }</p>
-         <p style="margin:0;font-size:0.875rem;color:#666">${isCancel
+         <p style="margin:0 0 1.25rem;font-size:0.875rem;color:#666">${isCancel
            ? `You can <a href="https://umuhle.co.za" style="color:#9B7FB8">try again</a> whenever you're ready.`
            : `Please check your card details and try again, or contact your bank. Still having trouble? <a href="mailto:info@umuhle.co.za" style="color:#9B7FB8">Email us</a>.`
-         }</p>`
+         }</p>
+         <p style="margin:0"><a href="${trackUrl("booking", opts.bookingId)}" style="color:#9B7FB8;font-weight:600;text-decoration:none">Check this booking's status →</a></p>`
       ),
     });
   }
@@ -438,13 +520,14 @@ export async function sendOrderPaidEmail(opts: {
       subject:     `Your Umuhle order is confirmed — ${amountStr}`,
       template:    "order_paid_customer",
       referenceId: opts.orderId,
-      text:        `Hi ${opts.clientName},\n\nThank you for your order! Payment of ${amountStr} has been received.\n\nOrder ref: ${opts.orderId}\n\nItems:\n${itemText}${opts.shippingAddress ? `\n\nShipping to: ${opts.shippingAddress}` : ""}\n\nWe'll be in touch once your order is on its way.\n\nUmuhle`,
+      text:        `Hi ${opts.clientName},\n\nThank you for your order! Payment of ${amountStr} has been received.\n\nOrder ref: ${opts.orderId}\n\nItems:\n${itemText}${opts.shippingAddress ? `\n\nShipping to: ${opts.shippingAddress}` : ""}\n\nWe'll be in touch once your order is on its way.\n\nTrack your order: ${trackUrl("order", opts.orderId)}\n\nUmuhle`,
       html:        emailWrapper(`Your order is confirmed 🛍️`, `
         <p style="margin:0 0 1.25rem">Hi ${opts.clientName}, thank you for your order!</p>
         <p style="margin:0 0 1.25rem">Payment of <strong>${amountStr}</strong> has been received.</p>
         <p style="margin:0 0 0.5rem;font-size:0.8rem;color:#666">Order ref: <span style="font-family:monospace">${opts.orderId}</span></p>
         ${itemsTable}
-        <p style="margin:1rem 0 0;font-size:0.875rem;color:#666">We'll be in touch once your order is on its way. 💜</p>`),
+        <p style="margin:1rem 0 0;font-size:0.875rem;color:#666">We'll be in touch once your order is on its way. 💜</p>
+        <p style="margin:1rem 0 0"><a href="${trackUrl("order", opts.orderId)}" style="color:#9B7FB8;font-weight:600;text-decoration:none">Track your order →</a></p>`),
     });
   }
 }
@@ -481,9 +564,10 @@ export async function sendOrderFailedEmail(opts: {
       subject:     isCancel ? "Your order was cancelled" : "Your order payment failed",
       template:    `order_payment_${opts.reason}_customer`,
       referenceId: opts.orderId,
-      text:        isCancel
-        ? `Hi ${opts.clientName},\n\nYour order payment was cancelled. No charge was made.\n\nYou can try again at umuhle.co.za/shop.\n\nUmuhle`
-        : `Hi ${opts.clientName},\n\nYour payment of ${amountStr} could not be processed. No charge was made.\n\nPlease check your card details and try again, or contact us at info@umuhle.co.za.\n\nUmuhle`,
+      text:        (isCancel
+        ? `Hi ${opts.clientName},\n\nYour order payment was cancelled. No charge was made.\n\nYou can try again at umuhle.co.za/shop.`
+        : `Hi ${opts.clientName},\n\nYour payment of ${amountStr} could not be processed. No charge was made.\n\nPlease check your card details and try again, or contact us at info@umuhle.co.za.`
+      ) + `\n\nCheck this order's status: ${trackUrl("order", opts.orderId)}\n\nUmuhle`,
       html:        emailWrapper(
         isCancel ? "Order payment cancelled" : "Order payment failed",
         `<p style="margin:0 0 1rem">Hi ${opts.clientName},</p>
@@ -491,10 +575,11 @@ export async function sendOrderFailedEmail(opts: {
            ? "Your order payment was cancelled. No charge was made."
            : `Your payment of <strong>${amountStr}</strong> could not be processed. No charge was made.`
          }</p>
-         <p style="margin:0;font-size:0.875rem;color:#666">${isCancel
+         <p style="margin:0 0 1.25rem;font-size:0.875rem;color:#666">${isCancel
            ? `<a href="https://umuhle.co.za/shop" style="color:#9B7FB8">Continue shopping</a> whenever you're ready.`
            : `Please check your card details and <a href="https://umuhle.co.za/checkout" style="color:#9B7FB8">try again</a>, or <a href="mailto:info@umuhle.co.za" style="color:#9B7FB8">contact us</a>.`
-         }</p>`
+         }</p>
+         <p style="margin:0"><a href="${trackUrl("order", opts.orderId)}" style="color:#9B7FB8;font-weight:600;text-decoration:none">Check this order's status →</a></p>`
       ),
     });
   }
@@ -652,4 +737,56 @@ export async function sendSalonPaidEmail(opts: {
         <p style="margin:1rem 0 0;font-size:0.875rem;color:#666">Your store is now visible on <a href="https://umuhle.co.za/stores" style="color:#9B7FB8">umuhle.co.za/stores</a>. 💜</p>`),
     });
   }
+}
+
+// ── Daily admin "pending items" digest ─────────────────────────────────────────
+// Used by the once-a-day /api/cron/admin-digest job. Each section mirrors a
+// filter already used somewhere in the admin dashboard (Stores/Products/Ads
+// "pending" tab, Payments' pending withdrawals) so the counts here always
+// match what admin would see by clicking into that tab.
+
+export interface PendingDigestItem {
+  title:    string;
+  subtitle?: string;
+  href?:    string;
+}
+
+export interface PendingDigestSection {
+  label: string;
+  count: number;
+  items: PendingDigestItem[];
+}
+
+export async function sendAdminPendingDigestEmail(opts: {
+  toEmail: string;
+  sections: PendingDigestSection[];
+}) {
+  const sections = opts.sections.filter((s) => s.count > 0);
+  const totalCount = sections.reduce((sum, s) => sum + s.count, 0);
+  if (totalCount === 0) return; // nothing pending — caller should skip, but don't send an empty "all clear" spam either way
+
+  const MAX_LISTED = 10;
+
+  const sectionsHtml = sections.map((sec) => `
+    <div style="margin-bottom:1.25rem">
+      <p style="font-weight:600;font-size:0.9rem;margin:0 0 0.5rem;color:#1a1a1a">${sec.label} <span style="color:#9B7FB8">(${sec.count})</span></p>
+      <ul style="margin:0;padding-left:1.1rem;font-size:0.85rem;color:#444;line-height:1.6">
+        ${sec.items.slice(0, MAX_LISTED).map((i) => `<li>${i.href ? `<a href="${i.href}" style="color:#333;text-decoration:underline">${i.title}</a>` : i.title}${i.subtitle ? ` <span style="color:#999">— ${i.subtitle}</span>` : ""}</li>`).join("")}
+        ${sec.count > MAX_LISTED ? `<li style="color:#999">…and ${sec.count - MAX_LISTED} more</li>` : ""}
+      </ul>
+    </div>`).join("");
+
+  const sectionsText = sections.map((sec) =>
+    `${sec.label} (${sec.count}):\n${sec.items.slice(0, MAX_LISTED).map((i) => `  - ${i.title}${i.subtitle ? ` — ${i.subtitle}` : ""}`).join("\n")}${sec.count > MAX_LISTED ? `\n  …and ${sec.count - MAX_LISTED} more` : ""}`
+  ).join("\n\n");
+
+  await sendToAll([opts.toEmail], {
+    subject:     `📋 ${totalCount} item${totalCount !== 1 ? "s" : ""} waiting for review on Umuhle`,
+    template:    "admin_pending_digest",
+    text:        `Daily pending-items summary\n\n${sectionsText}\n\nReview at https://umuhle.co.za/admin`,
+    html:        emailWrapper(`📋 ${totalCount} item${totalCount !== 1 ? "s" : ""} need your review`, `
+      <p style="margin:0 0 1.25rem;font-size:0.9rem;color:#666">Daily summary of everything waiting for action across the platform.</p>
+      ${sectionsHtml}
+      <p style="margin:1rem 0 0"><a href="https://umuhle.co.za/admin" style="color:#9B7FB8;font-weight:600;text-decoration:none">Open admin dashboard →</a></p>`),
+  });
 }

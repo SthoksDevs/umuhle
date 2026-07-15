@@ -15,6 +15,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { resendFailedEmail } from "@/lib/email";
 
 function serviceClient() {
   return createClient(
@@ -71,4 +72,35 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({ rows: data ?? [] });
+}
+
+// ── POST: manually resend one failed email ───────────────────────────────────
+// Same underlying resendFailedEmail() as the daily /api/cron/resend-emails
+// job — this just lets admin trigger it on demand for one row instead of
+// waiting for the next scheduled run.
+export async function POST(req: NextRequest) {
+  const service = await requireAdmin(req);
+  if (!service) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const body = await req.json().catch(() => null);
+  const id = body?.id as string | undefined;
+  if (!id) {
+    return NextResponse.json({ error: "Missing id" }, { status: 400 });
+  }
+
+  const { data: row, error } = await service
+    .from("email_log")
+    .select("id, to_address, subject, template, reference_id, html_body, text_body, retry_count")
+    .eq("id", id)
+    .eq("status", "failed")
+    .single();
+
+  if (error || !row) {
+    return NextResponse.json({ error: "Failed email not found" }, { status: 404 });
+  }
+
+  const outcome = await resendFailedEmail(row);
+  return NextResponse.json(outcome);
 }

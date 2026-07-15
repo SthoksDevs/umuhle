@@ -1384,6 +1384,10 @@ function BookingsTab({ supabase }: { supabase: ReturnType<typeof createClient> }
   const [filter, setFilter] = useState<BookingFilter>("all");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Populated after a "completed" call returns payout.reason (e.g. "Booking
+  // has no linked artist profile") — lets the "Payout pending…" line say
+  // why instead of leaving admin to guess.
+  const [payoutReasons, setPayoutReasons] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1425,12 +1429,23 @@ function BookingsTab({ supabase }: { supabase: ReturnType<typeof createClient> }
         return;
       }
       setBookings((prev) => prev.map((b) => (b.id === id ? { ...b, status, payout_credited_at: json?.payout?.credited ? new Date().toISOString() : b.payout_credited_at } : b)));
+      if (status === "completed") {
+        setPayoutReasons((prev) => ({ ...prev, [id]: json?.payout?.reason ?? "" }));
+      }
     } catch {
       setError("Couldn't update this booking. Please try again.");
     } finally {
       setActionLoading(null);
     }
   };
+
+  // "Mark completed" only appears while status is "in_progress" — once a
+  // booking is already "completed" but stuck showing "Payout pending…"
+  // (payout_credited_at never got set, e.g. the wallet function errored
+  // the first time), there was no way to re-trigger crediting. Re-POSTing
+  // "completed" is safe to repeat: creditBookingPayout() only ever acts
+  // once payout_credited_at is still null.
+  const retryPayout = (id: string) => changeStatus(id, "completed");
 
   return (
     <div>
@@ -1502,9 +1517,21 @@ function BookingsTab({ supabase }: { supabase: ReturnType<typeof createClient> }
                 </div>
 
                 {b.status === "completed" && (
-                  <p style={{ fontSize: "0.78rem", color: b.payout_credited_at ? "#2E7D32" : "#E65100", margin: "0 0 0.5rem" }}>
-                    {b.payout_credited_at ? "✓ Payout credited to artist wallet" : "Payout pending…"}
-                  </p>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap", marginBottom: "0.5rem" }}>
+                    <p style={{ fontSize: "0.78rem", color: b.payout_credited_at ? "#2E7D32" : "#E65100", margin: 0 }}>
+                      {b.payout_credited_at ? "✓ Payout credited to artist wallet" : "Payout pending…"}
+                      {!b.payout_credited_at && payoutReasons[b.id] ? ` (${payoutReasons[b.id]})` : ""}
+                    </p>
+                    {!b.payout_credited_at && (
+                      <button
+                        onClick={() => retryPayout(b.id)}
+                        disabled={busy}
+                        style={{ padding: "0.2rem 0.75rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "#fff", color: "var(--plum)", fontWeight: 500, fontSize: "0.75rem", cursor: busy ? "not-allowed" : "pointer" }}
+                      >
+                        {busy ? "Retrying…" : "Retry payout"}
+                      </button>
+                    )}
+                  </div>
                 )}
 
                 <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
@@ -2027,6 +2054,8 @@ interface EmailLogRow {
   status: "sent" | "failed";
   error_msg: string | null;
   sent_at: string;
+  resent_at: string | null;
+  retry_count: number;
 }
 
 function EmailLogTab({ supabase }: { supabase: ReturnType<typeof createClient> }) {
@@ -2034,6 +2063,8 @@ function EmailLogTab({ supabase }: { supabase: ReturnType<typeof createClient> }
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
   const [filter,  setFilter]  = useState<"all" | "sent" | "failed">("all");
+  const [resendingId, setResendingId] = useState<string | null>(null);
+  const [resendNotice, setResendNotice] = useState<Record<string, string>>({});
 
   // Reads via /api/admin/email-log (service-role on the server) rather than
   // querying `email_log` directly from the browser. The anon-key client used
@@ -2077,6 +2108,34 @@ function EmailLogTab({ supabase }: { supabase: ReturnType<typeof createClient> }
   }, [supabase, filter]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Same resendFailedEmail() the daily cron uses — this just triggers it for
+  // one row on demand instead of waiting for the next scheduled run.
+  const resendNow = async (id: string) => {
+    setResendingId(id);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) { setResendNotice((p) => ({ ...p, [id]: "Not authenticated." })); return; }
+
+      const res = await fetch("/api/admin/email-log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ id }),
+      });
+      const json = await res.json();
+      if (json?.ok) {
+        setRows((prev) => prev.map((r) => (r.id === id ? { ...r, resent_at: new Date().toISOString() } : r)));
+        setResendNotice((p) => ({ ...p, [id]: "Resent successfully." }));
+      } else {
+        setResendNotice((p) => ({ ...p, [id]: json?.reason ?? "Resend failed." }));
+      }
+    } catch {
+      setResendNotice((p) => ({ ...p, [id]: "Resend failed. Please try again." }));
+    } finally {
+      setResendingId(null);
+    }
+  };
 
   const fmt = (iso: string) => {
     const d = new Date(iso);
@@ -2129,6 +2188,25 @@ function EmailLogTab({ supabase }: { supabase: ReturnType<typeof createClient> }
                   {r.status === "failed" && r.error_msg && (
                     <p style={{ fontSize: "0.75rem", color: "#C62828", background: "#FFF5F5", borderRadius: 6, padding: "0.25rem 0.5rem", marginTop: "0.35rem" }}>{r.error_msg}</p>
                   )}
+                  {r.status === "failed" && (
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginTop: "0.4rem", flexWrap: "wrap" }}>
+                      {r.resent_at ? (
+                        <span style={{ fontSize: "0.72rem", color: "#2E7D32", fontWeight: 600 }}>✓ Resent {fmt(r.resent_at)}</span>
+                      ) : (
+                        <button
+                          onClick={() => resendNow(r.id)}
+                          disabled={resendingId === r.id}
+                          style={{ padding: "0.2rem 0.7rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "#fff", color: "var(--plum)", fontWeight: 500, fontSize: "0.72rem", cursor: resendingId === r.id ? "not-allowed" : "pointer" }}
+                        >
+                          {resendingId === r.id ? "Resending…" : "Resend now"}
+                        </button>
+                      )}
+                      {r.retry_count > 0 && !r.resent_at && (
+                        <span style={{ fontSize: "0.7rem", color: "var(--light)" }}>{r.retry_count} retry attempt{r.retry_count !== 1 ? "s" : ""} so far</span>
+                      )}
+                      {resendNotice[r.id] && <span style={{ fontSize: "0.72rem", color: "var(--grey)" }}>{resendNotice[r.id]}</span>}
+                    </div>
+                  )}
                 </div>
                 <span style={{ fontSize: "0.72rem", color: "#bbb", flexShrink: 0, whiteSpace: "nowrap" }}>{fmt(r.sent_at)}</span>
               </div>
@@ -2152,6 +2230,14 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+
+  // Lets the daily pending-items digest email link straight to e.g.
+  // /admin?tab=payments instead of just the dashboard's default tab.
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("tab") as AdminTab | null;
+    const validTabs: AdminTab[] = ["analytics", "salons", "users", "ads", "products", "orders", "bookings", "payments", "umuhle-products", "add-salon", "email-log"];
+    if (requested && validTabs.includes(requested)) setTab(requested);
+  }, []);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -2181,7 +2267,7 @@ export default function AdminDashboard() {
       { count: pendingWithdrawals },
       { data: pendingWdAmount },
     ] = await Promise.all([
-      supabase.from("profiles").select("*", { count: "exact", head: true }),
+      supabase.from("profiles").select("*", { count: "exact", head: true }).neq("email", SUPER_ADMIN_EMAIL),
       supabase.from("orders").select("*", { count: "exact", head: true }).eq("status", "paid"),
       supabase.from("orders").select("total_amount").eq("status", "paid"),
       supabase.from("orders").select("*", { count: "exact", head: true }).eq("status", "pending_payment"),
@@ -2199,6 +2285,7 @@ export default function AdminDashboard() {
     const { count: activeUsers } = await supabase
       .from("profiles")
       .select("*", { count: "exact", head: true })
+      .neq("email", SUPER_ADMIN_EMAIL)
       .gte("updated_at", thirtyDaysAgo);
 
     const totalVolume = (orderVolume ?? []).reduce((sum: number, o: { total_amount: number }) => sum + o.total_amount, 0);
