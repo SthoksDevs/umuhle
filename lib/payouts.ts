@@ -175,10 +175,17 @@ export async function recordOrderItemSplits(supabase: SupabaseClient, orderId: s
     .single();
   if (!order) return;
 
-  const { data: items } = await supabase
+  const { data: items, error: itemsError } = await supabase
     .from("order_items")
     .select("id, quantity, unit_price, commission_cents, product:products(is_umuhle_product)")
     .eq("order_id", orderId);
+  if (itemsError) {
+    // A failed query (e.g. a selected column missing from the live schema)
+    // must not be mistaken for "no items" — that's how this silently
+    // stopped pre-computing splits at sale time for a long stretch before.
+    console.error(`[recordOrderItemSplits] order_items query failed for order ${orderId}:`, itemsError.message);
+    return;
+  }
   if (!items || items.length === 0) return;
 
   const subtotal = items.reduce((s, i) => s + i.unit_price * i.quantity, 0);
@@ -225,7 +232,7 @@ export interface OrderPayoutItemResult {
 export async function creditOrderPayouts(
   supabase: SupabaseClient,
   orderId: string
-): Promise<{ creditedItems: number; skipped: number; results: OrderPayoutItemResult[] }> {
+): Promise<{ creditedItems: number; skipped: number; results: OrderPayoutItemResult[]; error?: string }> {
   const { data: order } = await supabase
     .from("orders")
     .select("id, status, discount_cents")
@@ -234,11 +241,20 @@ export async function creditOrderPayouts(
 
   if (!order || order.status !== "delivered") return { creditedItems: 0, skipped: 0, results: [] };
 
-  const { data: items } = await supabase
+  const { data: items, error: itemsError } = await supabase
     .from("order_items")
     .select("id, quantity, unit_price, commission_cents, payout_cents, payout_credited_at, product:products(partner_id, name, is_umuhle_product)")
     .eq("order_id", orderId);
 
+  if (itemsError) {
+    // This is the bug that produced "0 credited, 0 skipped" for every
+    // delivered order: a failed query (e.g. a column the schema doesn't
+    // have) was indistinguishable from "no items". Surface it instead —
+    // see 20260716_add_is_umuhle_product.sql for the root cause this
+    // specific error was hiding.
+    console.error(`[creditOrderPayouts] order_items query failed for order ${orderId}:`, itemsError.message);
+    return { creditedItems: 0, skipped: 0, results: [], error: `Query failed: ${itemsError.message}` };
+  }
   if (!items || items.length === 0) return { creditedItems: 0, skipped: 0, results: [] };
 
   const subtotal = items.reduce((s, i) => s + i.unit_price * i.quantity, 0);
