@@ -2800,6 +2800,10 @@ function ProductsManager({ user }: { user: { id: string } }) {
   );
 }
 
+// My Shop — products and ads used to be two tabs here (a free product list,
+// plus a separate ad-purchase tab that, as it turns out, had no way to
+// actually create an ad from the UI). They're merged now: this tab IS
+// listing management, and every listing is paid + promoted from the start.
 // ─── Orders to Fulfill (partner's own order_items) ─────────────────────────────
 //
 // Per-item, not per-order: this reads order_items directly (via the
@@ -2815,25 +2819,27 @@ type FulfillmentItem = {
   shipped_at: string | null;
   delivered_at: string | null;
   product: { id: string; name: string; image_url: string | null } | null;
- order: {
+  order: {
     id: string;
     status: string;
     created_at: string;
     contact_name: string | null;
-   shipping_address: string | null;
+    shipping_address: string | null;
     client?: { full_name: string } | null;
   } | null;
 };
 
 type FulfillmentFilter = "to-ship" | "shipped" | "all";
+
 function fulfillmentStatus(item: FulfillmentItem) {
-  if (item.delivered_at) return { label: "Delivered ✓", bg: "#E8F5E9", color: "#2E7D32" };
-  if (item.shipped_at) return { label: "Shipped — awaiting confirmation", bg: "#EDE7F6", color: "#4527A0" };
- return { label: "Awaiting shipment", bg: "#FFF3E0", color: "#E65100" };
+  if (item.delivered_at) return { cardBg: "#E8F5E9", badge: { label: "Delivered ✓", bg: "#fff", color: "#2E7D32" } };
+  if (item.shipped_at) return { cardBg: "#fff", badge: { label: "Shipped — awaiting customer confirmation", bg: "#EDE7F6", color: "#4527A0" } };
+  return { cardBg: "#FFF3E0", badge: null as { label: string; bg: string; color: string } | null };
 }
+
 function OrderFulfillmentManager({ user }: { user: { id: string } }) {
   const supabase = createClient();
- const [items, setItems] = useState<FulfillmentItem[]>([]);
+  const [items, setItems] = useState<FulfillmentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FulfillmentFilter>("to-ship");
   const [shippingId, setShippingId] = useState<string | null>(null);
@@ -2842,19 +2848,21 @@ function OrderFulfillmentManager({ user }: { user: { id: string } }) {
   const load = useCallback(async () => {
     setLoading(true);
     const { data } = await supabase
-     .from("order_items")
+      .from("order_items")
       .select(`
         id, order_id, quantity, unit_price, shipped_at, delivered_at,
         product:products!inner(id, name, image_url, partner_id),
         order:orders(id, status, created_at, contact_name, shipping_address, client:profiles!client_id(full_name))
       `)
-    .eq("product.partner_id", user.id)
-      .order("order_id", { ascending: false });
+      .eq("product.partner_id", user.id);
 
     // Nothing to fulfill on an order that hasn't paid yet or was cancelled.
     const rows = ((data ?? []) as unknown as FulfillmentItem[]).filter(
       (i) => i.order && i.order.status !== "pending_payment" && i.order.status !== "cancelled"
     );
+    // order_id is a UUID, not chronological — sort by the order's actual
+    // placed date instead, most recent first.
+    rows.sort((a, b) => new Date(b.order?.created_at ?? 0).getTime() - new Date(a.order?.created_at ?? 0).getTime());
     setItems(rows);
     setLoading(false);
   }, [supabase, user.id]);
@@ -2868,7 +2876,7 @@ function OrderFulfillmentManager({ user }: { user: { id: string } }) {
   }, [notice]);
 
   const handleShip = async (item: FulfillmentItem) => {
-   setShippingId(item.id);
+    setShippingId(item.id);
     setNotice(null);
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -2878,7 +2886,7 @@ function OrderFulfillmentManager({ user }: { user: { id: string } }) {
       const res = await fetch(`/api/vendor/order-items/${item.id}/ship`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-     });
+      });
       const json = await res.json();
       if (!res.ok) {
         setNotice(json?.error ?? "Couldn't mark this item as dispatched.");
@@ -2886,46 +2894,46 @@ function OrderFulfillmentManager({ user }: { user: { id: string } }) {
       }
       setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, shipped_at: json.item.shipped_at } : i)));
       setNotice(json.alreadyShipped ? "Already marked as dispatched." : "Marked as dispatched — the customer has been notified.");
-   } catch {
+    } catch {
       setNotice("Couldn't mark this item as dispatched. Please try again.");
     } finally {
       setShippingId(null);
     }
   };
 
- const filtered = items.filter((i) => {
+  const filtered = items.filter((i) => {
     if (filter === "to-ship") return !i.shipped_at;
     if (filter === "shipped") return Boolean(i.shipped_at) && !i.delivered_at;
     return true;
-});
+  });
 
   const toShipCount = items.filter((i) => !i.shipped_at).length;
 
- return (
+  return (
     <section style={{ marginBottom: "2.5rem" }}>
-     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "0.75rem" }}>
-      <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "0.75rem" }}>
+        <div>
           <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", margin: 0 }}>Orders to Fulfill</h2>
           <p style={{ color: "var(--grey)", fontSize: "0.82rem", margin: "0.2rem 0 0" }}>
             Mark your own items as dispatched — the customer gets a link to confirm receipt, which releases your payout.
           </p>
         </div>
         <div style={{ display: "flex", gap: "0.35rem" }}>
-         {([
+          {([
             { id: "to-ship", label: `To ship${toShipCount > 0 ? ` (${toShipCount})` : ""}` },
-           { id: "shipped", label: "Shipped" },
+            { id: "shipped", label: "Shipped" },
             { id: "all", label: "All" },
           ] as { id: FulfillmentFilter; label: string }[]).map((f) => (
-           <button
+            <button
               key={f.id}
               onClick={() => setFilter(f.id)}
               style={{
                 padding: "0.4rem 0.9rem",
-               borderRadius: 100,
+                borderRadius: 100,
                 border: "1.5px solid " + (filter === f.id ? "var(--plum)" : "rgba(155,127,184,0.25)"),
                 background: filter === f.id ? "var(--plum)" : "transparent",
                 color: filter === f.id ? "#fff" : "var(--grey)",
-               fontSize: "0.78rem",
+                fontSize: "0.78rem",
                 fontWeight: 600,
                 cursor: "pointer",
               }}
@@ -2941,26 +2949,27 @@ function OrderFulfillmentManager({ user }: { user: { id: string } }) {
           {notice}
         </p>
       )}
+
       {loading ? (
         <p style={{ color: "var(--grey)", fontSize: "0.85rem" }}>Loading…</p>
       ) : filtered.length === 0 ? (
         <p style={{ color: "var(--grey)", fontSize: "0.85rem" }}>
           {filter === "to-ship" ? "Nothing waiting on you right now." : "No items here yet."}
         </p>
-         ) : (
+      ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
           {filtered.map((item) => {
             const status = fulfillmentStatus(item);
             return (
-              <div key={item.id} style={{ border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, background: "#fff", padding: "1rem 1.25rem", display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+              <div key={item.id} style={{ border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, background: status.cardBg, padding: "1rem 1.25rem", display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
                 <div style={{ width: 44, height: 44, borderRadius: 10, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, overflow: "hidden" }}>
                   {item.product?.image_url ? (
-                   <Image src={item.product.image_url} alt={item.product.name} width={44} height={44} style={{ objectFit: "cover" }} />
+                    <Image src={item.product.image_url} alt={item.product.name} width={44} height={44} style={{ objectFit: "cover" }} />
                   ) : (
                     <span style={{ fontSize: "1.1rem" }}>🛍️</span>
                   )}
-                 </div>
-                 <div style={{ flex: 1, minWidth: 180 }}>
+                </div>
+                <div style={{ flex: 1, minWidth: 180 }}>
                   <p style={{ fontWeight: 500, fontSize: "0.9rem", margin: "0 0 0.15rem" }}>
                     {item.product?.name ?? "Product"} <span style={{ color: "var(--grey)" }}>× {item.quantity}</span>
                   </p>
@@ -2972,9 +2981,11 @@ function OrderFulfillmentManager({ user }: { user: { id: string } }) {
                     <p style={{ fontSize: "0.78rem", color: "var(--onyx)", margin: "0.2rem 0 0" }}>📍 {item.order.shipping_address}</p>
                   )}
                 </div>
-                <span style={{ background: status.bg, color: status.color, borderRadius: 100, padding: "0.25rem 0.75rem", fontSize: "0.74rem", fontWeight: 600, whiteSpace: "nowrap" }}>
-                  {status.label}
-                </span>
+                {status.badge && (
+                  <span style={{ background: status.badge.bg, color: status.badge.color, borderRadius: 100, padding: "0.25rem 0.75rem", fontSize: "0.74rem", fontWeight: 600, whiteSpace: "nowrap" }}>
+                    {status.badge.label}
+                  </span>
+                )}
                 {!item.shipped_at && (
                   <button
                     onClick={() => handleShip(item)}
@@ -2994,11 +3005,6 @@ function OrderFulfillmentManager({ user }: { user: { id: string } }) {
   );
 }
 
-
-// My Shop — products and ads used to be two tabs here (a free product list,
-// plus a separate ad-purchase tab that, as it turns out, had no way to
-// actually create an ad from the UI). They're merged now: this tab IS
-// listing management, and every listing is paid + promoted from the start.
 function MyShopTab({ user }: { user: { id: string } }) {
   return (
     <div>
