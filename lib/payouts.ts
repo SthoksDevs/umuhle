@@ -212,6 +212,11 @@ export async function recordOrderItemSplits(supabase: SupabaseClient, orderId: s
   }
 }
 
+export interface OrderItemPayoutResult {
+  credited: boolean;
+  reason?: string;
+}
+
 /**
  * Credits ONE partner's wallet for ONE order item...
  */
