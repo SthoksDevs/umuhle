@@ -206,6 +206,9 @@ export interface OrderItem {
   commission_cents: number | null; // Umuhle's 5.5% cut, recorded at payment time
   payout_cents: number | null;     // partner's 94.5% share
   payout_credited_at: string | null; // set once the payout has been credited to the partner's wallet
+  shipped_at: string | null;    // set when the partner marks this item dispatched
+  delivered_at: string | null;  // set when the customer confirms receipt via their confirm link
+  confirm_token: string | null; // opaque token backing the customer's confirm-receipt link
   product?: Product;
 }
 
