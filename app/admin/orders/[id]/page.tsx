@@ -51,6 +51,7 @@ interface PayoutResult {
   creditedItems: number;
   skipped: number;
   results: PayoutItemResult[];
+  error?: string;
 }
 
 interface OrderDetail {
@@ -315,18 +316,26 @@ export default function AdminOrderDetailPage() {
             <p style={{ width: "100%", fontSize: "0.8rem", color: "#BF360C", margin: 0 }}>{statusError}</p>
           )}
           {payoutResult && (
-            <div style={{ width: "100%", background: "#FAFAFA", borderRadius: 12, padding: "0.85rem 1rem", fontSize: "0.8rem" }}>
-              <p style={{ margin: "0 0 0.5rem", fontWeight: 600, color: "var(--onyx)" }}>
-                Wallet crediting: {payoutResult.creditedItems} credited, {payoutResult.skipped} skipped
-              </p>
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-                {payoutResult.results.map((r) => (
-                  <p key={r.itemId} style={{ margin: 0, color: r.status === "credited" ? "#2E7D32" : "#E65100" }}>
-                    {r.status === "credited" ? "✓" : "•"} {r.productName}
-                    {r.reason ? <span style={{ color: "var(--light)" }}> — {r.reason}</span> : null}
+            <div style={{ width: "100%", background: payoutResult.error ? "#FFF3E0" : "#FAFAFA", borderRadius: 12, padding: "0.85rem 1rem", fontSize: "0.8rem" }}>
+              {payoutResult.error ? (
+                <p style={{ margin: 0, fontWeight: 600, color: "#BF360C" }}>
+                  Wallet crediting failed: {payoutResult.error}
+                </p>
+              ) : (
+                <>
+                  <p style={{ margin: "0 0 0.5rem", fontWeight: 600, color: "var(--onyx)" }}>
+                    Wallet crediting: {payoutResult.creditedItems} credited, {payoutResult.skipped} skipped
                   </p>
-                ))}
-              </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                    {payoutResult.results.map((r) => (
+                      <p key={r.itemId} style={{ margin: 0, color: r.status === "credited" ? "#2E7D32" : "#E65100" }}>
+                        {r.status === "credited" ? "✓" : "•"} {r.productName}
+                        {r.reason ? <span style={{ color: "var(--light)" }}> — {r.reason}</span> : null}
+                      </p>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>
