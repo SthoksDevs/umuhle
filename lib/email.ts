@@ -532,6 +532,42 @@ export async function sendOrderPaidEmail(opts: {
   }
 }
 
+// ── Order item shipped / dispatched ─────────────────────────────────────────
+//
+// Per-item, not per-order: a single order can span multiple partners, so
+// each partner's "mark as dispatched" sends its own independent email with
+// its own confirm-receipt link — a customer with two partners in one order
+// gets two of these, one per item, whenever each partner ships separately.
+// See app/api/vendor/order-items/[id]/ship/route.ts, the only caller.
+
+function confirmReceiptUrl(token: string) {
+  return `https://umuhle.co.za/confirm-receipt/${token}`;
+}
+
+export async function sendOrderItemShippedEmail(opts: {
+  orderId:      string;
+  clientName:   string;
+  clientEmail:  string;
+  productName:  string;
+  quantity:     number;
+  confirmToken: string;
+}) {
+  if (!opts.clientEmail) return;
+  const link = confirmReceiptUrl(opts.confirmToken);
+
+  await sendToAll([opts.clientEmail], {
+    subject:     `Your Umuhle order is on its way!`,
+    template:    "order_item_shipped_customer",
+    referenceId: opts.orderId,
+    text:        `Hi ${opts.clientName},\n\nGood news — ${opts.productName} (× ${opts.quantity}) from your Umuhle order is on its way!\n\nOnce it arrives, please confirm receipt so we can release payment to the seller:\n${link}\n\nOrder ref: ${opts.orderId}\n\nUmuhle`,
+    html:        emailWrapper(`Your order is on its way! 📦`, `
+      <p style="margin:0 0 1rem">Hi ${opts.clientName}, good news — <strong>${opts.productName}</strong> (× ${opts.quantity}) from your order is on its way!</p>
+      <p style="margin:0 0 1.25rem;font-size:0.8rem;color:#666">Order ref: <span style="font-family:monospace">${opts.orderId}</span></p>
+      <p style="margin:0 0 1.5rem">Once it arrives, please confirm receipt below — this is what lets us release payment to the seller.</p>
+      <p style="margin:0"><a href="${link}" style="display:inline-block;background:#9B7FB8;color:#fff;font-weight:600;text-decoration:none;padding:0.75rem 1.5rem;border-radius:10px">I've received my order</a></p>`),
+  });
+}
+
 // ── Order cancelled / failed ──────────────────────────────────────────────────
 
 export async function sendOrderFailedEmail(opts: {
