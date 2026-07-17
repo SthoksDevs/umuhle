@@ -96,20 +96,12 @@ export default function ConfirmReceiptPage() {
           <>
             <p style={{ fontSize: "2.5rem", marginBottom: "0.75rem" }}>✓</p>
             <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.5rem", marginBottom: "0.5rem", color: "var(--onyx)" }}>
-              Delivery confirmed!
+              Thanks for confirming!
             </h1>
             <p style={{ color: "var(--grey)" }}>
-              {info?.productName ? (
-                <>
-                  Thank you for confirming that your{" "}
-                  <strong style={{ color: "var(--plum)" }}>
-                    {info.productName}
-                  </strong>{" "}
-                  has arrived safely.
-                </>
-              ) : (
-                "Thank you for confirming that your item has arrived safely."
-              )}
+              {info?.productName
+                ? `Glad ${info.productName} arrived safely.`
+                : "Glad your order arrived safely."}
             </p>
           </>
         ) : info ? (
@@ -133,6 +125,9 @@ export default function ConfirmReceiptPage() {
             <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.5rem", marginBottom: "0.5rem", color: "var(--onyx)" }}>
               Has this arrived?
             </h1>
+            <p style={{ color: "var(--grey)", marginBottom: "1.75rem" }}>
+              Only tap this once it&apos;s actually in your hands.
+            </p>
 
             {error && <p style={{ color: "#BF360C", fontSize: "0.85rem", marginBottom: "1rem" }}>{error}</p>}
 
