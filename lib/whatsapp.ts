@@ -290,6 +290,23 @@ export async function notifyOrderPaid(opts: {
   return sendTextMessage(opts.clientPhone, msg);
 }
 
+export async function notifyOrderItemShipped(opts: {
+  clientName: string;
+  clientPhone: string;
+  orderId: string;
+  productName: string;
+  quantity: number;
+  confirmToken: string;
+}) {
+  const link = `https://umuhle.co.za/confirm-receipt/${opts.confirmToken}`;
+  const msg =
+    `*Your order is on its way!*\n\n` +
+    `Hi ${opts.clientName}, ${opts.productName} (× ${opts.quantity}) from order #${opts.orderId.slice(0, 8).toUpperCase()} is on its way.\n\n` +
+    `Once it arrives, please confirm receipt so we can release payment to the seller:\n${link}`;
+
+  return sendTextMessage(opts.clientPhone, msg);
+}
+
 export async function notifyPartnerWelcome(opts: {
   partnerPhone: string;
   partnerName: string;
