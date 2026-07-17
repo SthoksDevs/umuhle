@@ -565,7 +565,7 @@ export async function sendOrderItemShippedEmail(opts: {
       <p style="margin:0 0 1.25rem;font-size:0.8rem;color:#666">Good news! <strong>${opts.productName}</strong> (× ${opts.quantity}) has been dispatched and should be with you soon.</p>
       <p style="margin:0 0 1.25rem;font-size:0.8rem;color:#666">Order ref: <span style="font-family:monospace">${opts.orderId}</span></p>
       <p style="margin:0 0 1.5rem">Once it arrives, please confirm delivery below.</p>
-      <p style="margin:0"><a href="${link}" style="display:inline-block;background:#9B7FB8;color:#fff;font-weight:600;text-decoration:none;padding:0.75rem 1.5rem;border-radius:10px">Confirm Delivery</a></p>
+      <p style="margin:0 0 1.5rem"><a href="${link}" style="display:inline-block;background:#9B7FB8;color:#fff;font-weight:600;text-decoration:none;padding:0.75rem 1.5rem;border-radius:10px">Confirm Delivery</a></p>
       <p style="margin:0 0 1.5rem">Thank you for supporting local beauty businesses.</p>
       <p style="margin:0 0 1.5rem">The Umuhle Team</p>`),
   });
