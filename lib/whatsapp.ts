@@ -302,7 +302,7 @@ export async function notifyOrderItemShipped(opts: {
   const msg =
     `*Your order is on its way!*\n\n` +
     `Hi ${opts.clientName}, ${opts.productName} (× ${opts.quantity}) from order #${opts.orderId.slice(0, 8).toUpperCase()} is on its way.\n\n` +
-    `Once it arrives, please confirm receipt so we can release payment to the seller:\n${link}`;
+    `Once it arrives, please confirm delivery here:\n${link}`;
 
   return sendTextMessage(opts.clientPhone, msg);
 }
