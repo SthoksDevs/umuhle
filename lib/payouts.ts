@@ -212,6 +212,123 @@ export async function recordOrderItemSplits(supabase: SupabaseClient, orderId: s
   }
 }
 
+/**
+ * Credits ONE partner's wallet for ONE order item...
+ */
+export async function creditOrderItemPayout(
+  supabase: SupabaseClient,
+  orderItemId: string
+): Promise<OrderItemPayoutResult> {
+  const { data: item, error: itemError } = await supabase
+    .from("order_items")
+    .select(`
+      id, order_id, quantity, unit_price, commission_cents, payout_cents, payout_credited_at,
+      product:products(partner_id, name, is_umuhle_product)
+    `)
+    .eq("id", orderItemId)
+    .single();
+
+  if (itemError || !item) {
+    return {
+      credited: false,
+      reason: itemError?.message ?? "Order item not found",
+    };
+  }
+
+  const product = Array.isArray(item.product)
+    ? item.product[0]
+    : item.product;
+
+  if (item.payout_credited_at)
+    return { credited: false, reason: "Already credited" };
+
+  if (!product?.partner_id)
+    return {
+      credited: false,
+      reason: "No partner linked to this product",
+    };
+
+  if (product.is_umuhle_product)
+    return {
+      credited: false,
+      reason: "Umuhle-direct product — no partner payout",
+    };
+
+  const [{ data: order }, { data: siblingItems }] = await Promise.all([
+    supabase
+      .from("orders")
+      .select("discount_cents")
+      .eq("id", item.order_id)
+      .single(),
+    supabase
+      .from("order_items")
+      .select("id, quantity, unit_price")
+      .eq("order_id", item.order_id),
+  ]);
+
+  const subtotal = (siblingItems ?? []).reduce(
+    (s, i) => s + i.unit_price * i.quantity,
+    0
+  );
+
+  const discount = order?.discount_cents ?? 0;
+  const lineGross = item.unit_price * item.quantity;
+
+  const { commissionCents, payoutCents } =
+    item.commission_cents != null && item.payout_cents != null
+      ? {
+          commissionCents: item.commission_cents,
+          payoutCents: item.payout_cents,
+        }
+      : splitCommission(
+          subtotal > 0
+            ? lineGross -
+                Math.round((lineGross / subtotal) * discount)
+            : lineGross
+        );
+
+  const { data: creditedFlag, error: rpcError } =
+    await supabase.rpc("credit_wallet_earning", {
+      p_profile_id: product.partner_id,
+      p_amount_cents: payoutCents,
+      p_description: `Order payout — ${product.name} × ${item.quantity} (${fmtR(lineGross)} less 5.5% Umuhle commission)`,
+      p_source_type: "order_item",
+      p_source_id: item.id,
+      p_hold_days: PAYOUT_HOLD_DAYS,
+    });
+
+  if (rpcError)
+    return { credited: false, reason: rpcError.message };
+
+  if (!creditedFlag) {
+    await supabase
+      .from("order_items")
+      .update({
+        commission_cents: commissionCents,
+        payout_cents: payoutCents,
+        payout_credited_at: new Date().toISOString(),
+      })
+      .eq("id", item.id)
+      .is("payout_credited_at", null);
+
+    return {
+      credited: false,
+      reason: "Already credited",
+    };
+  }
+
+  await supabase
+    .from("order_items")
+    .update({
+      commission_cents: commissionCents,
+      payout_cents: payoutCents,
+      payout_credited_at: new Date().toISOString(),
+    })
+    .eq("id", item.id);
+
+  return { credited: true };
+}
+
 export interface OrderPayoutItemResult {
   itemId: string;
   productName: string;
