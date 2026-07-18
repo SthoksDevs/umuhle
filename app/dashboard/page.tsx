@@ -83,11 +83,13 @@ function PillNav<T extends string>({
   onChange: (id: T) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
 
   const checkScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 4);
     setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
   };
 
@@ -99,6 +101,10 @@ function PillNav<T extends string>({
     window.addEventListener("resize", checkScroll);
     return () => { el.removeEventListener("scroll", checkScroll); window.removeEventListener("resize", checkScroll); };
   }, []);
+
+  const scrollLeft = () => {
+    scrollRef.current?.scrollBy({ left: -160, behavior: "smooth" });
+  };
 
   const scrollRight = () => {
     scrollRef.current?.scrollBy({ left: 160, behavior: "smooth" });
@@ -128,10 +134,24 @@ function PillNav<T extends string>({
           ))}
         </div>
       </div>
+      {canScrollLeft && (
+        <button
+          onClick={scrollLeft}
+          aria-label="Scroll tabs left"
+          style={{
+            position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)",
+            background: "linear-gradient(to right, #fff 60%, transparent)",
+            border: "none", cursor: "pointer", padding: "0.35rem 1.5rem 0.35rem 0.5rem",
+            color: "var(--plum)", fontSize: "1rem", lineHeight: 1, display: "flex", alignItems: "center",
+          }}
+        >
+          ‹
+        </button>
+      )}
       {canScrollRight && (
         <button
           onClick={scrollRight}
-          aria-label="Scroll tabs"
+          aria-label="Scroll tabs right"
           style={{
             position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)",
             background: "linear-gradient(to left, #fff 60%, transparent)",
