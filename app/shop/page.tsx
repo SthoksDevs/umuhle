@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
@@ -152,6 +153,7 @@ function ProductSkeleton() {
 
 export default function ShopPage() {
   const supabase = createClient();
+  const router = useRouter();
   const { addItem } = useCart();
   const { isWishlisted, toggle: toggleWishlist } = useProductWishlist();
 
@@ -163,6 +165,18 @@ export default function ShopPage() {
   const [search, setSearch]       = useState("");
   const [showAuth, setShowAuth]   = useState(false);
   const [added, setAdded]         = useState<string | null>(null);
+  const [showCartToast, setShowCartToast] = useState(false);
+  const cartToastTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Nudge people to the cart after adding — the header cart icon is easy to
+  // miss, especially on mobile.
+  const promptCartToast = () => {
+    setShowCartToast(true);
+    if (cartToastTimeout.current) clearTimeout(cartToastTimeout.current);
+    cartToastTimeout.current = setTimeout(() => setShowCartToast(false), 4000);
+  };
+
+  useEffect(() => () => { if (cartToastTimeout.current) clearTimeout(cartToastTimeout.current); }, []);
 
   // Auth listener
   useEffect(() => {
@@ -225,6 +239,7 @@ export default function ShopPage() {
     addItem(product, 1);
     setAdded(product.id);
     setTimeout(() => setAdded(null), 1500);
+    promptCartToast();
   };
 
   // Re-apply a pending "add to cart" click once the user is signed in and
@@ -239,6 +254,7 @@ export default function ShopPage() {
       addItem(product, pending.quantity);
       setAdded(product.id);
       setTimeout(() => setAdded(null), 1500);
+      promptCartToast();
     }
     clearPendingCartAdd();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -406,6 +422,47 @@ export default function ShopPage() {
         </main>
 
         <Footer />
+
+        {/* Added-to-cart toast */}
+        {showCartToast && (
+          <div
+            className="animate-fade-up"
+            style={{
+              position: "fixed",
+              bottom: "max(1.25rem, env(safe-area-inset-bottom))",
+              left: "50%",
+              transform: "translateX(-50%)",
+              zIndex: 300,
+              background: "#fff",
+              borderRadius: 100,
+              boxShadow: "0 8px 32px rgba(0,0,0,0.16)",
+              border: "1.5px solid rgba(155,127,184,0.15)",
+              padding: "0.55rem 0.55rem 0.55rem 1.1rem",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.65rem",
+              maxWidth: "calc(100vw - 2rem)",
+            }}
+          >
+            <span style={{ fontSize: "0.85rem", fontWeight: 500, color: "var(--onyx)", whiteSpace: "nowrap" }}>
+              ✓ Added to cart
+            </span>
+            <button
+              className="btn-plum"
+              onClick={() => router.push("/cart")}
+              style={{ padding: "0.4rem 1rem", fontSize: "0.8rem", whiteSpace: "nowrap" }}
+            >
+              View Cart
+            </button>
+            <button
+              onClick={() => setShowCartToast(false)}
+              aria-label="Dismiss"
+              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--grey)", fontSize: "1.1rem", padding: "0.25rem", lineHeight: 1 }}
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         {/* Auth modal */}
         {showAuth && (
