@@ -52,7 +52,7 @@ export interface Artist {
   is_active: boolean;
   point_of_contact_name: string | null;
   point_of_contact_phone: string | null;
-  moderation_status: ModerationStatus;
+  status: "pending" | "approved" | "rejected";
   moderation_score: number | null;
   created_at: string;
   // Relations
