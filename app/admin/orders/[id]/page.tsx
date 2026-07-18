@@ -32,12 +32,19 @@ const PAYMENT_LABEL: Record<string, string> = {
   google_pay: "Google Pay",
 };
 
+interface SellerInfo {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  phone: string | null;
+}
+
 interface OrderItemRow {
   id: string;
   product_id: string;
   quantity: number;
   unit_price: number;
-  product?: { id: string; name: string; image_url: string | null; category: string | null } | null;
+  product?: { id: string; name: string; image_url: string | null; category: string | null; partner_id: string | null; partner?: SellerInfo | null } | null;
 }
 
 interface PayoutItemResult {
@@ -68,6 +75,7 @@ interface OrderDetail {
   discount_cents: number;
   coupon_code: string | null;
   created_at: string;
+  paid_at: string | null;
   client?: { full_name: string; email: string; phone: string | null } | null;
   order_items?: OrderItemRow[];
 }
@@ -137,7 +145,7 @@ export default function AdminOrderDetailPage() {
       .select(`
         *,
         client:profiles!client_id(full_name, email, phone),
-        order_items(id, product_id, quantity, unit_price, product:products(id, name, image_url, category))
+        order_items(id, product_id, quantity, unit_price, product:products(id, name, image_url, category, partner_id, partner:profiles!partner_id(id, full_name, email, phone)))
       `)
       .eq("id", id)
       .single();
@@ -247,6 +255,17 @@ export default function AdminOrderDetailPage() {
   const itemsSubtotal = items.reduce((s, i) => s + i.unit_price * i.quantity, 0);
   const discount = order.discount_cents ?? 0;
 
+  const sellersMap = new Map<string, SellerInfo>();
+  items.forEach((item) => {
+    if (item.product?.partner_id && item.product.partner) {
+      sellersMap.set(item.product.partner_id, item.product.partner);
+    }
+  });
+  const sellers = Array.from(sellersMap.values());
+
+  const dateFmt = (iso: string) =>
+    new Date(iso).toLocaleString("en-ZA", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh", background: "#FAFAFA" }}>
       <SiteHeader initialUser={user} />
@@ -271,7 +290,7 @@ export default function AdminOrderDetailPage() {
               <StatusPill status={order.status} />
             </div>
             <p style={{ color: "var(--grey)", fontSize: "0.85rem" }}>
-              Placed {new Date(order.created_at).toLocaleString("en-ZA", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+              Placed {dateFmt(order.created_at)}
             </p>
           </div>
           <p style={{ fontSize: "1.6rem", fontWeight: 700, color: "var(--plum)", margin: 0 }}>{fmt(order.total_amount)}</p>
@@ -340,25 +359,39 @@ export default function AdminOrderDetailPage() {
           )}
         </div>
 
-        {/* Customer + shipping + payment */}
+        {/* Customer + seller(s) */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.25rem", marginBottom: "1.5rem" }}>
           <Panel title="Customer">
             <Field label="Name" value={order.contact_name ?? order.client?.full_name} />
             <Field label="Email" value={order.client?.email} />
             <Field label="WhatsApp" value={order.contact_whatsapp ?? order.client?.phone} />
           </Panel>
-          <Panel title="Shipping">
-            <Field label="Address" value={order.shipping_address ?? "Not provided"} />
+          <Panel title={`Seller${sellers.length !== 1 ? "s" : ""}`}>
+            {sellers.length === 0 ? (
+              <p style={{ color: "var(--grey)", fontSize: "0.85rem" }}>No seller information available.</p>
+            ) : (
+              sellers.map((s, i) => (
+                <div key={s.id} style={{ paddingTop: i === 0 ? 0 : "0.85rem", marginTop: i === 0 ? 0 : "0.85rem", borderTop: i === 0 ? "none" : "1px solid rgba(155,127,184,0.1)" }}>
+                  <Field label="Name" value={s.full_name ?? "Unknown"} />
+                  <Field label="Email" value={s.email} />
+                  <Field label="Phone" value={s.phone} />
+                </div>
+              ))
+            )}
           </Panel>
         </div>
 
-        <div style={{ marginBottom: "1.5rem" }}>
+        {/* Shipping + payment */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.25rem", marginBottom: "1.5rem" }}>
+          <Panel title="Shipping">
+            <Field label="Address" value={order.shipping_address ?? "Not provided"} />
+          </Panel>
           <Panel title="Payment">
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem 1.5rem" }}>
-              <Field label="Method" value={order.payment_method ? (PAYMENT_LABEL[order.payment_method] ?? order.payment_method) : "—"} />
-              <Field label="Gateway reference" value={order.payfast_payment_id ?? order.gateway_order_id ?? "—"} />
-              {order.coupon_code && <Field label="Coupon used" value={`${order.coupon_code} (−${fmt(discount)})`} />}
-            </div>
+            <Field label="Method" value={order.payment_method ? (PAYMENT_LABEL[order.payment_method] ?? order.payment_method) : "—"} />
+            <Field label="Gateway reference" value={order.payfast_payment_id ?? order.gateway_order_id ?? "—"} />
+            <Field label="Order placed" value={dateFmt(order.created_at)} />
+            <Field label="Payment received" value={order.paid_at ? dateFmt(order.paid_at) : "Not yet paid"} />
+            {order.coupon_code && <Field label="Coupon used" value={`${order.coupon_code} (−${fmt(discount)})`} />}
           </Panel>
         </div>
 
