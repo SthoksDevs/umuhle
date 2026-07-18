@@ -155,11 +155,13 @@ function PillNav<T extends string>({
   onChange: (id: T) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
 
   const checkScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 4);
     setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
   };
 
@@ -242,9 +244,30 @@ function PillNav<T extends string>({
           ))}
         </div>
       </div>
+      {canScrollLeft && (
+        <button
+          onClick={() => scrollRef.current?.scrollBy({ left: -160, behavior: "smooth" })}
+          aria-label="Scroll tabs left"
+          style={{
+            position: "absolute",
+            left: 0,
+            top: "50%",
+            transform: "translateY(-50%)",
+            background: "linear-gradient(to right, #fff 60%, transparent)",
+            border: "none",
+            cursor: "pointer",
+            padding: "0.35rem 1.5rem 0.35rem 0.5rem",
+            color: "var(--plum)",
+            fontSize: "1rem",
+          }}
+        >
+          ‹
+        </button>
+      )}
       {canScrollRight && (
         <button
           onClick={() => scrollRef.current?.scrollBy({ left: 160, behavior: "smooth" })}
+          aria-label="Scroll tabs right"
           style={{
             position: "absolute",
             right: 0,
@@ -1256,6 +1279,19 @@ function OrdersTab({ supabase }: { supabase: ReturnType<typeof createClient> }) 
 
   useEffect(() => { load(); }, [load]);
 
+  // Restore scroll position after returning from an order's detail page
+  // (see the "Back to Orders" button in app/admin/orders/[id]/page.tsx,
+  // which saves scrollY here before navigating away).
+  useEffect(() => {
+    if (loading || typeof window === "undefined") return;
+    const saved = sessionStorage.getItem("admin_orders_scrollY");
+    if (!saved) return;
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: parseInt(saved, 10), behavior: "auto" });
+      sessionStorage.removeItem("admin_orders_scrollY");
+    });
+  }, [loading]);
+
   const filtered = orders.filter((o) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
@@ -1320,6 +1356,9 @@ function OrdersTab({ supabase }: { supabase: ReturnType<typeof createClient> }) 
                 key={o.id}
                 href={`/admin/orders/${o.id}`}
                 style={{ textDecoration: "none", color: "inherit" }}
+                onClick={() => {
+                  try { sessionStorage.setItem("admin_orders_scrollY", String(window.scrollY)); } catch {}
+                }}
               >
                 <div
                   style={{ background: "#fff", borderRadius: 16, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.1rem 1.25rem", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", cursor: "pointer", transition: "box-shadow 0.15s" }}
