@@ -30,7 +30,7 @@ const ENABLED_ENV_VAR: Record<PaymentGateway, string> = {
   ozow: "OZOW_ENABLED",
 };
 
-const GATEWAY_LABEL: Record<PaymentGateway, string> = {
+export const GATEWAY_LABEL: Record<PaymentGateway, string> = {
   payfast: "PayFast",
   happypay: "HappyPay",
   ozow: "Ozow",
