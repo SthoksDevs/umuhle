@@ -255,7 +255,7 @@ export default function AdminOrderDetailPage() {
 
         {/* Back link */}
         <button
-          onClick={() => router.push("/admin")}
+          onClick={() => router.push("/admin?tab=orders")}
           style={{ background: "none", border: "none", color: "var(--plum)", fontSize: "0.85rem", cursor: "pointer", padding: 0, marginBottom: "1.25rem", display: "flex", alignItems: "center", gap: "0.3rem" }}
         >
           ← Back to Orders
