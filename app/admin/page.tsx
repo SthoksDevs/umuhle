@@ -42,7 +42,6 @@ interface SalonRow {
   email: string | null;
   services: string[];
   status: string;
-  moderation_status: string;
   gallery_urls: string[];
   instagram_username: string | null;
   created_at: string;
