@@ -12,6 +12,7 @@
 
 import nodemailer from "nodemailer";
 import { createClient } from "@supabase/supabase-js";
+import { gatewayLabel, type PaymentGateway } from "@/lib/payments/gateways";
 
 const ADMIN_EMAIL = "info@umuhle.co.za";
 
@@ -473,11 +474,29 @@ export async function sendOrderPaidEmail(opts: {
   orderId:          string;
   clientName:       string;
   clientEmail:      string;
+  clientPhone?:     string | null;
   items:            Array<{ name: string; quantity: number; unit_price: number }>;
   totalAmount:      number;
   shippingAddress?: string;
+  paymentGateway:   PaymentGateway;
+  orderPlacedAt:    string;
+  paidAt:           string;
+  sellers:          Array<{ name: string; email: string; phone: string | null }>;
 }) {
   const amountStr = formatRand(opts.totalAmount);
+  const dateFmt = (iso: string) =>
+    new Date(iso).toLocaleString("en-ZA", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const gatewayLabelStr = gatewayLabel(opts.paymentGateway);
+
+  const sellersText = opts.sellers.length
+    ? opts.sellers.map(s => `  ${s.name} (${s.email}${s.phone ? `, ${s.phone}` : ""})`).join("\n")
+    : "  —";
+  const sellersHtml = opts.sellers.length
+    ? opts.sellers.map(s =>
+        `<p style="margin:0 0 0.35rem;font-size:0.85rem">${s.name} — ${s.email}${s.phone ? ` — ${s.phone}` : ""}</p>`
+      ).join("")
+    : `<p style="margin:0;font-size:0.85rem;color:#999">—</p>`;
+
   const itemRowsHtml = opts.items.map(i =>
     `<tr>
       <td style="padding:0.35rem 0">${i.name}</td>
@@ -507,10 +526,23 @@ export async function sendOrderPaidEmail(opts: {
     subject:     `✅ New order — ${amountStr} — ${opts.clientName}`,
     template:    "order_paid_admin",
     referenceId: opts.orderId,
-    text:        `New order paid\nRef: ${opts.orderId}\nClient: ${opts.clientName} (${opts.clientEmail})\nTotal: ${amountStr}\n\nItems:\n${itemText}${opts.shippingAddress ? `\n\nShip to: ${opts.shippingAddress}` : ""}`,
+    text:        `New order paid\nRef: ${opts.orderId}\n\nCustomer: ${opts.clientName} (${opts.clientEmail}${opts.clientPhone ? `, ${opts.clientPhone}` : ""})\n\nSeller(s):\n${sellersText}\n\nOrder placed: ${dateFmt(opts.orderPlacedAt)}\nPayment received: ${dateFmt(opts.paidAt)}\nPayment gateway: ${gatewayLabelStr}\n\nTotal: ${amountStr}\n\nItems:\n${itemText}${opts.shippingAddress ? `\n\nShip to: ${opts.shippingAddress}` : ""}`,
     html:        emailWrapper(`✅ New order — ${amountStr}`, `
-      <p style="margin:0 0 1rem;font-size:0.9rem"><strong>Ref:</strong> <span style="font-family:monospace">${opts.orderId}</span><br>
-      <strong>Client:</strong> ${opts.clientName} (${opts.clientEmail})</p>
+      <p style="margin:0 0 1rem;font-size:0.9rem"><strong>Ref:</strong> <span style="font-family:monospace">${opts.orderId}</span></p>
+
+      <p style="margin:0 0 0.3rem;font-size:0.75rem;color:#999;text-transform:uppercase;letter-spacing:0.05em">Customer</p>
+      <p style="margin:0 0 1rem;font-size:0.9rem">${opts.clientName} — ${opts.clientEmail}${opts.clientPhone ? ` — ${opts.clientPhone}` : ""}</p>
+
+      <p style="margin:0 0 0.3rem;font-size:0.75rem;color:#999;text-transform:uppercase;letter-spacing:0.05em">Seller${opts.sellers.length !== 1 ? "s" : ""}</p>
+      <div style="margin:0 0 1rem">${sellersHtml}</div>
+
+      <p style="margin:0 0 0.3rem;font-size:0.75rem;color:#999;text-transform:uppercase;letter-spacing:0.05em">Order timeline</p>
+      <p style="margin:0 0 1rem;font-size:0.9rem">
+        Placed: ${dateFmt(opts.orderPlacedAt)}<br>
+        Paid: ${dateFmt(opts.paidAt)}<br>
+        Gateway: ${gatewayLabelStr}
+      </p>
+
       ${itemsTable}`),
   });
 
