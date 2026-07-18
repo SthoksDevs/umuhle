@@ -256,7 +256,7 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
   const { data: order } = await supabase
     .from("orders")
     .select(`
-      id, status, total_amount, shipping_address,
+      id, status, total_amount, shipping_address, created_at,
       client:profiles!orders_client_id_fkey(full_name, email, phone)
     `)
     .eq("id", event.referenceId)
@@ -277,13 +277,16 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
   if (event.outcome === "paid") {
     const { data: orderItems } = await supabase
       .from("order_items")
-      .select("product_id, quantity, unit_price, product:products(name)")
+      .select("product_id, quantity, unit_price, product:products(name, partner_id, partner:profiles!partner_id(full_name, email, phone))")
       .eq("order_id", event.referenceId);
+
+    const paidAt = new Date().toISOString();
 
     await supabase
       .from("orders")
       .update({
         status: "paid",
+        paid_at: paidAt,
         ...(event.gatewayPaymentId ? { gateway_order_id: event.gatewayPaymentId } : {}),
         ...legacyPayfastColumn(event),
       })
@@ -306,12 +309,30 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
     }
 
     try {
+      const sellersByPartnerId = new Map<string, { name: string; email: string; phone: string | null }>();
+      for (const item of orderItems ?? []) {
+        const product = Array.isArray(item.product) ? item.product[0] : item.product;
+        const partner = product && (Array.isArray(product.partner) ? product.partner[0] : product.partner);
+        if (product?.partner_id && partner && !sellersByPartnerId.has(product.partner_id)) {
+          sellersByPartnerId.set(product.partner_id, {
+            name: partner.full_name ?? "Unknown seller",
+            email: partner.email ?? "",
+            phone: partner.phone ?? null,
+          });
+        }
+      }
+
       await sendOrderPaidEmail({
         orderId: event.referenceId,
         clientName: clientRow?.full_name ?? "Unknown",
         clientEmail: clientRow?.email ?? "",
+        clientPhone: clientRow?.phone ?? null,
         totalAmount: order.total_amount,
         shippingAddress: order.shipping_address ?? undefined,
+        paymentGateway: event.gateway,
+        orderPlacedAt: order.created_at,
+        paidAt,
+        sellers: Array.from(sellersByPartnerId.values()),
         items: (orderItems ?? []).map((i) => ({
           name: (Array.isArray(i.product) ? i.product[0] : i.product)?.name ?? "Product",
           quantity: i.quantity,
