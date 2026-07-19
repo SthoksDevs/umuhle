@@ -1522,6 +1522,190 @@ function MySalonTab({ user }: { user: { id: string } }) {
 // Each service category has a repeater for style tags.
 type ServiceStyles = Record<ServiceTypeId, string[]>;
 
+type ArtistService = {
+  id: string;
+  name: string;
+  description: string | null;
+  price: number; // cents
+  duration_minutes: number;
+  category: ServiceTypeId | null;
+  is_active: boolean;
+};
+
+type ServiceFormState = {
+  id: string | null; // null = creating new
+  name: string;
+  description: string;
+  priceRand: string; // controlled input, e.g. "350"
+  duration_minutes: number;
+  category: ServiceTypeId | "";
+};
+
+const EMPTY_SERVICE_FORM: ServiceFormState = { id: null, name: "", description: "", priceRand: "", duration_minutes: 60, category: "" };
+
+// Lets an artist create the actual bookable, priced line items clients pay
+// for — distinct from the style tags above, which are just search/discovery
+// metadata. Reads/writes app/dashboard's `services` table directly (RLS
+// already scopes writes to `artist_id IN (artists owned by auth.uid())`).
+function PricedServicesManager({ user, categories }: { user: User; categories: ServiceTypeId[] }) {
+  const supabase = createClient();
+  const [artistId, setArtistId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [services, setServices] = useState<ArtistService[]>([]);
+  const [form, setForm] = useState<ServiceFormState | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const loadServices = useCallback(async (aid: string) => {
+    const { data } = await supabase
+      .from("services")
+      .select("id, name, description, price, duration_minutes, category, is_active")
+      .eq("artist_id", aid)
+      .order("name");
+    setServices((data ?? []) as ArtistService[]);
+  }, [supabase]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      const { data } = await supabase.from("artists").select("id").eq("profile_id", user.id).maybeSingle();
+      if (cancelled) return;
+      if (data?.id) {
+        setArtistId(data.id);
+        await loadServices(data.id);
+      }
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [user.id, supabase, loadServices]);
+
+  const startAdd = () => { setError(""); setForm({ ...EMPTY_SERVICE_FORM, category: categories[0] ?? "" }); };
+  const startEdit = (s: ArtistService) => {
+    setError("");
+    setForm({ id: s.id, name: s.name, description: s.description ?? "", priceRand: String(s.price / 100), duration_minutes: s.duration_minutes, category: s.category ?? "" });
+  };
+
+  const handleSaveForm = async () => {
+    if (!artistId || !form) return;
+    const priceNum = parseFloat(form.priceRand);
+    if (!form.name.trim()) { setError("Give the service a name."); return; }
+    if (!Number.isFinite(priceNum) || priceNum <= 0) { setError("Enter a valid price."); return; }
+    if (!form.duration_minutes || form.duration_minutes <= 0) { setError("Enter a valid duration."); return; }
+
+    setSaving(true); setError("");
+    const payload = {
+      artist_id: artistId,
+      name: form.name.trim(),
+      description: form.description.trim() || null,
+      price: Math.round(priceNum * 100),
+      duration_minutes: form.duration_minutes,
+      category: form.category || null,
+    };
+    const { error: err } = form.id
+      ? await supabase.from("services").update(payload).eq("id", form.id)
+      : await supabase.from("services").insert({ ...payload, is_active: true });
+    setSaving(false);
+    if (err) { setError(err.message); return; }
+    setForm(null);
+    await loadServices(artistId);
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!artistId) return;
+    if (!confirm("Remove this service? Clients will no longer be able to book it.")) return;
+    await supabase.from("services").delete().eq("id", id);
+    await loadServices(artistId);
+  };
+
+  const handleToggleActive = async (s: ArtistService) => {
+    if (!artistId) return;
+    await supabase.from("services").update({ is_active: !s.is_active }).eq("id", s.id);
+    await loadServices(artistId);
+  };
+
+  if (loading) return null;
+
+  if (!artistId) {
+    return (
+      <div style={{ marginTop: "2.5rem", padding: "1rem 1.25rem", borderRadius: 14, background: "var(--plum-t)", color: "var(--plum)", fontSize: "0.85rem" }}>
+        Save your service categories above first — then you can add priced services clients can book and pay for.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: "2.5rem" }}>
+      <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>Pricing &amp; bookable services</h2>
+      <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
+        Add the specific services clients can book and pay for on your profile — each with its own price and duration.
+      </p>
+
+      {services.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", marginBottom: "1.25rem" }}>
+          {services.map(s => (
+            <div key={s.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem", padding: "0.9rem 1.1rem", borderRadius: 12, border: "1.5px solid rgba(155,127,184,0.12)", background: "#fff", opacity: s.is_active ? 1 : 0.55 }}>
+              <div style={{ minWidth: 0 }}>
+                <p style={{ margin: 0, fontWeight: 600, fontSize: "0.9rem" }}>{s.name}</p>
+                <p style={{ margin: "0.15rem 0 0", fontSize: "0.78rem", color: "var(--grey)" }}>
+                  {fmt(s.price)} · {s.duration_minutes} min{s.category ? ` · ${s.category}` : ""}{!s.is_active ? " · Hidden" : ""}
+                </p>
+              </div>
+              <div style={{ display: "flex", gap: "0.5rem", flexShrink: 0 }}>
+                <button type="button" onClick={() => handleToggleActive(s)} style={{ background: "none", border: "1.5px solid rgba(155,127,184,0.3)", borderRadius: 8, padding: "0.35rem 0.7rem", fontSize: "0.75rem", color: "var(--grey)", cursor: "pointer" }}>
+                  {s.is_active ? "Hide" : "Unhide"}
+                </button>
+                <button type="button" onClick={() => startEdit(s)} style={{ background: "none", border: "1.5px solid rgba(155,127,184,0.3)", borderRadius: 8, padding: "0.35rem 0.7rem", fontSize: "0.75rem", color: "var(--grey)", cursor: "pointer" }}>Edit</button>
+                <button type="button" onClick={() => handleDelete(s.id)} style={{ background: "none", border: "1.5px solid rgba(229,57,53,0.3)", borderRadius: 8, padding: "0.35rem 0.7rem", fontSize: "0.75rem", color: "#E53935", cursor: "pointer" }}>Delete</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {form ? (
+        <div style={{ padding: "1.1rem 1.25rem", borderRadius: 14, border: "1.5px solid var(--plum)", background: "#fff" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginBottom: "0.75rem" }}>
+            <div>
+              <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Service name</label>
+              <input value={form.name} onChange={e => setForm(f => f && ({ ...f, name: e.target.value }))} placeholder="e.g. Silk press & trim" style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem" }} />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Category</label>
+              <select value={form.category} onChange={e => setForm(f => f && ({ ...f, category: e.target.value as ServiceTypeId }))} style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem" }}>
+                {categories.map(c => <option key={c} value={c}>{SERVICE_TYPES.find(t => t.id === c)?.label ?? c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Price (ZAR)</label>
+              <input type="number" min="0" step="1" value={form.priceRand} onChange={e => setForm(f => f && ({ ...f, priceRand: e.target.value }))} placeholder="350" style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem" }} />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Duration</label>
+              <select value={form.duration_minutes} onChange={e => setForm(f => f && ({ ...f, duration_minutes: parseInt(e.target.value, 10) }))} style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem" }}>
+                {Array.from(new Set([15, 30, 45, 60, 90, 120, 150, 180, 240, form.duration_minutes])).sort((a, b) => a - b).map(m => (
+                  <option key={m} value={m}>{m < 60 ? `${m} min` : `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}min` : ""}`}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div style={{ marginBottom: "0.9rem" }}>
+            <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Description (optional)</label>
+            <textarea value={form.description} onChange={e => setForm(f => f && ({ ...f, description: e.target.value }))} rows={2} style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem", resize: "vertical" }} />
+          </div>
+          {error && <p style={{ color: "#E53935", fontSize: "0.82rem", marginBottom: "0.75rem" }}>{error}</p>}
+          <div style={{ display: "flex", gap: "0.6rem" }}>
+            <button type="button" onClick={handleSaveForm} disabled={saving} className="btn-plum" style={{ padding: "0.55rem 1.4rem", fontSize: "0.85rem" }}>{saving ? "Saving…" : form.id ? "Save changes" : "Add service"}</button>
+            <button type="button" onClick={() => setForm(null)} style={{ background: "none", border: "1.5px solid rgba(155,127,184,0.3)", borderRadius: 8, padding: "0.55rem 1.2rem", fontSize: "0.85rem", color: "var(--grey)", cursor: "pointer" }}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <button type="button" onClick={startAdd} className="btn-outline" style={{ padding: "0.6rem 1.4rem", fontSize: "0.85rem" }}>+ Add a service</button>
+      )}
+    </div>
+  );
+}
+
 function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: User; onUpdate: (p: Profile) => void }) {
   const supabase = createClient();
   const [selected, setSelected] = useState<string[]>(profile.artist_category ? [profile.artist_category] : []);
@@ -1725,6 +1909,8 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
         <button onClick={handleSave} className="btn-plum" disabled={saving || selected.length === 0} style={{ padding: "0.75rem 2rem" }}>{saving ? "Saving…" : "Save services"}</button>
         <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "1rem" }}>Your listed services and styles help clients find you when searching on Umuhle.</p>
       </div>
+
+      <PricedServicesManager user={user} categories={selected as ServiceTypeId[]} />
     </div>
   );
 }
