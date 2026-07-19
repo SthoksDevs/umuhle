@@ -459,3 +459,12 @@ CREATE TABLE public.listing_packages (
   CONSTRAINT listing_packages_pkey PRIMARY KEY (id),
   CONSTRAINT listing_packages_partner_id_fkey FOREIGN KEY (partner_id) REFERENCES public.profiles(id)
 );
+CREATE TABLE public.artist_service_styles (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  category text NOT NULL CHECK (category = ANY (ARRAY['hair'::text, 'nails'::text, 'makeup'::text, 'lashes'::text])),
+  style text NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT artist_service_styles_pkey PRIMARY KEY (id),
+  CONSTRAINT artist_service_styles_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id)
+);
