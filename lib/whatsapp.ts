@@ -2,10 +2,16 @@
   const WA_API_URL = `https://graph.facebook.com/v20.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`; 
   
   function normalisePhone(phone: string): string {
-  const digits = phone.replace(/\D/g, "");
+  let digits = phone.replace(/\D/g, "");
 
-  if (digits.startsWith("0") && digits.length === 10) {
-    return `27${digits.slice(1)}`;
+  // Strip a leading 00 international prefix (e.g. "0027...")
+  if (digits.startsWith("00")) {
+    digits = digits.slice(2);
+  }
+
+  // Local SA format starting with 0 (e.g. "082 123 4567") -> convert to 27...
+  if (digits.startsWith("0") && !digits.startsWith("27")) {
+    digits = `27${digits.slice(1)}`;
   }
 
   return digits;
