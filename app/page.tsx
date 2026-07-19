@@ -368,12 +368,13 @@ export default function Home() {
       .eq("moderation_status", "approved")
       .order("rating", { ascending: false })
       .limit(24);
+    if (user) query = query.neq("profile_id", user.id);
     if (activeCategories.length > 0) query = query.in("category", activeCategories.map(c => c.toLowerCase()));
     if (searchQuery.trim()) query = query.ilike("display_name", `%${searchQuery.trim()}%`);
     const { data } = await query;
     setArtists((data ?? []) as Artist[]);
     setLoading(false);
-  }, [activeCategories, searchQuery]);
+  }, [activeCategories, searchQuery, user]);
 
   useEffect(() => {
     const t = setTimeout(fetchArtists, 300);
