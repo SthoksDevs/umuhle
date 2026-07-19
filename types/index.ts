@@ -5,6 +5,42 @@ export type AccountStatus = "active" | "pending_review" | "suspended" | "deleted
 export type ModerationStatus = "draft" | "scanning" | "approved" | "needs_review" | "rejected";
 export type BookingStatus = "pending_payment" | "confirmed" | "in_progress" | "completed" | "cancelled" | "no_show";
 
+// Curated, fixed vocabulary shared between `services.tags` and
+// `products.tags` (both text[]). Deliberately not free text — matching is a
+// simple array-overlap query, and keeping the list small and human-picked
+// means an artist only tags a service with what's genuinely relevant (e.g.
+// a weave install gets "extensions"/"wigs", never "hair-care", so a client
+// shaving their head off never gets shampoo recommended at booking).
+export const UPSELL_TAG_GROUPS: { category: ServiceCategory | "general"; label: string; tags: { id: string; label: string }[] }[] = [
+  { category: "hair", label: "Hair", tags: [
+    { id: "extensions", label: "Extensions" },
+    { id: "wigs", label: "Wigs & hairpieces" },
+    { id: "hair-care", label: "Hair care" },
+    { id: "styling-tools", label: "Styling tools" },
+    { id: "color-treatment", label: "Colour & treatment" },
+    { id: "braiding-supplies", label: "Braiding supplies" },
+  ] },
+  { category: "nails", label: "Nails", tags: [
+    { id: "nail-art-supplies", label: "Nail art supplies" },
+    { id: "nail-care", label: "Nail care" },
+  ] },
+  { category: "makeup", label: "Makeup", tags: [
+    { id: "makeup-tools", label: "Makeup tools" },
+    { id: "skincare", label: "Skincare" },
+  ] },
+  { category: "lashes", label: "Lashes", tags: [
+    { id: "lash-supplies", label: "Lash supplies" },
+    { id: "lash-care", label: "Lash care" },
+  ] },
+  { category: "general", label: "General", tags: [
+    { id: "gift-sets", label: "Gift sets" },
+    { id: "tools", label: "Tools" },
+  ] },
+];
+
+export const ALL_UPSELL_TAGS: string[] = UPSELL_TAG_GROUPS.flatMap(g => g.tags.map(t => t.id));
+export const upsellTagLabel = (id: string): string => UPSELL_TAG_GROUPS.flatMap(g => g.tags).find(t => t.id === id)?.label ?? id;
+
 // What the person told us they signed up to do. Kept separate from the
 // is_artist/is_partner flags (which reflect what's actually been set up),
 // since selecting "Artist" at signup doesn't instantly create an artists row.
@@ -70,6 +106,7 @@ export interface Service {
   price: number; // ZAR cents
   duration_minutes: number;
   category: ServiceCategory | null;
+  tags: string[]; // upsell tags, see UPSELL_TAG_GROUPS
   is_active: boolean;
 }
 
@@ -158,6 +195,7 @@ export interface Product {
   price: number; // ZAR cents
   image_url: string | null;
   category: string | null;
+  tags: string[]; // upsell tags, see UPSELL_TAG_GROUPS
   stock_count: number;
   is_active: boolean;
   moderation_status: ModerationStatus;
