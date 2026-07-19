@@ -13,6 +13,7 @@
 //   onCancel     — called when user clicks Cancel
 
 import { useState } from "react";
+import { UPSELL_TAG_GROUPS } from "@/types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,7 @@ export interface ProductFormData {
   description: string;
   price: string;          // rand — only used for simple products
   category: string;
+  tags: string[];          // upsell tags — drives "you might also like" on the booking form
   stock_count: string;    // only used for simple products
   product_type: ProductType;
   variants: ProductVariant[];
@@ -49,7 +51,7 @@ const emptyVariant = (): ProductVariant => ({
 });
 
 const emptyForm = (): ProductFormData => ({
-  name: "", description: "", price: "", category: "hair",
+  name: "", description: "", price: "", category: "hair", tags: [],
   stock_count: "0", product_type: "simple", variants: [],
   weight_g: "", length_cm: "", width_cm: "", height_cm: "",
   image_url: null,
@@ -57,7 +59,7 @@ const emptyForm = (): ProductFormData => ({
 
 export function productToForm(p: {
   id: string; name: string; description: string | null; price: number;
-  category: string | null; stock_count: number; image_url: string | null;
+  category: string | null; tags?: string[] | null; stock_count: number; image_url: string | null;
   product_type?: string | null;
   weight_g?: number | null; length_cm?: number | null;
   width_cm?: number | null; height_cm?: number | null;
@@ -71,6 +73,7 @@ export function productToForm(p: {
     description:  p.description ?? "",
     price:        (p.price / 100).toFixed(2),
     category:     p.category ?? "hair",
+    tags:         p.tags ?? [],
     stock_count:  String(p.stock_count),
     product_type: (p.product_type as ProductType) ?? "simple",
     variants:     (p.product_variants ?? []).map(v => ({
@@ -258,6 +261,7 @@ export default function ProductForm({
         description:       form.description.trim() || null,
         price:             basePrice,
         category:          form.category,
+        tags:              form.tags,
         stock_count:       baseStock,
         product_type:      form.product_type,
         image_url:         imageUrl,
@@ -375,6 +379,38 @@ export default function ProductForm({
             <option key={c} value={c} style={{ textTransform: "capitalize" }}>{c}</option>
           ))}
         </select>
+      </div>
+
+      {/* ── Upsell tags — which services should this product be suggested alongside? ── */}
+      <div style={{ marginTop: "0.85rem" }}>
+        <label style={{ ...labelStyle, marginTop: 0 }}>Suggest this product for…</label>
+        <p style={{ fontSize: "0.78rem", color: "#8a8a8a", margin: "0 0 0.5rem" }}>
+          Pick what this product is relevant to. It&apos;ll be offered to clients booking a matching service — e.g. tag extensions/wigs for a weave-install, not haircare for a big chop.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+          {UPSELL_TAG_GROUPS.map(group => (
+            <div key={group.category}>
+              <span style={{ fontSize: "0.72rem", fontWeight: 600, color: "#a0a0a0", textTransform: "uppercase", letterSpacing: "0.04em" }}>{group.label}</span>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "0.3rem" }}>
+                {group.tags.map(t => {
+                  const on = form.tags.includes(t.id);
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setForm(f => ({ ...f, tags: on ? f.tags.filter(x => x !== t.id) : [...f.tags, t.id] }))}
+                      style={{
+                        borderRadius: 100, border: `1.5px solid ${on ? "var(--plum)" : "#E0E0E0"}`,
+                        background: on ? "var(--plum)" : "#fff", color: on ? "#fff" : "#555",
+                        padding: "0.3rem 0.75rem", fontSize: "0.78rem", fontWeight: 500, cursor: "pointer",
+                      }}
+                    >{t.label}</button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* ── Product type radios ── */}
