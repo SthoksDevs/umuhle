@@ -163,7 +163,7 @@ export default function AuthModal() {
 
   return (
     <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) close(); }}>
-      <div style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 420, boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
+      <div style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 420, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
         <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.6rem", marginBottom: "0.25rem" }}>
           {mode === "login" ? "Welcome back" : mode === "forgot" ? "Reset password" : "Create account"}
         </h2>
