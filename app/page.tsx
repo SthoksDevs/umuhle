@@ -363,7 +363,7 @@ export default function Home() {
     setLoading(true);
     let query = supabase
       .from("artists")
-      .select("*")
+      .select("*, services(id, name, price, duration_minutes, is_active)")
       .eq("is_active", true)
       .eq("moderation_status", "approved")
       .order("rating", { ascending: false })
@@ -571,15 +571,23 @@ function ArtistCard({ artist, onBook, isWishlisted, onToggleWishlist }: { artist
             <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
           </svg>
         </button>
-        <span style={{ position: "absolute", bottom: 10, left: 10, background: "rgba(255,255,255,0.9)", borderRadius: 100, padding: "0.2rem 0.75rem", fontSize: "0.75rem", fontWeight: 500, color: "var(--plum)", backdropFilter: "blur(4px)" }}>
-          {CAT_ICONS[artist.category] ?? ""} {artist.category}
-        </span>
       </div>
       <div style={{ padding: "1rem" }}>
         <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1.05rem", marginBottom: "0.25rem" }}>{artist.display_name}</h3>
         <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginBottom: "0.5rem" }}>{artist.suburb}</p>
-        <div style={{ marginBottom: "0.75rem" }}>
+        <div style={{ marginBottom: "0.6rem" }}>
           <StarRating rating={artist.rating} reviewCount={artist.review_count} size={13} />
+        </div>
+        <div style={{ marginBottom: "0.75rem", minHeight: "1.1rem" }}>
+          {(() => {
+            const active = (artist.services ?? []).filter(s => s.is_active);
+            if (active.length === 0) {
+              return <span style={{ fontSize: "0.78rem", color: "var(--grey)" }}>{CAT_ICONS[artist.category] ?? ""} {artist.category}</span>;
+            }
+            const names = active.slice(0, 2).map(s => s.name).join(", ");
+            const extra = active.length > 2 ? ` +${active.length - 2} more` : "";
+            return <span style={{ fontSize: "0.78rem", color: "var(--grey)" }}>{names}{extra}</span>;
+          })()}
         </div>
         <button className="btn-plum" style={{ width: "100%", padding: "0.6rem" }} onClick={onBook}>Book now</button>
       </div>
