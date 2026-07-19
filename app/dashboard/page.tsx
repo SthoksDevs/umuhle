@@ -2079,7 +2079,7 @@ function PocPopup({ onSave, onDismiss }: { onSave: (name: string, phone: string)
 
   return (
     <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onDismiss(); }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 440, boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 440, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
         <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", marginBottom: "0.5rem" }}>Add Point of Contact</h3>
 
         {/* ── Description (requirement 1) ── */}
