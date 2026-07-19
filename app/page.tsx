@@ -11,6 +11,7 @@ import Footer from "@/components/Footer";
 import SiteHeader from "@/components/SiteHeader";
 import StarRating from "@/components/StarRating";
 import { gTag, fbq, ttq } from "@/lib/analytics";
+import { useCart } from "@/lib/cart-context";
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
@@ -601,9 +602,13 @@ type ArtistReview = { id: string; rating: number; comment: string | null; create
 
 function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }: { artist: Artist; onClose: () => void; user: User; isWishlisted: boolean; onToggleWishlist: () => Promise<void> }) {
   const supabase = createClient();
-  type Service = { id: string; name: string; price: number; duration_minutes: number };
+  const { addItem } = useCart();
+  type Service = { id: string; name: string; price: number; duration_minutes: number; tags: string[] };
+  type UpsellProduct = { id: string; partner_id: string; name: string; price: number; image_url: string | null; category: string | null; tags: string[]; stock_count: number };
   const [services, setServices]   = useState<Service[]>([]);
   const [selected, setSelected]   = useState<Service | null>(null);
+  const [upsellProducts, setUpsellProducts] = useState<UpsellProduct[]>([]);
+  const [addedProductIds, setAddedProductIds] = useState<Set<string>>(new Set());
   const [date, setDate]           = useState("");
   const [time, setTime]           = useState("");
   const [address, setAddress]     = useState("");
@@ -621,10 +626,36 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
   );
 
   useEffect(() => {
-    supabase.from("services").select("id, name, price, duration_minutes").eq("artist_id", artist.id).eq("is_active", true)
+    supabase.from("services").select("id, name, price, duration_minutes, tags").eq("artist_id", artist.id).eq("is_active", true)
       .then(({ data }) => setServices((data ?? []) as Service[]));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artist.id]);
+
+  // Relevant-product upsells for the chosen service — matched purely by
+  // curated tag overlap (see UPSELL_TAG_GROUPS), never by broad category.
+  // A service with no tags (or one the artist deliberately left untagged,
+  // e.g. a big-chop cut) simply shows nothing here rather than falling
+  // back to "everything in this category".
+  useEffect(() => {
+    if (!selected || selected.tags.length === 0) { setUpsellProducts([]); return; }
+    let cancelled = false;
+    supabase
+      .from("products")
+      .select("id, partner_id, name, price, image_url, category, tags, stock_count")
+      .overlaps("tags", selected.tags)
+      .eq("is_active", true)
+      .eq("moderation_status", "approved")
+      .gt("stock_count", 0)
+      .limit(6)
+      .then(({ data }) => { if (!cancelled) setUpsellProducts((data ?? []) as UpsellProduct[]); });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
+
+  const handleAddUpsell = (p: UpsellProduct) => {
+    addItem({ id: p.id, partner_id: p.partner_id, name: p.name, description: null, price: p.price, image_url: p.image_url, category: p.category, tags: p.tags, stock_count: p.stock_count, is_active: true, moderation_status: "approved", moderation_score: null, created_at: "" });
+    setAddedProductIds(prev => new Set(prev).add(p.id));
+  };
 
   useEffect(() => {
     if (!artist.review_count) { setReviews([]); return; }
@@ -813,6 +844,35 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
                 <span style={{ fontWeight: 700, color: "var(--plum)" }}>{fmt(selected.price)}</span>
               </div>
             </div>
+
+            {upsellProducts.length > 0 && (
+              <div style={{ marginBottom: "1.5rem" }}>
+                <h4 style={{ fontWeight: 500, marginBottom: "0.15rem", fontSize: "0.95rem" }}>You might also like</h4>
+                <p style={{ fontSize: "0.78rem", color: "var(--grey)", marginBottom: "0.9rem" }}>Handy for your {selected.name.toLowerCase()} — added to your cart, checked out separately.</p>
+                <div style={{ display: "flex", gap: "0.75rem", overflowX: "auto", paddingBottom: "0.25rem" }}>
+                  {upsellProducts.map(p => {
+                    const added = addedProductIds.has(p.id);
+                    return (
+                      <div key={p.id} style={{ flexShrink: 0, width: 120, borderRadius: 12, border: "1.5px solid rgba(155,127,184,0.15)", overflow: "hidden", background: "#fff" }}>
+                        <div style={{ height: 90, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                          <Image src={p.image_url ?? ICON} alt={p.name} width={60} height={60} style={{ objectFit: "contain" }} />
+                        </div>
+                        <div style={{ padding: "0.5rem" }}>
+                          <p style={{ fontSize: "0.75rem", fontWeight: 500, margin: 0, lineHeight: 1.3, height: "2.1rem", overflow: "hidden" }}>{p.name}</p>
+                          <p style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--plum)", margin: "0.2rem 0 0.4rem" }}>{fmt(p.price)}</p>
+                          <button
+                            type="button"
+                            onClick={() => handleAddUpsell(p)}
+                            disabled={added}
+                            style={{ width: "100%", padding: "0.35rem", borderRadius: 8, border: "none", fontSize: "0.72rem", fontWeight: 500, cursor: added ? "default" : "pointer", background: added ? "var(--forest)" : "var(--plum)", color: "#fff" }}
+                          >{added ? "Added ✓" : "Add to cart"}</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.5rem" }}>Payment method</p>
             <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", marginBottom: "1.25rem" }}>
