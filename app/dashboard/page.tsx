@@ -1519,8 +1519,12 @@ function MySalonTab({ user }: { user: { id: string } }) {
 }
 
 // ─── My Services tab ───────────────────────────────────────────────────────────
-// Each service category has a repeater for style tags.
-type ServiceStyles = Record<ServiceTypeId, string[]>;
+// Each service category has a repeater for style + price pairs. Saving here
+// writes both to artist_service_styles (search tags) and services (the
+// priced, bookable rows the frontend booking widget actually reads) in one
+// step — price is captured at the moment a service is added, not after.
+type StyleEntry = { style: string; priceRand: string };
+type ServiceStyles = Record<ServiceTypeId, StyleEntry[]>;
 
 type ArtistService = {
   id: string;
@@ -1547,7 +1551,7 @@ const EMPTY_SERVICE_FORM: ServiceFormState = { id: null, name: "", description: 
 // for — distinct from the style tags above, which are just search/discovery
 // metadata. Reads/writes app/dashboard's `services` table directly (RLS
 // already scopes writes to `artist_id IN (artists owned by auth.uid())`).
-function PricedServicesManager({ user, categories }: { user: User; categories: ServiceTypeId[] }) {
+function PricedServicesManager({ user, categories, refreshSignal }: { user: User; categories: ServiceTypeId[]; refreshSignal?: number }) {
   const supabase = createClient();
   const [artistId, setArtistId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1578,7 +1582,7 @@ function PricedServicesManager({ user, categories }: { user: User; categories: S
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [user.id, supabase, loadServices]);
+  }, [user.id, supabase, loadServices, refreshSignal]);
 
   const startAdd = () => { setError(""); setForm({ ...EMPTY_SERVICE_FORM, category: categories[0] ?? "" }); };
   const startEdit = (s: ArtistService) => {
@@ -1636,9 +1640,9 @@ function PricedServicesManager({ user, categories }: { user: User; categories: S
 
   return (
     <div style={{ marginTop: "2.5rem" }}>
-      <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>Pricing &amp; bookable services</h2>
+      <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>Manage your services</h2>
       <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-        Add the specific services clients can book and pay for on your profile — each with its own price and duration.
+        Fine-tune duration or description for a service, hide one temporarily, or add an extra (like a bundle or package) that isn&apos;t tied to a style tag above.
       </p>
 
       {services.length > 0 && (
@@ -1710,48 +1714,81 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
   const supabase = createClient();
   const [selected, setSelected] = useState<string[]>(profile.artist_category ? [profile.artist_category] : []);
   const [styles, setStyles] = useState<ServiceStyles>({ hair: [], nails: [], makeup: [], lashes: [] });
-  const [styleInputs, setStyleInputs] = useState<Record<ServiceTypeId, string>>({ hair: "", nails: "", makeup: "", lashes: "" });
+  const [styleInputs, setStyleInputs] = useState<Record<ServiceTypeId, StyleEntry>>({
+    hair: { style: "", priceRand: "" }, nails: { style: "", priceRand: "" }, makeup: { style: "", priceRand: "" }, lashes: { style: "", priceRand: "" },
+  });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
   const [loadingStyles, setLoadingStyles] = useState(true);
+  const [servicesSyncedAt, setServicesSyncedAt] = useState(0);
 
-  // Load existing styles from DB on mount
+  // Load existing style tags, then best-effort match each one against an
+  // existing priced `services` row (by name + category) so a price already
+  // set doesn't get wiped out or shown blank on reload.
   useEffect(() => {
-    supabase
-      .from("artist_service_styles")
-      .select("category, style")
-      .eq("user_id", user.id)
-      .then(({ data }) => {
-        if (data) {
-          const grouped: ServiceStyles = { hair: [], nails: [], makeup: [], lashes: [] };
-          for (const row of data as { category: ServiceTypeId; style: string }[]) {
-            if (grouped[row.category]) grouped[row.category].push(row.style);
-          }
-          setStyles(grouped);
+    let cancelled = false;
+    (async () => {
+      const { data: styleRows } = await supabase
+        .from("artist_service_styles")
+        .select("category, style")
+        .eq("user_id", user.id);
+
+      const { data: artistRow } = await supabase.from("artists").select("id").eq("profile_id", user.id).maybeSingle();
+      let priceByKey = new Map<string, number>();
+      if (artistRow?.id) {
+        const { data: svcRows } = await supabase.from("services").select("name, category, price").eq("artist_id", artistRow.id);
+        priceByKey = new Map((svcRows ?? []).map(r => [`${r.category}::${r.name.trim().toLowerCase()}`, r.price as number]));
+      }
+
+      if (cancelled) return;
+      if (styleRows) {
+        const grouped: ServiceStyles = { hair: [], nails: [], makeup: [], lashes: [] };
+        for (const row of styleRows as { category: ServiceTypeId; style: string }[]) {
+          if (!grouped[row.category]) continue;
+          const price = priceByKey.get(`${row.category}::${row.style.trim().toLowerCase()}`);
+          grouped[row.category].push({ style: row.style, priceRand: price != null ? String(price / 100) : "" });
         }
-        setLoadingStyles(false);
-      });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user.id]);
+        setStyles(grouped);
+      }
+      setLoadingStyles(false);
+    })();
+    return () => { cancelled = true; };
+  }, [user.id, supabase]);
 
   const toggle = (id: string) => setSelected(prev => prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]);
 
   const addStyle = (cat: ServiceTypeId) => {
-    const val = styleInputs[cat].trim();
+    const val = styleInputs[cat].style.trim();
+    const priceRand = styleInputs[cat].priceRand;
     if (!val) return;
-    if (styles[cat].includes(val)) { setStyleInputs(i => ({ ...i, [cat]: "" })); return; }
-    setStyles(s => ({ ...s, [cat]: [...s[cat], val] }));
-    setStyleInputs(i => ({ ...i, [cat]: "" }));
+    if (!priceRand || !(parseFloat(priceRand) > 0)) { setError(`Add a price for "${val}" before adding it.`); return; }
+    if (styles[cat].some(e => e.style.toLowerCase() === val.toLowerCase())) { setStyleInputs(i => ({ ...i, [cat]: { style: "", priceRand: "" } })); return; }
+    setError("");
+    setStyles(s => ({ ...s, [cat]: [...s[cat], { style: val, priceRand }] }));
+    setStyleInputs(i => ({ ...i, [cat]: { style: "", priceRand: "" } }));
   };
 
   const removeStyle = (cat: ServiceTypeId, idx: number) => {
     setStyles(s => ({ ...s, [cat]: s[cat].filter((_, i) => i !== idx) }));
   };
 
+  const updateStylePrice = (cat: ServiceTypeId, idx: number, priceRand: string) => {
+    setStyles(s => ({ ...s, [cat]: s[cat].map((e, i) => i === idx ? { ...e, priceRand } : e) }));
+  };
+
   const handleSave = async () => {
     setSaving(true); setError(""); setSaved(false);
     try {
+      // Every listed style needs a price before we save anything.
+      for (const cat of selected as ServiceTypeId[]) {
+        for (const entry of styles[cat]) {
+          if (!entry.priceRand || !(parseFloat(entry.priceRand) > 0)) {
+            throw new Error(`Add a price for "${entry.style}" before saving.`);
+          }
+        }
+      }
+
       const primary = selected[0] ?? null;
 
       // Update profile category
@@ -1767,8 +1804,8 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
       await supabase.from("artist_service_styles").delete().eq("user_id", user.id);
       const rows: { user_id: string; category: ServiceTypeId; style: string }[] = [];
       for (const cat of selected as ServiceTypeId[]) {
-        for (const style of styles[cat]) {
-          rows.push({ user_id: user.id, category: cat, style });
+        for (const entry of styles[cat]) {
+          rows.push({ user_id: user.id, category: cat, style: entry.style });
         }
       }
       if (rows.length > 0) {
@@ -1778,8 +1815,9 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
 
       // Keep the public "artists" listing row in sync — this is what the
       // homepage and search actually read from, separate from `profiles`.
+      let artistId: string | null = null;
       if (primary) {
-        const { error: artistErr } = await supabase
+        const { data: artistRow, error: artistErr } = await supabase
           .from("artists")
           .upsert(
             {
@@ -1790,11 +1828,50 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
               is_active: true,
             },
             { onConflict: "profile_id" }
-          );
+          )
+          .select("id")
+          .single();
         if (artistErr) throw artistErr;
+        artistId = artistRow?.id ?? null;
       } else {
         // No category selected — hide any existing listing rather than deleting it
         await supabase.from("artists").update({ is_active: false }).eq("profile_id", user.id);
+      }
+
+      // Sync the priced, bookable `services` rows the frontend booking
+      // widget actually reads — this is the step that used to be missing,
+      // leaving style tags with no corresponding bookable/priced entry.
+      if (artistId) {
+        const { data: existing } = await supabase
+          .from("services")
+          .select("id, name, category")
+          .eq("artist_id", artistId);
+        const existingByKey = new Map((existing ?? []).map(r => [`${r.category}::${(r.name as string).trim().toLowerCase()}`, r.id as string]));
+        const matchedIds = new Set<string>();
+
+        for (const cat of selected as ServiceTypeId[]) {
+          for (const entry of styles[cat]) {
+            const name = entry.style.trim();
+            const price = Math.round(parseFloat(entry.priceRand) * 100);
+            const key = `${cat}::${name.toLowerCase()}`;
+            const existingId = existingByKey.get(key);
+            if (existingId) {
+              matchedIds.add(existingId);
+              await supabase.from("services").update({ price, is_active: true, category: cat }).eq("id", existingId);
+            } else {
+              await supabase.from("services").insert({ artist_id: artistId, name, price, duration_minutes: 60, category: cat, is_active: true });
+            }
+          }
+        }
+
+        // Anything that existed before but wasn't in this save (style
+        // removed/renamed) gets hidden rather than deleted, since a
+        // booking may already reference it.
+        const toHide = (existing ?? []).map(r => r.id as string).filter(id => !matchedIds.has(id));
+        if (toHide.length > 0) {
+          await supabase.from("services").update({ is_active: false }).in("id", toHide);
+        }
+        setServicesSyncedAt(Date.now());
       }
 
       if (data) { onUpdate(data as Profile); setSaved(true); setTimeout(() => setSaved(false), 3000); }
@@ -1811,7 +1888,7 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
     <div style={{ maxWidth: 680 }}>
       <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>My Services</h2>
       <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "2rem" }}>
-        Select the beauty services you offer and list the styles you specialise in. Clients search by style — the more specific, the better.
+        Select the beauty services you offer and list the styles you specialise in, each with its own price. Clients search by style and book directly at the price you set here.
       </p>
 
       {/* 4 category sections */}
@@ -1862,30 +1939,45 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
                     <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.5rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                       {s.label} styles you offer
                     </label>
-                    {/* Tag list */}
+                    {/* Tag list — each entry shows its price and can be edited inline */}
                     {styles[s.id].length > 0 && (
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.75rem" }}>
-                        {styles[s.id].map((style, idx) => (
-                          <span key={idx} style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", background: "var(--plum-t)", color: "var(--plum)", borderRadius: 100, padding: "0.25rem 0.75rem", fontSize: "0.82rem", fontWeight: 500 }}>
-                            {style}
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                        {styles[s.id].map((entry, idx) => (
+                          <div key={idx} style={{ display: "flex", alignItems: "center", gap: "0.5rem", background: "var(--plum-t)", borderRadius: 10, padding: "0.4rem 0.5rem 0.4rem 0.9rem" }}>
+                            <span style={{ flex: 1, fontSize: "0.85rem", fontWeight: 500, color: "var(--plum)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.style}</span>
+                            <span style={{ fontSize: "0.8rem", color: "var(--plum)", flexShrink: 0 }}>R</span>
+                            <input
+                              type="number" min="0" step="1" value={entry.priceRand}
+                              onChange={e => updateStylePrice(s.id, idx, e.target.value)}
+                              placeholder="price"
+                              style={{ width: 70, flexShrink: 0, padding: "0.3rem 0.5rem", borderRadius: 8, border: !entry.priceRand ? "1.5px solid #E53935" : "1.5px solid rgba(155,127,184,0.3)", fontSize: "0.82rem" }}
+                            />
                             <button
                               type="button"
                               onClick={() => removeStyle(s.id, idx)}
-                              style={{ background: "none", border: "none", color: "var(--plum)", cursor: "pointer", padding: "0 0.1rem", fontSize: "0.75rem", lineHeight: 1, display: "flex", alignItems: "center" }}
-                              aria-label={`Remove ${style}`}
+                              style={{ flexShrink: 0, background: "none", border: "none", color: "var(--plum)", cursor: "pointer", padding: "0.2rem", fontSize: "0.85rem", lineHeight: 1, display: "flex", alignItems: "center" }}
+                              aria-label={`Remove ${entry.style}`}
                             >✕</button>
-                          </span>
+                          </div>
                         ))}
                       </div>
                     )}
-                    {/* Add input */}
+                    {/* Add input — name + price together, so a service is never saved without a price */}
                     <div style={{ display: "flex", gap: "0.5rem" }}>
                       <input
-                        value={styleInputs[s.id]}
-                        onChange={e => setStyleInputs(i => ({ ...i, [s.id]: e.target.value }))}
+                        value={styleInputs[s.id].style}
+                        onChange={e => setStyleInputs(i => ({ ...i, [s.id]: { ...i[s.id], style: e.target.value } }))}
                         onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addStyle(s.id); } }}
                         placeholder={`e.g. ${s.id === "hair" ? "Dreadlocks" : s.id === "nails" ? "Gel extensions" : s.id === "makeup" ? "Bridal glam" : "Volume lashes"}`}
                         style={{ flex: 1, padding: "0.6rem 0.9rem", borderRadius: 10, border: "1.5px solid #E0E0E0", fontSize: "0.88rem" }}
+                      />
+                      <input
+                        type="number" min="0" step="1"
+                        value={styleInputs[s.id].priceRand}
+                        onChange={e => setStyleInputs(i => ({ ...i, [s.id]: { ...i[s.id], priceRand: e.target.value } }))}
+                        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addStyle(s.id); } }}
+                        placeholder="R price"
+                        style={{ width: 100, flexShrink: 0, padding: "0.6rem 0.9rem", borderRadius: 10, border: "1.5px solid #E0E0E0", fontSize: "0.88rem" }}
                       />
                       <button
                         type="button"
@@ -1893,7 +1985,7 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
                         style={{ flexShrink: 0, background: "var(--plum)", color: "#fff", border: "none", borderRadius: 10, padding: "0.6rem 1rem", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer" }}
                       >Add</button>
                     </div>
-                    <p style={{ fontSize: "0.73rem", color: "var(--light)", marginTop: "0.35rem" }}>Press Enter or click Add. These become searchable tags on Umuhle.</p>
+                    <p style={{ fontSize: "0.73rem", color: "var(--light)", marginTop: "0.35rem" }}>Press Enter or click Add. Each service needs a price — clients book and pay this amount directly.</p>
                   </div>
                 )}
               </div>
@@ -1910,7 +2002,7 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
         <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "1rem" }}>Your listed services and styles help clients find you when searching on Umuhle.</p>
       </div>
 
-      <PricedServicesManager user={user} categories={selected as ServiceTypeId[]} />
+      <PricedServicesManager user={user} categories={selected as ServiceTypeId[]} refreshSignal={servicesSyncedAt} />
     </div>
   );
 }
