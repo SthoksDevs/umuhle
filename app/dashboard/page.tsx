@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Profile, Booking, Artist, Order, OrderItem, Product, Wallet, WalletTransaction, Withdrawal } from "@/types";
+import { UPSELL_TAG_GROUPS, upsellTagLabel } from "@/types";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -1523,7 +1524,7 @@ function MySalonTab({ user }: { user: { id: string } }) {
 // writes both to artist_service_styles (search tags) and services (the
 // priced, bookable rows the frontend booking widget actually reads) in one
 // step — price is captured at the moment a service is added, not after.
-type StyleEntry = { style: string; priceRand: string };
+type StyleEntry = { style: string; priceRand: string; tags: string[] };
 type ServiceStyles = Record<ServiceTypeId, StyleEntry[]>;
 
 type ArtistService = {
@@ -1533,6 +1534,7 @@ type ArtistService = {
   price: number; // cents
   duration_minutes: number;
   category: ServiceTypeId | null;
+  tags: string[];
   is_active: boolean;
 };
 
@@ -1543,9 +1545,10 @@ type ServiceFormState = {
   priceRand: string; // controlled input, e.g. "350"
   duration_minutes: number;
   category: ServiceTypeId | "";
+  tags: string[];
 };
 
-const EMPTY_SERVICE_FORM: ServiceFormState = { id: null, name: "", description: "", priceRand: "", duration_minutes: 60, category: "" };
+const EMPTY_SERVICE_FORM: ServiceFormState = { id: null, name: "", description: "", priceRand: "", duration_minutes: 60, category: "", tags: [] };
 
 // Lets an artist create the actual bookable, priced line items clients pay
 // for — distinct from the style tags above, which are just search/discovery
@@ -1563,7 +1566,7 @@ function PricedServicesManager({ user, categories, refreshSignal }: { user: User
   const loadServices = useCallback(async (aid: string) => {
     const { data } = await supabase
       .from("services")
-      .select("id, name, description, price, duration_minutes, category, is_active")
+      .select("id, name, description, price, duration_minutes, category, tags, is_active")
       .eq("artist_id", aid)
       .order("name");
     setServices((data ?? []) as ArtistService[]);
@@ -1587,7 +1590,7 @@ function PricedServicesManager({ user, categories, refreshSignal }: { user: User
   const startAdd = () => { setError(""); setForm({ ...EMPTY_SERVICE_FORM, category: categories[0] ?? "" }); };
   const startEdit = (s: ArtistService) => {
     setError("");
-    setForm({ id: s.id, name: s.name, description: s.description ?? "", priceRand: String(s.price / 100), duration_minutes: s.duration_minutes, category: s.category ?? "" });
+    setForm({ id: s.id, name: s.name, description: s.description ?? "", priceRand: String(s.price / 100), duration_minutes: s.duration_minutes, category: s.category ?? "", tags: s.tags ?? [] });
   };
 
   const handleSaveForm = async () => {
@@ -1605,6 +1608,7 @@ function PricedServicesManager({ user, categories, refreshSignal }: { user: User
       price: Math.round(priceNum * 100),
       duration_minutes: form.duration_minutes,
       category: form.category || null,
+      tags: form.tags,
     };
     const { error: err } = form.id
       ? await supabase.from("services").update(payload).eq("id", form.id)
@@ -1654,6 +1658,11 @@ function PricedServicesManager({ user, categories, refreshSignal }: { user: User
                 <p style={{ margin: "0.15rem 0 0", fontSize: "0.78rem", color: "var(--grey)" }}>
                   {fmt(s.price)} · {s.duration_minutes} min{s.category ? ` · ${s.category}` : ""}{!s.is_active ? " · Hidden" : ""}
                 </p>
+                {s.tags?.length > 0 && (
+                  <p style={{ margin: "0.25rem 0 0", fontSize: "0.72rem", color: "var(--plum)" }}>
+                    Suggests: {s.tags.map(upsellTagLabel).join(", ")}
+                  </p>
+                )}
               </div>
               <div style={{ display: "flex", gap: "0.5rem", flexShrink: 0 }}>
                 <button type="button" onClick={() => handleToggleActive(s)} style={{ background: "none", border: "1.5px solid rgba(155,127,184,0.3)", borderRadius: 8, padding: "0.35rem 0.7rem", fontSize: "0.75rem", color: "var(--grey)", cursor: "pointer" }}>
@@ -1697,6 +1706,24 @@ function PricedServicesManager({ user, categories, refreshSignal }: { user: User
             <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Description (optional)</label>
             <textarea value={form.description} onChange={e => setForm(f => f && ({ ...f, description: e.target.value }))} rows={2} style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem", resize: "vertical" }} />
           </div>
+          <div style={{ marginBottom: "0.9rem" }}>
+            <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Suggest products for this service (optional)</label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+              {[
+                ...(UPSELL_TAG_GROUPS.find(g => g.category === form.category)?.tags ?? []),
+                ...(UPSELL_TAG_GROUPS.find(g => g.category === "general")?.tags ?? []),
+              ].map(t => {
+                const on = form.tags.includes(t.id);
+                return (
+                  <button
+                    key={t.id} type="button"
+                    onClick={() => setForm(f => f && ({ ...f, tags: on ? f.tags.filter(x => x !== t.id) : [...f.tags, t.id] }))}
+                    style={{ borderRadius: 100, border: `1.5px solid ${on ? "var(--plum)" : "#E0E0E0"}`, background: on ? "var(--plum)" : "#fff", color: on ? "#fff" : "var(--grey)", padding: "0.2rem 0.65rem", fontSize: "0.75rem", fontWeight: 500, cursor: "pointer" }}
+                  >{t.label}</button>
+                );
+              })}
+            </div>
+          </div>
           {error && <p style={{ color: "#E53935", fontSize: "0.82rem", marginBottom: "0.75rem" }}>{error}</p>}
           <div style={{ display: "flex", gap: "0.6rem" }}>
             <button type="button" onClick={handleSaveForm} disabled={saving} className="btn-plum" style={{ padding: "0.55rem 1.4rem", fontSize: "0.85rem" }}>{saving ? "Saving…" : form.id ? "Save changes" : "Add service"}</button>
@@ -1715,7 +1742,7 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
   const [selected, setSelected] = useState<string[]>(profile.artist_category ? [profile.artist_category] : []);
   const [styles, setStyles] = useState<ServiceStyles>({ hair: [], nails: [], makeup: [], lashes: [] });
   const [styleInputs, setStyleInputs] = useState<Record<ServiceTypeId, StyleEntry>>({
-    hair: { style: "", priceRand: "" }, nails: { style: "", priceRand: "" }, makeup: { style: "", priceRand: "" }, lashes: { style: "", priceRand: "" },
+    hair: { style: "", priceRand: "", tags: [] }, nails: { style: "", priceRand: "", tags: [] }, makeup: { style: "", priceRand: "", tags: [] }, lashes: { style: "", priceRand: "", tags: [] },
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -1724,8 +1751,8 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
   const [servicesSyncedAt, setServicesSyncedAt] = useState(0);
 
   // Load existing style tags, then best-effort match each one against an
-  // existing priced `services` row (by name + category) so a price already
-  // set doesn't get wiped out or shown blank on reload.
+  // existing priced `services` row (by name + category) so a price/tags
+  // already set don't get wiped out or shown blank on reload.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -1735,10 +1762,10 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
         .eq("user_id", user.id);
 
       const { data: artistRow } = await supabase.from("artists").select("id").eq("profile_id", user.id).maybeSingle();
-      let priceByKey = new Map<string, number>();
+      let svcByKey = new Map<string, { price: number; tags: string[] }>();
       if (artistRow?.id) {
-        const { data: svcRows } = await supabase.from("services").select("name, category, price").eq("artist_id", artistRow.id);
-        priceByKey = new Map((svcRows ?? []).map(r => [`${r.category}::${r.name.trim().toLowerCase()}`, r.price as number]));
+        const { data: svcRows } = await supabase.from("services").select("name, category, price, tags").eq("artist_id", artistRow.id);
+        svcByKey = new Map((svcRows ?? []).map(r => [`${r.category}::${r.name.trim().toLowerCase()}`, { price: r.price as number, tags: (r.tags as string[] | null) ?? [] }]));
       }
 
       if (cancelled) return;
@@ -1746,8 +1773,8 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
         const grouped: ServiceStyles = { hair: [], nails: [], makeup: [], lashes: [] };
         for (const row of styleRows as { category: ServiceTypeId; style: string }[]) {
           if (!grouped[row.category]) continue;
-          const price = priceByKey.get(`${row.category}::${row.style.trim().toLowerCase()}`);
-          grouped[row.category].push({ style: row.style, priceRand: price != null ? String(price / 100) : "" });
+          const match = svcByKey.get(`${row.category}::${row.style.trim().toLowerCase()}`);
+          grouped[row.category].push({ style: row.style, priceRand: match ? String(match.price / 100) : "", tags: match?.tags ?? [] });
         }
         setStyles(grouped);
       }
@@ -1761,12 +1788,13 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
   const addStyle = (cat: ServiceTypeId) => {
     const val = styleInputs[cat].style.trim();
     const priceRand = styleInputs[cat].priceRand;
+    const tags = styleInputs[cat].tags;
     if (!val) return;
     if (!priceRand || !(parseFloat(priceRand) > 0)) { setError(`Add a price for "${val}" before adding it.`); return; }
-    if (styles[cat].some(e => e.style.toLowerCase() === val.toLowerCase())) { setStyleInputs(i => ({ ...i, [cat]: { style: "", priceRand: "" } })); return; }
+    if (styles[cat].some(e => e.style.toLowerCase() === val.toLowerCase())) { setStyleInputs(i => ({ ...i, [cat]: { style: "", priceRand: "", tags: [] } })); return; }
     setError("");
-    setStyles(s => ({ ...s, [cat]: [...s[cat], { style: val, priceRand }] }));
-    setStyleInputs(i => ({ ...i, [cat]: { style: "", priceRand: "" } }));
+    setStyles(s => ({ ...s, [cat]: [...s[cat], { style: val, priceRand, tags }] }));
+    setStyleInputs(i => ({ ...i, [cat]: { style: "", priceRand: "", tags: [] } }));
   };
 
   const removeStyle = (cat: ServiceTypeId, idx: number) => {
@@ -1776,6 +1804,21 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
   const updateStylePrice = (cat: ServiceTypeId, idx: number, priceRand: string) => {
     setStyles(s => ({ ...s, [cat]: s[cat].map((e, i) => i === idx ? { ...e, priceRand } : e) }));
   };
+
+  const toggleEntryTag = (cat: ServiceTypeId, idx: number, tagId: string) => {
+    setStyles(s => ({ ...s, [cat]: s[cat].map((e, i) => i === idx ? { ...e, tags: e.tags.includes(tagId) ? e.tags.filter(t => t !== tagId) : [...e.tags, tagId] } : e) }));
+  };
+
+  const toggleInputTag = (cat: ServiceTypeId, tagId: string) => {
+    setStyleInputs(i => ({ ...i, [cat]: { ...i[cat], tags: i[cat].tags.includes(tagId) ? i[cat].tags.filter(t => t !== tagId) : [...i[cat].tags, tagId] } }));
+  };
+
+  // Relevant upsell tag options for a given service category — its own
+  // group plus the cross-category "general" group (gift sets, tools).
+  const tagOptionsFor = (cat: ServiceTypeId) => [
+    ...(UPSELL_TAG_GROUPS.find(g => g.category === cat)?.tags ?? []),
+    ...(UPSELL_TAG_GROUPS.find(g => g.category === "general")?.tags ?? []),
+  ];
 
   const handleSave = async () => {
     setSaving(true); setError(""); setSaved(false);
@@ -1857,9 +1900,9 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
             const existingId = existingByKey.get(key);
             if (existingId) {
               matchedIds.add(existingId);
-              await supabase.from("services").update({ price, is_active: true, category: cat }).eq("id", existingId);
+              await supabase.from("services").update({ price, is_active: true, category: cat, tags: entry.tags }).eq("id", existingId);
             } else {
-              await supabase.from("services").insert({ artist_id: artistId, name, price, duration_minutes: 60, category: cat, is_active: true });
+              await supabase.from("services").insert({ artist_id: artistId, name, price, duration_minutes: 60, category: cat, tags: entry.tags, is_active: true });
             }
           }
         }
@@ -1939,25 +1982,44 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
                     <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.5rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                       {s.label} styles you offer
                     </label>
-                    {/* Tag list — each entry shows its price and can be edited inline */}
+                    {/* Tag list — each entry shows its price and upsell tags, editable inline */}
                     {styles[s.id].length > 0 && (
                       <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginBottom: "0.75rem" }}>
                         {styles[s.id].map((entry, idx) => (
-                          <div key={idx} style={{ display: "flex", alignItems: "center", gap: "0.5rem", background: "var(--plum-t)", borderRadius: 10, padding: "0.4rem 0.5rem 0.4rem 0.9rem" }}>
-                            <span style={{ flex: 1, fontSize: "0.85rem", fontWeight: 500, color: "var(--plum)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.style}</span>
-                            <span style={{ fontSize: "0.8rem", color: "var(--plum)", flexShrink: 0 }}>R</span>
-                            <input
-                              type="number" min="0" step="1" value={entry.priceRand}
-                              onChange={e => updateStylePrice(s.id, idx, e.target.value)}
-                              placeholder="price"
-                              style={{ width: 70, flexShrink: 0, padding: "0.3rem 0.5rem", borderRadius: 8, border: !entry.priceRand ? "1.5px solid #E53935" : "1.5px solid rgba(155,127,184,0.3)", fontSize: "0.82rem" }}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => removeStyle(s.id, idx)}
-                              style={{ flexShrink: 0, background: "none", border: "none", color: "var(--plum)", cursor: "pointer", padding: "0.2rem", fontSize: "0.85rem", lineHeight: 1, display: "flex", alignItems: "center" }}
-                              aria-label={`Remove ${entry.style}`}
-                            >✕</button>
+                          <div key={idx} style={{ background: "var(--plum-t)", borderRadius: 10, padding: "0.4rem 0.5rem 0.5rem 0.9rem" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                              <span style={{ flex: 1, fontSize: "0.85rem", fontWeight: 500, color: "var(--plum)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.style}</span>
+                              <span style={{ fontSize: "0.8rem", color: "var(--plum)", flexShrink: 0 }}>R</span>
+                              <input
+                                type="number" min="0" step="1" value={entry.priceRand}
+                                onChange={e => updateStylePrice(s.id, idx, e.target.value)}
+                                placeholder="price"
+                                style={{ width: 70, flexShrink: 0, padding: "0.3rem 0.5rem", borderRadius: 8, border: !entry.priceRand ? "1.5px solid #E53935" : "1.5px solid rgba(155,127,184,0.3)", fontSize: "0.82rem" }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => removeStyle(s.id, idx)}
+                                style={{ flexShrink: 0, background: "none", border: "none", color: "var(--plum)", cursor: "pointer", padding: "0.2rem", fontSize: "0.85rem", lineHeight: 1, display: "flex", alignItems: "center" }}
+                                aria-label={`Remove ${entry.style}`}
+                              >✕</button>
+                            </div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.4rem" }}>
+                              {tagOptionsFor(s.id).map(t => {
+                                const on = entry.tags.includes(t.id);
+                                return (
+                                  <button
+                                    key={t.id}
+                                    type="button"
+                                    onClick={() => toggleEntryTag(s.id, idx, t.id)}
+                                    style={{
+                                      borderRadius: 100, border: `1.5px solid ${on ? "var(--plum)" : "rgba(155,127,184,0.3)"}`,
+                                      background: on ? "var(--plum)" : "#fff", color: on ? "#fff" : "var(--grey)",
+                                      padding: "0.15rem 0.6rem", fontSize: "0.72rem", fontWeight: 500, cursor: "pointer",
+                                    }}
+                                  >{t.label}</button>
+                                );
+                              })}
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -1985,7 +2047,25 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
                         style={{ flexShrink: 0, background: "var(--plum)", color: "#fff", border: "none", borderRadius: 10, padding: "0.6rem 1rem", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer" }}
                       >Add</button>
                     </div>
-                    <p style={{ fontSize: "0.73rem", color: "var(--light)", marginTop: "0.35rem" }}>Press Enter or click Add. Each service needs a price — clients book and pay this amount directly.</p>
+                    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.5rem" }}>
+                      <span style={{ fontSize: "0.72rem", color: "var(--light)", marginRight: "0.15rem" }}>Suggest with:</span>
+                      {tagOptionsFor(s.id).map(t => {
+                        const on = styleInputs[s.id].tags.includes(t.id);
+                        return (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => toggleInputTag(s.id, t.id)}
+                            style={{
+                              borderRadius: 100, border: `1.5px solid ${on ? "var(--plum)" : "#E0E0E0"}`,
+                              background: on ? "var(--plum)" : "#fff", color: on ? "#fff" : "var(--grey)",
+                              padding: "0.15rem 0.6rem", fontSize: "0.72rem", fontWeight: 500, cursor: "pointer",
+                            }}
+                          >{t.label}</button>
+                        );
+                      })}
+                    </div>
+                    <p style={{ fontSize: "0.73rem", color: "var(--light)", marginTop: "0.35rem" }}>Press Enter or click Add. Each service needs a price — clients book and pay this amount directly. Tag what products go with it (e.g. Weave install → Extensions) so relevant products show up when a client books.</p>
                   </div>
                 )}
               </div>
