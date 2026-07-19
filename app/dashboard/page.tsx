@@ -1573,7 +1573,7 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
       // Update profile category
       const { data, error: err } = await supabase
         .from("profiles")
-        .update({ artist_category: primary as Profile["artist_category"], updated_at: new Date().toISOString() })
+        .update({ artist_category: primary as Profile["artist_category"], is_artist: primary !== null, updated_at: new Date().toISOString() })
         .eq("id", user.id)
         .select()
         .single();
@@ -1590,6 +1590,27 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
       if (rows.length > 0) {
         const { error: insertErr } = await supabase.from("artist_service_styles").insert(rows);
         if (insertErr) throw insertErr;
+      }
+
+      // Keep the public "artists" listing row in sync — this is what the
+      // homepage and search actually read from, separate from `profiles`.
+      if (primary) {
+        const { error: artistErr } = await supabase
+          .from("artists")
+          .upsert(
+            {
+              profile_id: user.id,
+              display_name: profile.full_name,
+              category: primary,
+              avatar_url: profile.avatar_url,
+              is_active: true,
+            },
+            { onConflict: "profile_id" }
+          );
+        if (artistErr) throw artistErr;
+      } else {
+        // No category selected — hide any existing listing rather than deleting it
+        await supabase.from("artists").update({ is_active: false }).eq("profile_id", user.id);
       }
 
       if (data) { onUpdate(data as Profile); setSaved(true); setTimeout(() => setSaved(false), 3000); }
