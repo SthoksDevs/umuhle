@@ -1,6 +1,6 @@
 // app/api/auth/send-otp/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { sendTextMessage } from "@/lib/whatsapp";
+import { sendTemplateMessage } from "@/lib/whatsapp";
 
 // In-memory OTP store (use Redis/Supabase in production for multi-instance)
 // For Vercel serverless, we store OTPs in a signed cookie instead
@@ -31,11 +31,20 @@ export async function POST(req: NextRequest) {
   const ts = Date.now();
   const sig = signOtp(phone, otp, ts);
 
-  // Send via WhatsApp
-  const sent = await sendTextMessage(
-    phone,
-    `*Umuhle Verification Code*\n\nYour one-time code is: *${otp}*\n\nThis code expires in 10 minutes. Do not share it with anyone.`
-  );
+  // Send via WhatsApp — must use an approved Authentication template,
+  // since this is the first message to this number (no open session window)
+  const sent = await sendTemplateMessage(phone, "otp_verification", [
+    {
+      type: "body",
+      parameters: [{ type: "text", text: otp }],
+    },
+    {
+      type: "button",
+      sub_type: "copy_code",
+      index: "0",
+      parameters: [{ type: "coupon_code", coupon_code: otp }],
+    },
+  ]);
 
   if (!sent) {
     return NextResponse.json({ error: "Failed to send WhatsApp message. Check your phone number." }, { status: 500 });
