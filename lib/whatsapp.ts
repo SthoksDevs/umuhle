@@ -69,7 +69,7 @@ export async function sendTemplateMessage(
     template: {
       name: templateName,
       language: {
-        code: "en",
+        code: "en_US",
       },
       components,
     },
