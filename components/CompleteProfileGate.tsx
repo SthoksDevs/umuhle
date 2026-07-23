@@ -80,7 +80,16 @@ export default function CompleteProfileGate() {
 
     setSaving(false);
     if (err) { setError(err.message); return; }
-    if (data) { setProfile(data as Profile); setShow(false); }
+    if (data) {
+      setProfile(data as Profile);
+      setShow(false);
+      // Best-effort — a failed WhatsApp send shouldn't block account setup.
+      fetch("/api/auth/notify-account-created", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: data.full_name, phone: whatsapp.trim() }),
+      }).catch(() => {});
+    }
   };
 
   const handleLater = () => {

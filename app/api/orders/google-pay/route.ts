@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { createPendingOrder } from "@/lib/orders";
-import { sendTextMessage } from "@/lib/whatsapp";
+import { notifyOrderPaid } from "@/lib/whatsapp";
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
@@ -61,13 +61,17 @@ export async function POST(req: NextRequest) {
       .eq("id", orderId);
   }
 
-  // WhatsApp confirmation
+  // WhatsApp confirmation — same umuhle_order template used by the other gateways
   const notifyPhone = contactWhatsapp ?? profile.phone;
   if (notifyPhone) {
-    await sendTextMessage(
-      notifyPhone,
-      `*Order Confirmed!*\n\nHi ${contactName ?? profile.full_name ?? "there"}, your Umuhle order has been confirmed via Google Pay.\n\nOrder ID: ${orderId}\nTotal: R${(totalAmount / 100).toFixed(0)}\n\nWe'll send you delivery updates here. Thank you! 💜`
-    );
+    await notifyOrderPaid({
+      clientName: contactName ?? profile.full_name ?? "there",
+      clientPhone: notifyPhone,
+      orderId,
+      itemCount: items.length,
+      totalAmount,
+      paymentMethod: "google_pay",
+    });
   }
 
   return NextResponse.json({ orderId });

@@ -1,4 +1,6 @@
-// lib/whatsapp.ts 
+// lib/whatsapp.ts
+import { buildAccountVerifyUrl } from "@/lib/account-verify";
+
   const WA_API_URL = `https://graph.facebook.com/v20.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`; 
   
   function normalisePhone(phone: string): string {
@@ -164,18 +166,32 @@ export async function notifyBookingCreated(
 export async function notifyBookingReminder(
   opts: BookingNotifyOpts
 ) {
-  const clientMsg =
-    `*Appointment Reminder*\n\n` +
-    `Hi ${opts.clientName}, this is a reminder that your appointment with *${opts.artistName}* is tomorrow at ${opts.time}.\n\n` +
-    `Service: ${opts.serviceName}\n\n` +
-    `We look forward to seeing you.`;
+  // Client-facing reminder uses the approved WABA template
+  // "umuhle_booking_reminder" (button is static — "View details" ->
+  // https://umuhle.co.za/dashboard?tab=bookings). Artist/POC reminders
+  // below stay as free-text session messages — no template for those yet.
+  const formattedDate = new Date(`${opts.date}T00:00:00`).toLocaleDateString("en-ZA", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
 
   const artistMsg =
     `*Tomorrow's Appointment*\n\n` +
     `Reminder: ${opts.clientName} has booked *${opts.serviceName}* tomorrow at ${opts.time}.`;
 
   const promises: Promise<boolean>[] = [
-    sendTextMessage(opts.clientPhone, clientMsg),
+    sendTemplateMessage(opts.clientPhone, "umuhle_booking_reminder", [
+      {
+        type: "body",
+        parameters: [
+          { type: "text", text: opts.clientName },
+          { type: "text", text: opts.artistName },
+          { type: "text", text: formattedDate },
+          { type: "text", text: opts.time },
+        ],
+      },
+    ]),
     sendTextMessage(opts.artistPhone, artistMsg),
   ];
 
@@ -278,22 +294,22 @@ export async function notifyOrderPaid(opts: {
   totalAmount: number; // cents
   paymentMethod: "payfast" | "happypay" | "ozow" | "google_pay";
 }) {
-  const methodLabel =
-    opts.paymentMethod === "happypay" ? "HappyPay (Pay in installments)"
-    : opts.paymentMethod === "ozow" ? "Ozow (Instant EFT)"
-    : opts.paymentMethod === "google_pay" ? "Google Pay"
-    : "Card/EFT via PayFast";
+  // Uses the approved WABA template "umuhle_order" (header/button are static
+  // in the template — "View order" -> https://umuhle.co.za/dashboard?tab=my-orders).
+  // Note: itemCount/totalAmount/paymentMethod are no longer rendered in the
+  // WhatsApp message itself (the template body is fixed copy) — they're still
+  // shown on the order confirmation email and the dashboard.
+  const orderNumber = `#${opts.orderId.slice(0, 8).toUpperCase()}`;
 
-  const msg =
-    `*Order Confirmed*\\n\\n` +
-    `Hi ${opts.clientName}, we've received payment for your Umuhle Shop order.\\n\\n` +
-    `Order: #${opts.orderId.slice(0, 8).toUpperCase()}\\n` +
-    `Items: ${opts.itemCount}\\n` +
-    `Total: R${(opts.totalAmount / 100).toFixed(0)}\\n` +
-    `Paid via: ${methodLabel}\\n\\n` +
-    `We'll message you here as soon as your order ships.`;
-
-  return sendTextMessage(opts.clientPhone, msg);
+  return sendTemplateMessage(opts.clientPhone, "umuhle_order", [
+    {
+      type: "body",
+      parameters: [
+        { type: "text", text: opts.clientName },
+        { type: "text", text: orderNumber },
+      ],
+    },
+  ]);
 }
 
 export async function notifyOrderItemShipped(opts: {
@@ -304,13 +320,22 @@ export async function notifyOrderItemShipped(opts: {
   quantity: number;
   confirmToken: string;
 }) {
-  const link = `https://umuhle.co.za/confirm-receipt/${opts.confirmToken}`;
-  const msg =
-    `*Your order is on its way!*\n\n` +
-    `Hi ${opts.clientName}, ${opts.productName} (× ${opts.quantity}) from order #${opts.orderId.slice(0, 8).toUpperCase()} is on its way.\n\n` +
-    `Once it arrives, please confirm delivery here:\n${link}`;
+  // Uses the approved WABA template "umuhle_order_shipped" (no button in
+  // this template). The confirm-receipt link
+  // (https://umuhle.co.za/confirm-receipt/[token]) is no longer sent via
+  // WhatsApp — customers still get it by email
+  // (sendOrderItemShippedEmail, called alongside this in the ship route).
+  const orderNumber = `#${opts.orderId.slice(0, 8).toUpperCase()}`;
 
-  return sendTextMessage(opts.clientPhone, msg);
+  return sendTemplateMessage(opts.clientPhone, "umuhle_order_shipped", [
+    {
+      type: "body",
+      parameters: [
+        { type: "text", text: opts.clientName },
+        { type: "text", text: orderNumber },
+      ],
+    },
+  ]);
 }
 
 export async function notifyPartnerWelcome(opts: {
@@ -342,4 +367,36 @@ export async function notifyReferralRewarded(opts: {
     `Keep referring Partners to earn more rewards.`;
 
   return sendTextMessage(opts.phone, msg);
+}
+
+export async function notifyAccountCreated(opts: {
+  phone: string;
+  name: string;
+  whatsappNumber: string;
+  userId: string;
+}) {
+  // Uses the approved WABA template "umuhle_account". Its button is a
+  // DYNAMIC Website URL button whose "Website URL" field in Meta is
+  // configured as JUST {{1}} — no static prefix — so the parameter we send
+  // must be the ENTIRE url, not a path segment. Clicking it hits
+  // app/verify-account/route.ts, which records a reference-only
+  // whatsapp_verified_at timestamp — it does not gate account_status or
+  // payments.
+  const verifyUrl = buildAccountVerifyUrl(opts.userId);
+
+  return sendTemplateMessage(opts.phone, "umuhle_account", [
+    {
+      type: "body",
+      parameters: [
+        { type: "text", text: opts.name },
+        { type: "text", text: opts.whatsappNumber },
+      ],
+    },
+    {
+      type: "button",
+      sub_type: "url",
+      index: "0",
+      parameters: [{ type: "text", text: verifyUrl }],
+    },
+  ]);
 }
