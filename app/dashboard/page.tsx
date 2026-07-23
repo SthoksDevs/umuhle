@@ -331,7 +331,6 @@ function ProfileTab({ profile, user, onUpdate }: { profile: Profile; user: User;
   const [avatarUrl, setAvatarUrl] = useState(profile.avatar_url ?? "");
   const [phoneChanged, setPhoneChanged] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
-  const [otpCode, setOtpCode] = useState("");
   const [otpVerified, setOtpVerified] = useState(false);
   const [otpLoading, setOtpLoading] = useState(false);
   const [otpError, setOtpError] = useState("");
@@ -340,28 +339,22 @@ function ProfileTab({ profile, user, onUpdate }: { profile: Profile; user: User;
   const handlePhoneChange = (val: string) => {
     setForm(f => ({ ...f, phone: val }));
     setPhoneChanged(val.replace(/\D/g, "") !== originalPhone.replace(/\D/g, ""));
-    setOtpSent(false); setOtpVerified(false); setOtpCode(""); setOtpError("");
+    setOtpSent(false); setOtpVerified(false); setOtpError("");
   };
+  // Uses the same "umuhle_account" WABA template as the signup popup
+  // (CompleteProfileGate) instead of the old otp_verification template,
+  // which was never approved in Meta and always failed to send. This is a
+  // best-effort, reference-only send — same as the popup, it doesn't wait
+  // for a code back, it just confirms the number is reachable on WhatsApp.
   const handleSendOtp = async () => {
     if (!form.phone) { setOtpError("Enter a WhatsApp number first."); return; }
     setOtpLoading(true); setOtpError("");
     try {
-      const res = await fetch("/api/auth/send-otp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone: form.phone }) });
+      const res = await fetch("/api/auth/notify-account-created", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: form.full_name, phone: form.phone }) });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to send code");
-      setOtpSent(true);
-    } catch (err: unknown) { setOtpError(err instanceof Error ? err.message : "Failed to send code"); }
-    finally { setOtpLoading(false); }
-  };
-  const handleVerifyOtp = async () => {
-    if (!otpCode.trim()) { setOtpError("Enter the 6-digit code."); return; }
-    setOtpLoading(true); setOtpError("");
-    try {
-      const res = await fetch("/api/auth/send-otp", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone: form.phone, code: otpCode }) });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Verification failed");
-      setOtpVerified(true); setOtpError("");
-    } catch (err: unknown) { setOtpError(err instanceof Error ? err.message : "Verification failed"); }
+      if (!res.ok) throw new Error(data.error ?? "Failed to send WhatsApp message");
+      setOtpSent(true); setOtpVerified(true);
+    } catch (err: unknown) { setOtpError(err instanceof Error ? err.message : "Failed to send WhatsApp message"); }
     finally { setOtpLoading(false); }
   };
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -432,15 +425,9 @@ function ProfileTab({ profile, user, onUpdate }: { profile: Profile; user: User;
               <button type="button" onClick={handleSendOtp} disabled={otpLoading} style={{ flexShrink: 0, background: "var(--plum)", color: "#fff", border: "none", borderRadius: 12, padding: "0 1rem", fontSize: "0.82rem", fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap" }}>{otpLoading ? "Sending…" : otpSent ? "Resend" : "Verify"}</button>
             )}
           </div>
-          {otpSent && !otpVerified && (
-            <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.5rem" }}>
-              <input value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder="Enter 6-digit code" maxLength={6} style={{ flex: 1, padding: "0.65rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", letterSpacing: "0.15em", textAlign: "center" }} />
-              <button type="button" onClick={handleVerifyOtp} disabled={otpLoading} style={{ flexShrink: 0, background: "var(--forest)", color: "#fff", border: "none", borderRadius: 12, padding: "0 1rem", fontSize: "0.82rem", fontWeight: 500, cursor: "pointer" }}>{otpLoading ? "…" : "Confirm"}</button>
-            </div>
-          )}
           {otpError && <p style={{ color: "#E53935", fontSize: "0.8rem", marginTop: "0.4rem" }}>{otpError}</p>}
           {!otpSent && <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "0.35rem" }}>Used for booking notifications. Changing your number requires verification.</p>}
-          {otpSent && !otpVerified && <p style={{ fontSize: "0.75rem", color: "var(--nude)", marginTop: "0.35rem" }}>A 6-digit code was sent to your WhatsApp. Enter it above.</p>}
+          {otpSent && otpVerified && <p style={{ fontSize: "0.75rem", color: "var(--forest)", marginTop: "0.35rem" }}>We sent a WhatsApp message to this number to confirm it's reachable.</p>}
         </div>
         {error && <p style={{ color: "#E53935", fontSize: "0.85rem" }}>{error}</p>}
         {saved && <p style={{ color: "var(--forest)", fontSize: "0.85rem" }}>Profile updated successfully.</p>}
