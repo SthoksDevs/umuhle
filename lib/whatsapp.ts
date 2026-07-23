@@ -377,9 +377,9 @@ export async function notifyAccountCreated(opts: {
 }) {
   // Uses the approved WABA template "umuhle_account". Its button is a
   // DYNAMIC Website URL button whose "Website URL" field in Meta is
-  // configured as JUST {{1}} — no static prefix — so the parameter we send
-  // must be the ENTIRE url, not a path segment. Clicking it hits
-  // app/verify-account/route.ts, which records a reference-only
+  // "https://www.umuhle.co.za/" + {{1}} — so the parameter we send must be
+  // ONLY the path segment (no domain), or the link doubles up. Clicking it
+  // hits app/verify-account/route.ts, which records a reference-only
   // whatsapp_verified_at timestamp — it does not gate account_status or
   // payments.
   const verifyUrl = buildAccountVerifyUrl(opts.userId);

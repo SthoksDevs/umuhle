@@ -20,12 +20,14 @@ function sign(userId: string, ts: number): string {
     .digest("hex");
 }
 
-/** Builds the full URL sent as the umuhle_account template's button parameter. */
+/** Builds the path segment appended to the umuhle_account template's static
+ *  "https://www.umuhle.co.za/" Website URL prefix — do NOT include the domain
+ *  here, Meta concatenates it for you. */
 export function buildAccountVerifyUrl(userId: string): string {
   const ts = Date.now();
   const sig = sign(userId, ts);
   const token = Buffer.from(JSON.stringify({ userId, ts, sig })).toString("base64url");
-  return `https://umuhle.co.za/verify-account?token=${token}`;
+  return `verify-account?token=${token}`;
 }
 
 /** Verifies a token from the query string. No expiry — this is a reference-only
