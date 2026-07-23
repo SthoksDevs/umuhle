@@ -1,6 +1,6 @@
 // app/api/auth/notify-account-created/route.ts
 //
-// Fired by CompleteProfileGate right after it saves a user's WhatsApp number
+// Fired after a user's WhatsApp number is saved (signup or dashboard edit)
 // and account type for the first time (works for both customer and
 // artist/business_partner signups — Google/Facebook signups skip our own
 // registration form, so this gate is the first point we actually have a

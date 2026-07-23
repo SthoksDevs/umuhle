@@ -341,11 +341,11 @@ function ProfileTab({ profile, user, onUpdate }: { profile: Profile; user: User;
     setPhoneChanged(val.replace(/\D/g, "") !== originalPhone.replace(/\D/g, ""));
     setOtpSent(false); setOtpVerified(false); setOtpError("");
   };
-  // Uses the same "umuhle_account" WABA template as the signup popup
-  // (CompleteProfileGate) instead of the old otp_verification template,
-  // which was never approved in Meta and always failed to send. This is a
-  // best-effort, reference-only send — same as the popup, it doesn't wait
-  // for a code back, it just confirms the number is reachable on WhatsApp.
+  // Uses the same "umuhle_account" WABA template that account creation used
+  // to send, instead of the old otp_verification template, which was never
+  // approved in Meta and always failed to send. This is a best-effort,
+  // reference-only send — it doesn't wait for a code back, it just confirms
+  // the number is reachable on WhatsApp.
   const handleSendOtp = async () => {
     if (!form.phone) { setOtpError("Enter a WhatsApp number first."); return; }
     setOtpLoading(true); setOtpError("");
@@ -3748,8 +3748,8 @@ function DashboardContent() {
         <div className="modal-overlay" onClick={() => setShowWhatsAppNudge(false)}>
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 380, boxShadow: "0 24px 80px rgba(0,0,0,0.15)", textAlign: "center" }}>
             <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>📱</div>
-            <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", marginBottom: "0.5rem" }}>Complete your profile</h3>
-            <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem", lineHeight: 1.6 }}>Your profile is missing a WhatsApp number. Add it so you can receive booking confirmations and service updates.</p>
+            <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", marginBottom: "0.5rem" }}>Just one more thing</h3>
+            <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem", lineHeight: 1.6 }}>We mainly talk to you on WhatsApp — bookings, confirmations, and updates all go there.</p>
             <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
               <button className="btn-plum" onClick={() => { setShowWhatsAppNudge(false); setTab("profile"); }} style={{ width: "100%", padding: "0.75rem" }}>Add WhatsApp number</button>
               <button onClick={() => setShowWhatsAppNudge(false)} style={{ background: "none", border: "none", color: "var(--light)", fontSize: "0.85rem", cursor: "pointer" }}>Remind me later</button>

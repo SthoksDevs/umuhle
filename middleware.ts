@@ -28,6 +28,14 @@ async function getAdminSlug(): Promise<string> {
 }
 
 export async function middleware(request: NextRequest) {
+  // ── Canonical host: strip "www." so every URL resolves to https://umuhle.co.za ──
+  const host = request.headers.get("host") ?? "";
+  if (host.startsWith("www.")) {
+    const url = request.nextUrl.clone();
+    url.host = host.slice(4);
+    return NextResponse.redirect(url, 308);
+  }
+
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
