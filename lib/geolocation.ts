@@ -16,15 +16,25 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 
-export type GeoStatus = "idle" | "checking" | "granted" | "denied" | "unsupported";
+export type GeoStatus = "idle" | "checking" | "granted" | "denied" | "unavailable" | "unsupported";
 
 export type Coords = { latitude: number; longitude: number };
+
+// One silent retry for "unavailable" (the browser's PERMISSION_DENIED vs.
+// POSITION_UNAVAILABLE/TIMEOUT distinction). macOS Safari in particular
+// often reports CoreLocation's kCLErrorLocationUnknown — "can't get a fix
+// yet" — on the first attempt while it's still acquiring a signal; that is
+// not the user blocking anything; it's often gone within a couple of
+// seconds. A single automatic retry avoids telling someone their location
+// is "blocked" when really the OS just hasn't answered yet.
+const AUTO_RETRY_DELAY_MS = 2500;
 
 export function useGeolocation() {
   const [status, setStatus] = useState<GeoStatus>("idle");
   const [coords, setCoords] = useState<Coords | null>(null);
   const [error, setError] = useState<string | null>(null);
   const requestingRef = useRef(false);
+  const autoRetriedRef = useRef(false);
 
   const request = useCallback(() => {
     if (typeof window === "undefined" || !("geolocation" in navigator)) {
@@ -37,13 +47,28 @@ export function useGeolocation() {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         requestingRef.current = false;
+        autoRetriedRef.current = false;
         setCoords({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
         setStatus("granted");
       },
       (err) => {
         requestingRef.current = false;
-        setStatus("denied");
         setError(err.message);
+
+        // Only PERMISSION_DENIED (code 1) means the user/OS actually said
+        // no — that's the only case worth calling "blocked." POSITION_
+        // UNAVAILABLE (2) and TIMEOUT (3) mean the device just couldn't get
+        // a fix yet, which is usually transient.
+        if (err.code === err.PERMISSION_DENIED) {
+          setStatus("denied");
+          return;
+        }
+
+        setStatus("unavailable");
+        if (!autoRetriedRef.current) {
+          autoRetriedRef.current = true;
+          setTimeout(request, AUTO_RETRY_DELAY_MS);
+        }
       },
       { enableHighAccuracy: false, timeout: 10_000, maximumAge: 5 * 60_000 }
     );

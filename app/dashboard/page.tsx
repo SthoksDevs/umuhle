@@ -520,6 +520,7 @@ function ProfileTab({ profile, user, locationStatus, onUpdate }: { profile: Prof
             {locationStatus === "granted" && "We're using your current location so nearby customers can find you. This updates automatically while you have the dashboard open."}
             {locationStatus === "checking" && "Getting your current location…"}
             {(locationStatus === "denied" || locationStatus === "idle") && "Location access isn't on, so you won't show up in customers' \"near me\" results yet. Your browser will prompt you for permission — allow it to start appearing nearby."}
+            {locationStatus === "unavailable" && "Couldn't get a location fix just now — this is usually temporary (weak signal, or your device is still acquiring one) rather than a permissions problem. We'll keep trying automatically."}
             {locationStatus === "unsupported" && "Your browser doesn't support location — you'll still show up in the full artist list, just not sorted by distance."}
           </p>
         </div>

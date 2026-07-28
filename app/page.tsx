@@ -522,11 +522,22 @@ export default function Home() {
                   </button>
                 </span>
               )}
+              {!ignoreRadius && geo.status === "checking" && (
+                <span>Finding artists near you…</span>
+              )}
               {!ignoreRadius && (geo.status === "idle" || geo.status === "denied") && (
                 <span>
                   {geo.status === "denied" ? "Location access blocked — s" : "S"}howing all artists, sorted by rating.{" "}
                   <button onClick={geo.request} style={{ background: "none", border: "none", padding: 0, color: "var(--plum)", fontWeight: 500, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}>
                     See who&apos;s near you instead
+                  </button>
+                </span>
+              )}
+              {!ignoreRadius && geo.status === "unavailable" && (
+                <span>
+                  Couldn&apos;t pin your location just now — showing all artists, sorted by rating.{" "}
+                  <button onClick={geo.request} style={{ background: "none", border: "none", padding: 0, color: "var(--plum)", fontWeight: 500, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}>
+                    Try again
                   </button>
                 </span>
               )}
