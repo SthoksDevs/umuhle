@@ -12,6 +12,13 @@ import SiteHeader from "@/components/SiteHeader";
 import StarRating from "@/components/StarRating";
 import { gTag, fbq, ttq } from "@/lib/analytics";
 import { useCart } from "@/lib/cart-context";
+import { useGeolocation } from "@/lib/geolocation";
+
+// How far a customer's search reaches by default. Matches
+// nearby_artists()/nearby_salons()'s own radius_km default in
+// supabase/migrations/20260727_proximity_and_push.sql — keep both in sync
+// if this ever changes.
+const NEARBY_RADIUS_KM = 50;
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
@@ -264,6 +271,13 @@ export default function Home() {
   // Booking
   const [selectedArtist, setSelectedArtist] = useState<Artist | null>(null);
 
+  // Proximity — see lib/geolocation.ts. `ignoreRadius` is the escape hatch
+  // for when a customer is granted-but-zero-results (e.g. a new market with
+  // few artists yet): rather than silently widening the radius ourselves,
+  // we tell them plainly and let them opt into seeing everyone.
+  const geo = useGeolocation();
+  const [ignoreRadius, setIgnoreRadius] = useState(false);
+
   // ── Auth listener ────────────────────────────────────────────────────────
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -360,22 +374,69 @@ export default function Home() {
   };
 
   // ── Fetch artists ────────────────────────────────────────────────────────
+  // When we have the customer's coordinates, nearby_artists() (a Postgres
+  // function — see the migration) does the distance filtering/ordering in
+  // SQL: only artists within NEARBY_RADIUS_KM AND whose location_updated_at
+  // is recent enough count, so an artist who moved away yesterday just
+  // stops showing up, no manual removal needed. We then fetch the full rows
+  // (still need the services join, which the RPC doesn't return) via
+  // `.in("id", …)` and re-sort client-side by the distance map, since `.in`
+  // doesn't preserve order.
   const fetchArtists = useCallback(async () => {
     setLoading(true);
+
+    let nearbyDistance: Record<string, number> | null = null;
+
+    if (geo.status === "granted" && geo.coords && !ignoreRadius) {
+      const { data: nearby, error: nearbyErr } = await supabase.rpc("nearby_artists", {
+        user_lat: geo.coords.latitude,
+        user_lng: geo.coords.longitude,
+        radius_km: NEARBY_RADIUS_KM,
+      });
+      if (!nearbyErr) {
+        const rows = (nearby ?? []) as { id: string; distance_km: number }[];
+        nearbyDistance = Object.fromEntries(rows.map(r => [r.id, r.distance_km]));
+        if (rows.length === 0) {
+          // Zero artists within radius — don't fall back silently (that
+          // would undercut the "hide once they've moved away" rule); show
+          // an empty grid and let the "show all instead" banner offer the
+          // opt-out.
+          setArtists([]);
+          setLoading(false);
+          return;
+        }
+      }
+      // On RPC error, nearbyDistance stays null and we fall through to the
+      // rating-sorted, unfiltered query below — same as a denied/unsupported
+      // permission.
+    }
+
     let query = supabase
       .from("artists")
       .select("*, services(id, name, price, duration_minutes, is_active)")
       .eq("is_active", true)
-      .eq("moderation_status", "approved")
-      .order("rating", { ascending: false })
-      .limit(24);
+      .eq("moderation_status", "approved");
+
+    if (nearbyDistance) {
+      // Closest 24, capped the same as the non-proximity path below.
+      query = query.in("id", Object.keys(nearbyDistance).slice(0, 24));
+    } else {
+      query = query.order("rating", { ascending: false }).limit(24);
+    }
+
     if (user) query = query.neq("profile_id", user.id);
     if (activeCategories.length > 0) query = query.in("category", activeCategories.map(c => c.toLowerCase()));
     if (searchQuery.trim()) query = query.ilike("display_name", `%${searchQuery.trim()}%`);
+
     const { data } = await query;
-    setArtists((data ?? []) as Artist[]);
+    let rows = (data ?? []) as Artist[];
+    if (nearbyDistance) {
+      const dist = nearbyDistance;
+      rows = [...rows].sort((a, b) => (dist[a.id] ?? Infinity) - (dist[b.id] ?? Infinity));
+    }
+    setArtists(rows);
     setLoading(false);
-  }, [activeCategories, searchQuery, user]);
+  }, [activeCategories, searchQuery, user, geo.status, geo.coords, ignoreRadius]);
 
   useEffect(() => {
     const t = setTimeout(fetchArtists, 300);
@@ -438,10 +499,38 @@ export default function Home() {
 
           {/* Artist grid */}
           <section id="artists" style={{ padding: "2rem 1.5rem 4rem", maxWidth: 900, margin: "0 auto" }}>
-            <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.5rem", marginBottom: "1.5rem", color: "var(--onyx)" }}>
+            <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.5rem", marginBottom: "0.5rem", color: "var(--onyx)" }}>
               {activeCategories.length === 0 ? "All artists" : `${activeCategories.join(" · ")} artists`}
               <span style={{ fontSize: "0.9rem", color: "var(--grey)", fontFamily: "var(--font-body)", fontWeight: 400, marginLeft: "0.5rem" }}>({artists.length})</span>
             </h2>
+
+            {/* Proximity banner — see lib/geolocation.ts */}
+            <div style={{ marginBottom: "1.25rem", fontSize: "0.82rem", color: "var(--grey)" }}>
+              {geo.status === "granted" && geo.coords && !ignoreRadius && (
+                <span>
+                  Showing artists within {NEARBY_RADIUS_KM}km of you.{" "}
+                  <button onClick={() => setIgnoreRadius(true)} style={{ background: "none", border: "none", padding: 0, color: "var(--plum)", fontWeight: 500, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}>
+                    Show all instead
+                  </button>
+                </span>
+              )}
+              {ignoreRadius && (
+                <span>
+                  Showing all artists, sorted by rating.{" "}
+                  <button onClick={() => setIgnoreRadius(false)} style={{ background: "none", border: "none", padding: 0, color: "var(--plum)", fontWeight: 500, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}>
+                    Show nearby only
+                  </button>
+                </span>
+              )}
+              {!ignoreRadius && (geo.status === "idle" || geo.status === "denied") && (
+                <span>
+                  {geo.status === "denied" ? "Location access blocked — s" : "S"}howing all artists, sorted by rating.{" "}
+                  <button onClick={geo.request} style={{ background: "none", border: "none", padding: 0, color: "var(--plum)", fontWeight: 500, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}>
+                    See who&apos;s near you instead
+                  </button>
+                </span>
+              )}
+            </div>
 
             {loading && (
               <p style={{ color: "var(--grey)", textAlign: "center", padding: "3rem 0" }}>
@@ -449,7 +538,18 @@ export default function Home() {
               </p>
             )}
 
-            {!loading && artists.length === 0 && (
+            {!loading && artists.length === 0 && geo.status === "granted" && !ignoreRadius && (
+              <div style={{ textAlign: "center", padding: "3rem 0" }}>
+                <p style={{ color: "var(--grey)", marginBottom: "0.75rem" }}>
+                  No artists within {NEARBY_RADIUS_KM}km of you right now.
+                </p>
+                <button onClick={() => setIgnoreRadius(true)} className="btn-outline" style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem" }}>
+                  Show all artists instead
+                </button>
+              </div>
+            )}
+
+            {!loading && artists.length === 0 && !(geo.status === "granted" && !ignoreRadius) && (
               <p style={{ color: "var(--grey)", textAlign: "center", padding: "3rem 0" }}>
                 No artists found. Try a different search or category.
               </p>

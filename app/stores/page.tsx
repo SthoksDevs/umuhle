@@ -9,6 +9,12 @@ import Footer from "@/components/Footer";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Profile } from "@/types";
+import { useGeolocation } from "@/lib/geolocation";
+
+// Kept in sync with app/page.tsx's NEARBY_RADIUS_KM and
+// nearby_salons()'s own radius_km default in
+// supabase/migrations/20260727_proximity_and_push.sql.
+const NEARBY_RADIUS_KM = 50;
 
 type OpeningHours = { days: string[]; open: string; close: string };
 
@@ -207,6 +213,11 @@ export default function StoresPage() {
   const [search, setSearch] = useState("");
   const [activeFilters, setActiveFilters] = useState<FilterCat[]>([]);
 
+  // Proximity — see lib/geolocation.ts and app/page.tsx (same pattern).
+  const geo = useGeolocation();
+  const [ignoreRadius, setIgnoreRadius] = useState(false);
+  const [distanceById, setDistanceById] = useState<Record<string, number> | null>(null);
+
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       setUser(user ?? null);
@@ -215,18 +226,60 @@ export default function StoresPage() {
   }, []);
 
   useEffect(() => {
-    supabase.from("partner_salons").select("id,name,description,address,suburb,city,phone,gallery_urls,instagram_username,opening_hours,services,latitude,longitude").eq("status","approved").order("created_at",{ascending:false})
-      .then(({ data }) => { setSalons((data as Salon[]) ?? []); setLoading(false); });
-  }, []);
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
 
-  const filtered = salons.filter(s => {
-    const q = search.toLowerCase();
-    const matchQ = !q || s.name.toLowerCase().includes(q) || (s.suburb ?? "").toLowerCase().includes(q) || (s.city ?? "").toLowerCase().includes(q);
-    const catFilters = activeFilters.filter(f => f !== "Open now");
-    const matchSvc = catFilters.length === 0 || catFilters.some(f => (s.services ?? []).includes(f.toLowerCase()));
-    const matchOpen = !activeFilters.includes("Open now") || isOpenNow(s).open;
-    return matchQ && matchSvc && matchOpen;
-  });
+      if (geo.status === "granted" && geo.coords && !ignoreRadius) {
+        const { data: nearby, error: nearbyErr } = await supabase.rpc("nearby_salons", {
+          user_lat: geo.coords.latitude,
+          user_lng: geo.coords.longitude,
+          radius_km: NEARBY_RADIUS_KM,
+        });
+        if (!nearbyErr) {
+          const rows = (nearby ?? []) as { id: string; distance_km: number }[];
+          if (cancelled) return;
+          setDistanceById(Object.fromEntries(rows.map(r => [r.id, r.distance_km])));
+          if (rows.length === 0) { setSalons([]); setLoading(false); return; }
+          const { data } = await supabase
+            .from("partner_salons")
+            .select("id,name,description,address,suburb,city,phone,gallery_urls,instagram_username,opening_hours,services,latitude,longitude")
+            .eq("status", "approved")
+            .in("id", rows.map(r => r.id));
+          if (cancelled) return;
+          setSalons((data as Salon[]) ?? []);
+          setLoading(false);
+          return;
+        }
+        // RPC error — fall through to the unfiltered query below.
+      }
+
+      setDistanceById(null);
+      const { data } = await supabase
+        .from("partner_salons")
+        .select("id,name,description,address,suburb,city,phone,gallery_urls,instagram_username,opening_hours,services,latitude,longitude")
+        .eq("status", "approved")
+        .order("created_at", { ascending: false });
+      if (cancelled) return;
+      setSalons((data as Salon[]) ?? []);
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [geo.status, geo.coords, ignoreRadius]);
+
+  const filtered = salons
+    .filter(s => {
+      const q = search.toLowerCase();
+      const matchQ = !q || s.name.toLowerCase().includes(q) || (s.suburb ?? "").toLowerCase().includes(q) || (s.city ?? "").toLowerCase().includes(q);
+      const catFilters = activeFilters.filter(f => f !== "Open now");
+      const matchSvc = catFilters.length === 0 || catFilters.some(f => (s.services ?? []).includes(f.toLowerCase()));
+      const matchOpen = !activeFilters.includes("Open now") || isOpenNow(s).open;
+      return matchQ && matchSvc && matchOpen;
+    })
+    .sort((a, b) => {
+      if (!distanceById) return 0;
+      return (distanceById[a.id] ?? Infinity) - (distanceById[b.id] ?? Infinity);
+    });
 
   return (
     <div style={{ minHeight: "100vh", background: "#FAFAF8" }}>
@@ -253,8 +306,43 @@ export default function StoresPage() {
       </div>
 
       <main style={{ maxWidth: 1200, margin: "0 auto", padding: "2rem 1.5rem" }}>
+        {/* Proximity banner — see lib/geolocation.ts */}
+        <div style={{ marginBottom: "1rem", fontSize: "0.82rem", color: "var(--grey)" }}>
+          {geo.status === "granted" && geo.coords && !ignoreRadius && (
+            <span>
+              Showing salons within {NEARBY_RADIUS_KM}km of you.{" "}
+              <button onClick={() => setIgnoreRadius(true)} style={{ background: "none", border: "none", padding: 0, color: "var(--plum)", fontWeight: 500, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}>
+                Show all instead
+              </button>
+            </span>
+          )}
+          {ignoreRadius && (
+            <span>
+              Showing all salons.{" "}
+              <button onClick={() => setIgnoreRadius(false)} style={{ background: "none", border: "none", padding: 0, color: "var(--plum)", fontWeight: 500, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}>
+                Show nearby only
+              </button>
+            </span>
+          )}
+          {!ignoreRadius && (geo.status === "idle" || geo.status === "denied") && (
+            <span>
+              {geo.status === "denied" ? "Location access blocked — s" : "S"}howing all salons.{" "}
+              <button onClick={geo.request} style={{ background: "none", border: "none", padding: 0, color: "var(--plum)", fontWeight: 500, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}>
+                See who&apos;s near you instead
+              </button>
+            </span>
+          )}
+        </div>
+
         {loading ? (
           <div style={{ textAlign: "center", padding: "4rem", color: "var(--grey)" }}>Loading stores…</div>
+        ) : filtered.length === 0 && geo.status === "granted" && !ignoreRadius ? (
+          <div style={{ textAlign: "center", padding: "4rem" }}>
+            <p style={{ fontSize: "1.1rem", color: "var(--grey)", marginBottom: "0.75rem" }}>No salons within {NEARBY_RADIUS_KM}km of you right now.</p>
+            <button onClick={() => setIgnoreRadius(true)} className="btn-outline" style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem" }}>
+              Show all salons instead
+            </button>
+          </div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign: "center", padding: "4rem" }}>
             <p style={{ fontSize: "1.1rem", color: "var(--grey)", marginBottom: "0.5rem" }}>No salons found.</p>

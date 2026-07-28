@@ -1,4 +1,5 @@
-// middleware.ts
+// proxy.ts (renamed from middleware.ts for Next.js 16 —
+// see https://nextjs.org/docs/app/guides/upgrading/version-16#middleware-to-proxy)
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -27,7 +28,7 @@ async function getAdminSlug(): Promise<string> {
   }
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   // ── Canonical host: strip "www." so every URL resolves to https://umuhle.co.za ──
   const host = request.headers.get("host") ?? "";
   if (host.startsWith("www.")) {

@@ -49,7 +49,8 @@ async function tryAdmin(req: NextRequest) {
   return service;
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const bookingId = params.id;
 
   const body = await req.json().catch(() => null);

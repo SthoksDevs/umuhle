@@ -24,7 +24,8 @@ const TEST_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN ?? "";
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { username: string } }
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- not read yet; see the production TODO above (per-salon token lookup by username)
+  props: { params: Promise<{ username: string }> }
 ) {
   // In production: look up the token for this salon from your DB.
   // For now we use the single test token.

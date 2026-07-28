@@ -46,7 +46,8 @@ async function requireAdmin(req: NextRequest) {
   return service;
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const orderId = params.id;
   const service = await requireAdmin(req);
   if (!service) {

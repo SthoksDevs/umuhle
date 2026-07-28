@@ -29,7 +29,8 @@ function serviceClient() {
   );
 }
 
-export async function GET(_req: NextRequest, { params }: { params: { token: string } }) {
+export async function GET(_req: NextRequest, props: { params: Promise<{ token: string }> }) {
+  const params = await props.params;
   const service = serviceClient();
   const { data: item, error } = await service
     .from("order_items")
@@ -57,7 +58,8 @@ export async function GET(_req: NextRequest, { params }: { params: { token: stri
   });
 }
 
-export async function POST(_req: NextRequest, { params }: { params: { token: string } }) {
+export async function POST(_req: NextRequest, props: { params: Promise<{ token: string }> }) {
+  const params = await props.params;
   const service = serviceClient();
   const { data: item, error } = await service
     .from("order_items")

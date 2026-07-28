@@ -17,6 +17,48 @@ import ReviewModal, { type SubmittedReview } from "@/components/ReviewModal";
 import { useCart } from "@/lib/cart-context";
 import { useProductWishlist } from "@/lib/product-wishlist-context";
 import { PAYOUT_HOLD_DAYS, getNextPayoutDate, formatPayoutDate } from "@/lib/payouts";
+import { useGeolocation, type GeoStatus } from "@/lib/geolocation";
+import { subscribeToPush, unsubscribeFromPush } from "@/lib/push-client";
+
+// Refreshes the logged-in artist's stored lat/long from the browser so
+// nearby_artists() (supabase/migrations/20260727_proximity_and_push.sql)
+// reflects where they actually are today, not wherever they first granted
+// permission. Runs once when the dashboard loads (artists only) and again
+// every 15 minutes for as long as the tab stays open — that's enough for
+// "near me today, gone tomorrow if they've moved", without a background/
+// native location service (that's a mobile-app-era upgrade).
+const ARTIST_LOCATION_PING_INTERVAL_MS = 15 * 60 * 1000;
+
+function useArtistLocationPing(user: User | null, isArtist: boolean): GeoStatus {
+  const supabase = createClient();
+  const geo = useGeolocation();
+
+  useEffect(() => {
+    if (!user || !isArtist) return;
+    geo.request();
+    const interval = setInterval(() => geo.request(), ARTIST_LOCATION_PING_INTERVAL_MS);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, isArtist]);
+
+  useEffect(() => {
+    if (!user || !isArtist || geo.status !== "granted" || !geo.coords) return;
+    supabase
+      .from("artists")
+      .update({
+        latitude: geo.coords.latitude,
+        longitude: geo.coords.longitude,
+        location_updated_at: new Date().toISOString(),
+      })
+      .eq("profile_id", user.id)
+      .then(({ error }) => {
+        if (error) console.error("Failed to update artist location:", error.message);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, isArtist, geo.status, geo.coords]);
+
+  return geo.status;
+}
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
@@ -320,9 +362,10 @@ function ProductWishlistCard({ product, onRemove }: { product: Product; onRemove
 }
 
 // ─── Profile tab ───────────────────────────────────────────────────────────────
-function ProfileTab({ profile, user, onUpdate }: { profile: Profile; user: User; onUpdate: (p: Profile) => void }) {
+function ProfileTab({ profile, user, locationStatus, onUpdate }: { profile: Profile; user: User; locationStatus: GeoStatus; onUpdate: (p: Profile) => void }) {
   const supabase = createClient();
   const [form, setForm] = useState({ full_name: profile.full_name ?? "", phone: profile.phone ?? "" });
+  const [pushState, setPushState] = useState<"idle" | "loading" | "subscribed" | "denied" | "unsupported" | "error">("idle");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
@@ -390,6 +433,32 @@ function ProfileTab({ profile, user, onUpdate }: { profile: Profile; user: User;
     setCopied(true); setTimeout(() => setCopied(false), 2000);
   };
 
+  // Push notifications — backbone only (see lib/push-client.ts,
+  // lib/push-server.ts). Nothing sends a push yet; this just lets someone
+  // opt in/out so the subscription rows are ready for when a flow does.
+  useEffect(() => {
+    if (typeof window === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+      setPushState("unsupported");
+      return;
+    }
+    navigator.serviceWorker.getRegistration().then(async (reg) => {
+      const sub = await reg?.pushManager.getSubscription();
+      setPushState(sub ? "subscribed" : "idle");
+    }).catch(() => setPushState("idle"));
+  }, []);
+
+  const handleEnableNotifications = async () => {
+    setPushState("loading");
+    const result = await subscribeToPush();
+    setPushState(result === "subscribed" ? "subscribed" : result);
+  };
+
+  const handleDisableNotifications = async () => {
+    setPushState("loading");
+    await unsubscribeFromPush();
+    setPushState("idle");
+  };
+
   return (
     <div style={{ maxWidth: 520 }}>
       <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>Your profile</h2>
@@ -443,6 +512,32 @@ function ProfileTab({ profile, user, onUpdate }: { profile: Profile; user: User;
           <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginTop: "0.5rem" }}>Share with friends. Earn rewards when they book through Umuhle.</p>
         </div>
       )}
+
+      {profile.is_artist && (
+        <div style={{ marginTop: "1.5rem", background: "#FAFAFA", borderRadius: 16, padding: "1.25rem", border: "1.5px solid #E0E0E0" }}>
+          <p style={{ fontSize: "0.8rem", fontWeight: 500, color: "var(--onyx)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "0.5rem" }}>📍 Location</p>
+          <p style={{ fontSize: "0.85rem", color: "var(--grey)" }}>
+            {locationStatus === "granted" && "We're using your current location so nearby customers can find you. This updates automatically while you have the dashboard open."}
+            {locationStatus === "checking" && "Getting your current location…"}
+            {(locationStatus === "denied" || locationStatus === "idle") && "Location access isn't on, so you won't show up in customers' \"near me\" results yet. Your browser will prompt you for permission — allow it to start appearing nearby."}
+            {locationStatus === "unsupported" && "Your browser doesn't support location — you'll still show up in the full artist list, just not sorted by distance."}
+          </p>
+        </div>
+      )}
+
+      <div style={{ marginTop: "1.5rem", background: "#FAFAFA", borderRadius: 16, padding: "1.25rem", border: "1.5px solid #E0E0E0" }}>
+        <p style={{ fontSize: "0.8rem", fontWeight: 500, color: "var(--onyx)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "0.5rem" }}>🔔 Browser notifications</p>
+        <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.75rem" }}>
+          {pushState === "subscribed" ? "Enabled on this device." : "Get notified in your browser about bookings and orders, even when Umuhle isn't open."}
+        </p>
+        {pushState === "subscribed" ? (
+          <button onClick={handleDisableNotifications} className="btn-outline" style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem" }}>Turn off</button>
+        ) : pushState === "unsupported" ? null : (
+          <button onClick={handleEnableNotifications} disabled={pushState === "loading"} className="btn-plum" style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem" }}>
+            {pushState === "loading" ? "Enabling…" : pushState === "denied" ? "Blocked — check browser settings" : "Enable notifications"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -3670,6 +3765,9 @@ function DashboardContent() {
   const [showWhatsAppNudge, setShowWhatsAppNudge] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
 
+  // Proximity backbone — no-ops for non-artists (isArtist gate inside the hook).
+  const artistLocationStatus = useArtistLocationPing(user, profile?.is_artist ?? false);
+
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) { router.replace("/dashboard?auth=login"); return; }
@@ -3856,7 +3954,7 @@ function DashboardContent() {
         )}
 
         {/* ── Profile tab ── */}
-        {tab === "profile" && <section><ProfileTab profile={profile} user={user} onUpdate={(p) => { setProfile(p); if (p.phone) setShowWhatsAppNudge(false); }} /></section>}
+        {tab === "profile" && <section><ProfileTab profile={profile} user={user} locationStatus={artistLocationStatus} onUpdate={(p) => { setProfile(p); if (p.phone) setShowWhatsAppNudge(false); }} /></section>}
 
         {/* ── My Salon tab ── */}
         {tab === "my-store" && <section><MySalonTab user={user} /></section>}

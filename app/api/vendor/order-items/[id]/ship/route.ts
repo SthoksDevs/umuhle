@@ -36,7 +36,8 @@ function serviceClient() {
 // that hasn't paid yet, or one that's been cancelled, has nothing to ship.
 const SHIPPABLE_ORDER_STATUSES = ["paid", "processing", "shipped"];
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const itemId = params.id;
   const authHeader = req.headers.get("authorization") ?? "";
   const token = authHeader.replace("Bearer ", "").trim();

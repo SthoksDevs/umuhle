@@ -41,7 +41,11 @@ function resultUrl(
   return new URL(`/payment/${page}?${qs.toString()}`, origin);
 }
 
-export async function GET(request: NextRequest, { params }: { params: { type: string; id: string } }) {
+export async function GET(
+  request: NextRequest,
+  props: { params: Promise<{ type: string; id: string }> }
+) {
+  const params = await props.params;
   const { type, id } = params;
   const origin = request.nextUrl.origin;
   const fallback = new URL("/dashboard", origin);
