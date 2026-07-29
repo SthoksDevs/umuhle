@@ -177,7 +177,7 @@ function BookingForm({ salon }: { salon: Salon }) {
     <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.5rem" }}>
       <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.2rem", marginBottom: "1.25rem" }}>Book an appointment</h3>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 1rem" }}>
+      <div className="store-form-field-row" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: "0 1rem" }}>
         <div><label style={lbl}>Your name *</label><input value={form.name} onChange={e => setForm(f=>({...f,name:e.target.value}))} placeholder="Full name" style={inp} /></div>
         <div><label style={lbl}>WhatsApp / phone *</label><input value={form.phone} onChange={e => setForm(f=>({...f,phone:e.target.value}))} placeholder="082 123 4567" type="tel" style={inp} /></div>
       </div>
@@ -189,7 +189,7 @@ function BookingForm({ salon }: { salon: Salon }) {
         ))}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 1rem" }}>
+      <div className="store-form-field-row" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: "0 1rem" }}>
         <div>
           <label style={lbl}>Date *</label>
           <input type="date" value={form.date} min={new Date().toISOString().split("T")[0]} onChange={e => setForm(f=>({...f,date:e.target.value}))} style={{ ...inp, colorScheme: "light" }} />
@@ -291,7 +291,7 @@ export default function StoreDetailPage() {
       </div>
 
       <div style={{ maxWidth:900,margin:"0 auto",padding:"2rem 1.5rem" }}>
-        <div className="store-detail-grid" style={{ display:"grid",gridTemplateColumns:"1fr min(380px,100%)",gap:"2rem",alignItems:"start" }}>
+        <div className="store-detail-grid" style={{ display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(0,min(380px,100%))",gap:"2rem",alignItems:"start" }}>
 
           {/* Left */}
           <div>
@@ -365,21 +365,21 @@ export default function StoreDetailPage() {
                 </div>
               </section>
             )}
+          </div>
 
-            <section style={{ marginBottom:"2rem" }}>
+          {/* Right — sticky booking, with contact details below it */}
+          <div className="store-booking-col" style={{ position:"sticky",top:"1.5rem" }}>
+            <BookingForm salon={salon} />
+
+            <section style={{ marginTop:"1.5rem" }}>
               <h2 style={{ fontFamily:"var(--font-display)",fontWeight:400,fontSize:"1.25rem",marginBottom:"0.65rem" }}>Contact</h2>
               <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
                 {salon.phone && <a href={`tel:${salon.phone}`} style={{ color:"var(--plum)",fontSize:"0.9rem",textDecoration:"none" }}>📞 {salon.phone}</a>}
                 {salon.phone && <a href={`https://wa.me/${salon.phone.replace(/\D/g,"")}`} target="_blank" rel="noopener noreferrer" style={{ color:"#25D366",fontSize:"0.9rem",textDecoration:"none" }}>💬 WhatsApp</a>}
-                {salon.email && <a href={`mailto:${salon.email}`} style={{ color:"var(--plum)",fontSize:"0.9rem",textDecoration:"none" }}>✉️ {salon.email}</a>}
-                {salon.website && <a href={salon.website} target="_blank" rel="noopener noreferrer" style={{ color:"var(--plum)",fontSize:"0.9rem",textDecoration:"none" }}>🌐 {salon.website.replace(/^https?:\/\//,"")}</a>}
+                {salon.email && <a href={`mailto:${salon.email}`} style={{ color:"var(--plum)",fontSize:"0.9rem",textDecoration:"none",overflowWrap:"anywhere" }}>✉️ {salon.email}</a>}
+                {salon.website && <a href={salon.website} target="_blank" rel="noopener noreferrer" style={{ color:"var(--plum)",fontSize:"0.9rem",textDecoration:"none",overflowWrap:"anywhere" }}>🌐 {salon.website.replace(/^https?:\/\//,"")}</a>}
               </div>
             </section>
-          </div>
-
-          {/* Right — sticky booking */}
-          <div className="store-booking-col" style={{ position:"sticky",top:"1.5rem" }}>
-            <BookingForm salon={salon} />
           </div>
 
         </div>
