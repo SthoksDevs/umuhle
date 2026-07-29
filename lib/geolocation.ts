@@ -20,6 +20,19 @@ export type GeoStatus = "idle" | "checking" | "granted" | "denied" | "unavailabl
 
 export type Coords = { latitude: number; longitude: number };
 
+// Client-side distance check (e.g. "is this address >50km away?" before the
+// user commits to it). Mirrors the SQL in nearby_artists()/nearby_salons()
+// (supabase/migrations/20260727_proximity_and_push.sql) so the two never
+// disagree on what "50km" means.
+export function distanceKm(a: Coords, b: Coords): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+  const cos =
+    Math.cos(toRad(a.latitude)) * Math.cos(toRad(b.latitude)) * Math.cos(toRad(b.longitude) - toRad(a.longitude)) +
+    Math.sin(toRad(a.latitude)) * Math.sin(toRad(b.latitude));
+  return 6371 * Math.acos(clamp(cos, -1, 1));
+}
+
 // One silent retry for "unavailable" (the browser's PERMISSION_DENIED vs.
 // POSITION_UNAVAILABLE/TIMEOUT distinction). macOS Safari in particular
 // often reports CoreLocation's kCLErrorLocationUnknown — "can't get a fix
