@@ -1,6 +1,9 @@
+// /app/shop/[id]/page.tsx
+// Product Details page
+
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
@@ -102,6 +105,14 @@ export default function ProductDetailPage() {
   const [selectedSize, setSelectedSize]   = useState<string | null>(null);
   const [zoomOpen, setZoomOpen] = useState(false);
   const [zoom, setZoom]         = useState(1.5);
+  // Pan offset (in screen px) for dragging the zoomed image around inside
+  // the modal, so a user can inspect parts of the image that scroll off
+  // the edge once zoomed in. Clamped to the currently-zoomed image bounds
+  // so it can never be dragged fully out of view.
+  const [pan, setPan]           = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const zoomBoxRef  = useRef<HTMLDivElement>(null);
+  const dragStart   = useRef({ x: 0, y: 0 });
 
   // Auth
   useEffect(() => {
@@ -173,7 +184,40 @@ export default function ProductDetailPage() {
     return Array.from(new Set(urls));
   }, [product]);
 
-  const openZoom = (level: number) => { setZoom(level); setZoomOpen(true); };
+  const openZoom = (level: number) => { setZoom(level); setPan({ x: 0, y: 0 }); setZoomOpen(true); };
+
+  // The image fills zoomBoxRef's box at zoom=1 (before scaling), so once
+  // scaled up the box overflows its container by box-size * (zoom-1) on
+  // each axis — half of that on either side is how far it can be panned
+  // before revealing empty space past the image's edge.
+  const clampPan = (p: { x: number; y: number }, z: number) => {
+    const box = zoomBoxRef.current;
+    if (!box || z <= 1) return { x: 0, y: 0 };
+    const { width, height } = box.getBoundingClientRect();
+    const maxX = (width * (z - 1)) / 2;
+    const maxY = (height * (z - 1)) / 2;
+    return { x: Math.min(maxX, Math.max(-maxX, p.x)), y: Math.min(maxY, Math.max(-maxY, p.y)) };
+  };
+
+  // Re-clamp whenever the zoom level changes (e.g. via the +/- controls)
+  // so a pan that was valid at the old zoom can't leave empty space at
+  // the new one.
+  useEffect(() => {
+    setPan(p => clampPan(p, zoom));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoom]);
+
+  const handleDragStart = (e: React.PointerEvent) => {
+    if (zoom <= 1) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setIsDragging(true);
+    dragStart.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+  };
+  const handleDragMove = (e: React.PointerEvent) => {
+    if (!isDragging) return;
+    setPan(clampPan({ x: e.clientX - dragStart.current.x, y: e.clientY - dragStart.current.y }, zoom));
+  };
+  const handleDragEnd = () => setIsDragging(false);
 
   const handleAddToCart = (prod?: Product) => {
     const target = prod ?? product;
@@ -529,9 +573,23 @@ export default function ProductDetailPage() {
               aria-label="Close"
               style={{ position: "absolute", top: 20, right: 20, background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", width: 40, height: 40, borderRadius: "50%", fontSize: "1.4rem", cursor: "pointer", zIndex: 2 }}
             >×</button>
-            <div style={{ width: "min(560px,90vw)", height: "min(560px,60vh)", position: "relative", overflow: "hidden" }}>
-              <div style={{ position: "relative", width: "100%", height: "100%", transform: `scale(${zoom})`, transition: "transform 0.2s", transformOrigin: "center" }}>
-                <Image src={selectedImage} alt={product.name} fill style={{ objectFit: "contain" }} sizes="90vw" />
+            <div ref={zoomBoxRef} style={{ width: "min(560px,90vw)", height: "min(560px,60vh)", position: "relative", overflow: "hidden" }}>
+              <div
+                onPointerDown={handleDragStart}
+                onPointerMove={handleDragMove}
+                onPointerUp={handleDragEnd}
+                onPointerCancel={handleDragEnd}
+                onPointerLeave={handleDragEnd}
+                style={{
+                  position: "relative", width: "100%", height: "100%",
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                  transition: isDragging ? "none" : "transform 0.2s",
+                  transformOrigin: "center",
+                  cursor: zoom > 1 ? (isDragging ? "grabbing" : "grab") : "default",
+                  touchAction: "none",
+                }}
+              >
+                <Image src={selectedImage} alt={product.name} fill style={{ objectFit: "contain" }} sizes="90vw" draggable={false} />
               </div>
             </div>
             <div style={{ position: "absolute", bottom: 28, left: "50%", transform: "translateX(-50%)", display: "flex", alignItems: "center", gap: "0.75rem", background: "rgba(255,255,255,0.12)", borderRadius: 100, padding: "0.4rem 0.6rem" }}>
