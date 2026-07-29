@@ -253,8 +253,7 @@ export async function notifyAppointmentCompleted(opts: {
   const clientMsg =
     `*Appointment Complete*\n\n` +
     `Your appointment with ${opts.artistName} has been completed.\n\n` +
-    `We hope you enjoyed your ${opts.serviceName} service.\n\n` +
-    `Please leave a review on Umuhle.`;
+    `We hope you enjoyed your ${opts.serviceName} service.`;
 
   const artistMsg =
     `*Appointment Marked Complete*\n\n` +
@@ -399,4 +398,36 @@ export async function notifyAccountCreated(opts: {
       parameters: [{ type: "text", text: verifyUrl }],
     },
   ]);
+}
+
+export async function notifyReviewInvite(opts: {
+  phone: string;
+  name: string;
+  targetName: string;
+  reviewUrl: string;
+  kind: "artist" | "client" | "product" | "salon";
+}) {
+  // Free-text (sendTextMessage), NOT a template — there's no approved WABA
+  // template for review requests (the four that exist are
+  // umuhle_booking_reminder, umuhle_order, umuhle_order_shipped and
+  // umuhle_account — see their call sites above). That means this message
+  // only lands if the recipient has messaged Umuhle within the last 24
+  // hours; outside that window WhatsApp silently drops it. Email
+  // (sendReviewInviteEmail in lib/email.ts) is the reliable channel and is
+  // always sent alongside this at every call site — treat this as a bonus,
+  // not the primary delivery path. Submitting an approved "review request"
+  // Utility template to Meta would let this be upgraded later.
+  const label = {
+    artist:  "your artist",
+    client:  "your client",
+    product: "your purchase",
+    salon:   "your visit",
+  }[opts.kind];
+
+  const msg =
+    `*How was ${label}?*\n\n` +
+    `Hi ${opts.name}, we'd love your feedback on *${opts.targetName}*.\n\n` +
+    `Leave a quick review: ${opts.reviewUrl}`;
+
+  return sendTextMessage(opts.phone, msg);
 }
