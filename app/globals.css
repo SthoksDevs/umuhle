@@ -171,6 +171,57 @@ button { cursor: pointer; font-family: var(--font-body); }
   }
 }
 
+/* ── Salon detail page: content + "Book an appointment" ── */
+.store-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr min(380px, 100%);
+  gap: 2rem;
+  align-items: start;
+}
+
+@media (max-width: 768px) {
+  .store-detail-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .store-booking-col {
+    position: static !important;
+  }
+}
+
+/* ── Shop product detail page ── */
+.product-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3rem;
+  align-items: start;
+}
+
+@media (max-width: 768px) {
+  .product-detail-grid {
+    grid-template-columns: 1fr !important;
+    gap: 1.5rem !important;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Image section fills the width but is capped to half the screen's
+     height on mobile, per the product page mobile-optimisation pass. */
+  .product-image-section {
+    height: 50vh !important;
+    max-height: 50vh !important;
+  }
+}
+
+.product-detail-cta {
+  width: 100%;
+}
+
+@media (max-width: 768px) {
+  .product-detail-cta {
+    box-shadow: 0 -6px 16px rgba(0,0,0,0.12);
+  }
+}
+
 /* ── Checkout delivery address fields ── */
 .checkout-field-row {
   display: grid;
