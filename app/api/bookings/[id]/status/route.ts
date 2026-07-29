@@ -18,6 +18,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { createClient as createSessionClient, createServiceClient } from "@/lib/supabase/server";
 import { creditBookingPayout } from "@/lib/payouts";
+import { createReviewInvite, buildReviewUrl } from "@/lib/review-invites";
+import { sendReviewInviteEmail } from "@/lib/email";
+import { notifyReviewInvite } from "@/lib/whatsapp";
 
 const BOOKING_STATUSES = ["confirmed", "in_progress", "completed", "cancelled", "no_show"] as const;
 type BookingStatusValue = typeof BOOKING_STATUSES[number];
@@ -110,6 +113,100 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       payout = await creditBookingPayout(service, bookingId);
     } catch (e) {
       console.error("[bookings/status] payout crediting error:", e);
+    }
+
+    // Review invites — one link for the client to rate the artist, one for
+    // the artist to rate the client (see lib/review-invites.ts). Own
+    // try/catch, deliberately independent of payout crediting above, so a
+    // notification hiccup never affects the response or the payout.
+    try {
+      const { data: full } = await service
+        .from("bookings")
+        .select(`
+          id,
+          service:services(name),
+          client:profiles!bookings_client_id_fkey(id, full_name, phone, email),
+          artist:artists!bookings_artist_id_fkey(
+            id, display_name, profile_id,
+            profile:profiles!artists_profile_id_fkey(full_name, phone, email)
+          )
+        `)
+        .eq("id", bookingId)
+        .single();
+
+      const clientRow = Array.isArray(full?.client) ? full?.client[0] : full?.client;
+      const artistRow = Array.isArray(full?.artist) ? full?.artist[0] : full?.artist;
+      const artistProfileRow = Array.isArray(artistRow?.profile) ? artistRow?.profile[0] : artistRow?.profile;
+
+      if (clientRow?.id && artistRow?.profile_id) {
+        const artistDisplayName = artistRow.display_name ?? "your artist";
+        const clientDisplayName = clientRow.full_name ?? "your client";
+
+        // Client -> rate the artist
+        const clientToken = await createReviewInvite(service, {
+          reviewType: "client_to_artist",
+          reviewerId: clientRow.id,
+          reviewedId: artistRow.profile_id,
+          bookingId,
+        });
+        if (clientToken) {
+          try {
+            await sendReviewInviteEmail({
+              reviewType:  "client_to_artist",
+              toEmail:     clientRow.email ?? "",
+              toName:      clientRow.full_name ?? "there",
+              targetName:  artistDisplayName,
+              inviteToken: clientToken,
+              referenceId: bookingId,
+            });
+          } catch (e) {
+            console.error("[bookings/status] client review-invite email error:", e);
+          }
+          if (clientRow.phone) {
+            await notifyReviewInvite({
+              phone:      clientRow.phone,
+              name:       clientRow.full_name ?? "there",
+              targetName: artistDisplayName,
+              reviewUrl:  buildReviewUrl(clientToken),
+              kind:       "artist",
+            });
+          }
+        }
+
+        // Artist -> rate the client
+        const artistToken = await createReviewInvite(service, {
+          reviewType: "artist_to_client",
+          reviewerId: artistRow.profile_id,
+          reviewedId: clientRow.id,
+          bookingId,
+        });
+        if (artistToken) {
+          const artistName = artistProfileRow?.full_name ?? artistDisplayName;
+          try {
+            await sendReviewInviteEmail({
+              reviewType:  "artist_to_client",
+              toEmail:     artistProfileRow?.email ?? "",
+              toName:      artistName,
+              targetName:  clientDisplayName,
+              inviteToken: artistToken,
+              referenceId: bookingId,
+            });
+          } catch (e) {
+            console.error("[bookings/status] artist review-invite email error:", e);
+          }
+          if (artistProfileRow?.phone) {
+            await notifyReviewInvite({
+              phone:      artistProfileRow.phone,
+              name:       artistName,
+              targetName: clientDisplayName,
+              reviewUrl:  buildReviewUrl(artistToken),
+              kind:       "client",
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.error("[bookings/status] review invite error:", e);
     }
   }
 
