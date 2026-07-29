@@ -11,7 +11,8 @@ import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Profile } from "@/types";
 
-type OpeningHours = { days: string[]; open: string; close: string };
+import { isOpenNow as sharedIsOpenNow, isOpenOnDate, hoursRangeForDate, WEEKDAY_LABELS, type OpeningHours } from "@/lib/opening-hours";
+
 type Salon = {
   id: string; name: string; description: string | null;
   address: string | null; suburb: string | null; city: string | null;
@@ -23,19 +24,11 @@ type Salon = {
 type IgPost = { id: string; media_url: string; permalink: string; caption?: string };
 type StoreBookingInsert = { salon_id: string; client_id: string | null; client_name: string; client_phone: string; service: string; booking_date: string; booking_time: string; notes: string | null };
 
-const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const TIMES: string[] = [];
 for (let h = 7; h < 20; h++) { TIMES.push(`${String(h).padStart(2,"0")}:00`); TIMES.push(`${String(h).padStart(2,"0")}:30`); }
 
 function isOpenNow(s: Salon) {
-  const oh = s.opening_hours;
-  if (!oh?.days?.length) return false;
-  const now = new Date();
-  const dayName = DAYS[now.getDay() === 0 ? 6 : now.getDay() - 1];
-  const cur = now.getHours() * 60 + now.getMinutes();
-  const [oH, oM] = (oh.open ?? "08:00").split(":").map(Number);
-  const [cH, cM] = (oh.close ?? "17:00").split(":").map(Number);
-  return oh.days.includes(dayName) && cur >= oH * 60 + oM && cur < cH * 60 + cM;
+  return sharedIsOpenNow(s.opening_hours).open;
 }
 
 function ytId(url: string): string | null {
@@ -119,26 +112,47 @@ function BookingForm({ salon }: { salon: Salon }) {
   const supabase = createClient();
   const oh = salon.opening_hours;
   const services = salon.services?.length ? salon.services : ["hair","nails","makeup","lashes"];
-  const [oH] = (oh?.open ?? "08:00").split(":").map(Number);
-  const [cH] = (oh?.close ?? "17:00").split(":").map(Number);
-  const validTimes = TIMES.filter(t => { const h = parseInt(t); return h >= oH && h < cH; });
 
   const [form, setForm] = useState({ name: "", phone: "", service: services[0], date: "", time: "", notes: "" });
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState("");
 
+  // Hours can differ per day of the week (and be overridden for a specific
+  // date via special_days), so both the valid time slots and the "closed
+  // that day" check are recomputed against whichever date is currently
+  // selected, rather than one fixed open/close for the whole salon.
+  const selectedDateRange = form.date ? hoursRangeForDate(oh, new Date(`${form.date}T00:00:00`)) : null;
+  const validTimes = !form.date
+    ? TIMES
+    : selectedDateRange
+      ? TIMES.filter(t => {
+          const h = parseInt(t);
+          const [openH] = selectedDateRange.open.split(":").map(Number);
+          const [closeH] = selectedDateRange.close.split(":").map(Number);
+          return h >= openH && h < closeH;
+        })
+      : [];
+
   const dayOk = () => {
     if (!form.date) return true;
-    const d = new Date(form.date);
-    const day = DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
-    return oh?.days?.includes(day) ?? true;
+    return isOpenOnDate(oh, new Date(`${form.date}T00:00:00`));
   };
+
+  // If a previously-picked time falls outside the newly selected date's
+  // hours (or that date turns out to be closed), clear it rather than
+  // silently submitting a stale, invalid time.
+  useEffect(() => {
+    if (form.time && !validTimes.includes(form.time)) {
+      setForm(f => ({ ...f, time: "" }));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.date]);
 
   const submit = async () => {
     setError("");
     if (!form.name || !form.phone || !form.date || !form.time) { setError("Please fill in all required fields."); return; }
-    if (!dayOk()) { setError(`The salon is closed that day. Open: ${oh?.days?.join(", ")}`); return; }
+    if (!dayOk()) { setError("The salon is closed on that date. Please pick another date."); return; }
     setSaving(true);
     const { data: { user } } = await supabase.auth.getUser();
     const payload: StoreBookingInsert = { salon_id: salon.id, client_id: user?.id ?? null, client_name: form.name, client_phone: form.phone, service: form.service, booking_date: form.date, booking_time: form.time, notes: form.notes || null };
@@ -277,7 +291,7 @@ export default function StoreDetailPage() {
       </div>
 
       <div style={{ maxWidth:900,margin:"0 auto",padding:"2rem 1.5rem" }}>
-        <div style={{ display:"grid",gridTemplateColumns:"1fr min(380px,100%)",gap:"2rem",alignItems:"start" }}>
+        <div className="store-detail-grid" style={{ display:"grid",gridTemplateColumns:"1fr min(380px,100%)",gap:"2rem",alignItems:"start" }}>
 
           {/* Left */}
           <div>
@@ -332,17 +346,19 @@ export default function StoreDetailPage() {
               </section>
             )}
 
-            {oh && (
+            {oh?.weekly && (
               <section style={{ marginBottom:"2rem" }}>
                 <h2 style={{ fontFamily:"var(--font-display)",fontWeight:400,fontSize:"1.25rem",marginBottom:"0.65rem" }}>Hours</h2>
                 <div style={{ background:"#fff",borderRadius:14,border:"1.5px solid rgba(155,127,184,0.15)",padding:"1rem 1.25rem",display:"grid",gap:"0.4rem" }}>
-                  {DAYS.map(day => {
-                    const isOpen = oh.days?.includes(day);
-                    const isToday = DAYS[new Date().getDay()===0?6:new Date().getDay()-1]===day;
+                  {(["monday","tuesday","wednesday","thursday","friday","saturday","sunday"] as const).map(key => {
+                    const day = oh.weekly![key];
+                    const todayKey = (["sunday","monday","tuesday","wednesday","thursday","friday","saturday"] as const)[new Date().getDay()];
+                    const isToday = key === todayKey;
+                    const isOpen = !!day && !day.closed && !!day.open && !!day.close;
                     return (
-                      <div key={day} style={{ display:"flex",justifyContent:"space-between",fontSize:"0.88rem",fontWeight:isToday?600:400,color:isToday?"var(--plum)":"var(--grey)" }}>
-                        <span>{day}{isToday?" (today)":""}</span>
-                        <span style={{ color:isOpen?(isToday?"var(--plum)":"#333"):"#bbb" }}>{isOpen?`${oh.open} – ${oh.close}`:"Closed"}</span>
+                      <div key={key} style={{ display:"flex",justifyContent:"space-between",fontSize:"0.88rem",fontWeight:isToday?600:400,color:isToday?"var(--plum)":"var(--grey)" }}>
+                        <span>{WEEKDAY_LABELS[key]}{isToday?" (today)":""}</span>
+                        <span style={{ color:isOpen?(isToday?"var(--plum)":"#333"):"#bbb" }}>{isOpen?`${day.open} – ${day.close}`:"Closed"}</span>
                       </div>
                     );
                   })}
@@ -362,7 +378,7 @@ export default function StoreDetailPage() {
           </div>
 
           {/* Right — sticky booking */}
-          <div style={{ position:"sticky",top:"1.5rem" }}>
+          <div className="store-booking-col" style={{ position:"sticky",top:"1.5rem" }}>
             <BookingForm salon={salon} />
           </div>
 
