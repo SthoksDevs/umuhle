@@ -1,3 +1,4 @@
+// Homepage
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -13,6 +14,7 @@ import StarRating from "@/components/StarRating";
 import { gTag, fbq, ttq } from "@/lib/analytics";
 import { useCart } from "@/lib/cart-context";
 import { useGeolocation, distanceKm } from "@/lib/geolocation";
+import { TIMES } from "@/lib/booking-times";
 
 // How far a customer's search reaches by default. Matches
 // nearby_artists()/nearby_salons()'s own radius_km default in
@@ -721,6 +723,11 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
   const [addedProductIds, setAddedProductIds] = useState<Set<string>>(new Set());
   const [date, setDate]           = useState("");
   const [time, setTime]           = useState("");
+  // Times this artist is already booked for on the selected date — shown
+  // greyed-out/disabled in the time grid rather than hidden, so it's clear
+  // *why* a slot can't be picked instead of it just silently not appearing.
+  const [takenTimes, setTakenTimes] = useState<Set<string>>(new Set());
+  const [loadingTimes, setLoadingTimes] = useState(false);
   const [address, setAddress]     = useState("");
   const [useCurrentLocation, setUseCurrentLocation] = useState(false);
   const [salonSuggestions, setSalonSuggestions] = useState<SalonSuggestion[]>([]);
@@ -804,6 +811,38 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
       .then(({ data }) => setServices((data ?? []) as Service[]));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artist.id]);
+
+  // Look up this artist's existing bookings for the chosen date so already-
+  // taken slots can be shown greyed-out in the time grid below. Cancelled
+  // bookings free the slot back up; anything else (pending/confirmed/in
+  // progress/completed) still occupies it.
+  useEffect(() => {
+    if (!date) { setTakenTimes(new Set()); return; }
+    let cancelled = false;
+    setLoadingTimes(true);
+    supabase
+      .from("bookings")
+      .select("booking_time")
+      .eq("artist_id", artist.id)
+      .eq("booking_date", date)
+      .neq("status", "cancelled")
+      .then(({ data }) => {
+        if (cancelled) return;
+        const taken = new Set((data ?? []).map((b: { booking_time: string }) => b.booking_time.slice(0, 5)));
+        setTakenTimes(taken);
+        setLoadingTimes(false);
+      });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [artist.id, date]);
+
+  // If the previously-picked time turns out to be taken once we hear back
+  // for the newly-selected date, clear it rather than leaving a now-invalid
+  // slot silently selected.
+  useEffect(() => {
+    if (time && takenTimes.has(time)) setTime("");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [takenTimes]);
 
   // Relevant-product upsells for the chosen service — matched purely by
   // curated tag overlap (see UPSELL_TAG_GROUPS), never by broad category.
@@ -979,8 +1018,40 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
             <button onClick={() => setStep("services")} style={{ background: "none", border: "none", color: "var(--plum)", fontSize: "0.85rem", cursor: "pointer", marginBottom: "1rem" }}>Back</button>
             <h4 style={{ fontWeight: 500, marginBottom: "1rem" }}>Pick a date &amp; time</h4>
             <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              <input type="date" value={date} min={minDate.toISOString().split("T")[0]} onChange={e => setDate(e.target.value)} style={inputStyle} />
-              <input type="time" value={time} onChange={e => setTime(e.target.value)} style={inputStyle} />
+              <input type="date" value={date} min={minDate.toISOString().split("T")[0]} onChange={e => { setDate(e.target.value); setTime(""); }} style={inputStyle} />
+
+              <div>
+                <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.5rem" }}>
+                  {date ? "Pick a time" : "Pick a date to see available times"}
+                  {loadingTimes && <span style={{ marginLeft: 6 }}>· checking availability…</span>}
+                </p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(72px,1fr))", gap: "0.5rem" }}>
+                  {TIMES.map(t => {
+                    const isTaken = takenTimes.has(t);
+                    const isSelected = time === t;
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        disabled={!date || isTaken}
+                        onClick={() => setTime(t)}
+                        title={isTaken ? "Artist unavailable at this time" : undefined}
+                        style={{
+                          padding: "0.5rem 0.4rem", borderRadius: 10, fontSize: "0.82rem", textAlign: "center",
+                          border: isSelected ? "1.5px solid var(--plum)" : "1.5px solid rgba(155,127,184,0.25)",
+                          background: isTaken ? "#F2F2F2" : isSelected ? "var(--plum)" : "#fff",
+                          color: isTaken ? "#bbb" : isSelected ? "#fff" : "var(--onyx)",
+                          fontWeight: isSelected ? 600 : 400,
+                          cursor: !date ? "default" : isTaken ? "not-allowed" : "pointer",
+                          textDecoration: isTaken ? "line-through" : "none",
+                        }}
+                      >
+                        {t}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
 
               <div>
                 <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.5rem" }}>Meeting address *</p>
