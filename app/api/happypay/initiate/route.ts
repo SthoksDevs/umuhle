@@ -57,7 +57,7 @@ async function initiateBooking(
     serviceId, artistId, bookingDate, bookingTime, meetingAddress, notes, clientPocName, clientPocPhone,
   });
   if ("error" in created) {
-    const status = created.error === "Service not found" ? 404 : 500;
+    const status = created.error === "Service not found" ? 404 : created.error.includes("required") ? 400 : 500;
     return NextResponse.json({ error: created.error }, { status });
   }
   const { intentId, amount, service, artist } = created.result;
