@@ -16,7 +16,7 @@ import { useGeolocation } from "@/lib/geolocation";
 // supabase/migrations/20260727_proximity_and_push.sql.
 const NEARBY_RADIUS_KM = 50;
 
-type OpeningHours = { days: string[]; open: string; close: string };
+import { isOpenNow, type OpeningHours } from "@/lib/opening-hours";
 
 type Salon = {
   id: string;
@@ -34,32 +34,9 @@ type Salon = {
   longitude: number | null;
 };
 
-// ── Open/closed logic ─────────────────────────────────────────────────────────
-const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
-
-function isOpenNow(s: Salon): { open: boolean; label: string } {
-  const oh = s.opening_hours;
-  if (!oh?.days?.length) return { open: false, label: "Hours not listed" };
-  const now = new Date();
-  const dayName = DAYS[now.getDay() === 0 ? 6 : now.getDay() - 1];
-  const cur = now.getHours() * 60 + now.getMinutes();
-  const [oH, oM] = (oh.open ?? "08:00").split(":").map(Number);
-  const [cH, cM] = (oh.close ?? "17:00").split(":").map(Number);
-  const open = oh.days.includes(dayName) && cur >= oH * 60 + oM && cur < cH * 60 + cM;
-  if (open) return { open: true, label: `Open · closes ${oh.close}` };
-  const todayIdx = DAYS.indexOf(dayName);
-  for (let i = 1; i <= 7; i++) {
-    const ni = (todayIdx + i) % 7;
-    if (oh.days.includes(DAYS[ni])) {
-      return { open: false, label: i === 1 ? `Closed · opens tomorrow ${oh.open}` : `Closed · opens ${DAYS[ni].slice(0,3)} ${oh.open}` };
-    }
-  }
-  return { open: false, label: "Closed" };
-}
-
 // ── Store card ─────────────────────────────────────────────────────────────────
 function StoreCard({ salon }: { salon: Salon }) {
-  const { open, label } = isOpenNow(salon);
+  const { open, label } = isOpenNow(salon.opening_hours);
   const cover = salon.gallery_urls?.[0] ?? null;
   return (
     <Link href={`/stores/${salon.id}`} style={{ textDecoration: "none", color: "inherit" }}>
@@ -273,7 +250,7 @@ export default function StoresPage() {
       const matchQ = !q || s.name.toLowerCase().includes(q) || (s.suburb ?? "").toLowerCase().includes(q) || (s.city ?? "").toLowerCase().includes(q);
       const catFilters = activeFilters.filter(f => f !== "Open now");
       const matchSvc = catFilters.length === 0 || catFilters.some(f => (s.services ?? []).includes(f.toLowerCase()));
-      const matchOpen = !activeFilters.includes("Open now") || isOpenNow(s).open;
+      const matchOpen = !activeFilters.includes("Open now") || isOpenNow(s.opening_hours).open;
       return matchQ && matchSvc && matchOpen;
     })
     .sort((a, b) => {
