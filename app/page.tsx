@@ -12,7 +12,7 @@ import SiteHeader from "@/components/SiteHeader";
 import StarRating from "@/components/StarRating";
 import { gTag, fbq, ttq } from "@/lib/analytics";
 import { useCart } from "@/lib/cart-context";
-import { useGeolocation } from "@/lib/geolocation";
+import { useGeolocation, distanceKm } from "@/lib/geolocation";
 
 // How far a customer's search reaches by default. Matches
 // nearby_artists()/nearby_salons()'s own radius_km default in
@@ -646,8 +646,6 @@ export default function Home() {
           artist={selectedArtist}
           onClose={() => setSelectedArtist(null)}
           user={user!}
-          isWishlisted={wishlistIds.has(selectedArtist.id)}
-          onToggleWishlist={() => toggleWishlist(selectedArtist.id)}
         />
       )}
     </div>
@@ -711,11 +709,12 @@ function ArtistCard({ artist, onBook, isWishlisted, onToggleWishlist }: { artist
 // ─── Booking drawer ───────────────────────────────────────────────────────────
 type ArtistReview = { id: string; rating: number; comment: string | null; created_at: string; reviewer?: { full_name: string; avatar_url: string | null } };
 
-function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }: { artist: Artist; onClose: () => void; user: User; isWishlisted: boolean; onToggleWishlist: () => Promise<void> }) {
+function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () => void; user: User }) {
   const supabase = createClient();
   const { addItem } = useCart();
   type Service = { id: string; name: string; price: number; duration_minutes: number; tags: string[] };
   type UpsellProduct = { id: string; partner_id: string; name: string; price: number; image_url: string | null; category: string | null; tags: string[]; stock_count: number };
+  type SalonSuggestion = { id: string; name: string; address: string | null; suburb: string | null; city: string | null; latitude: number | null; longitude: number | null };
   const [services, setServices]   = useState<Service[]>([]);
   const [selected, setSelected]   = useState<Service | null>(null);
   const [upsellProducts, setUpsellProducts] = useState<UpsellProduct[]>([]);
@@ -723,6 +722,13 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
   const [date, setDate]           = useState("");
   const [time, setTime]           = useState("");
   const [address, setAddress]     = useState("");
+  const [useCurrentLocation, setUseCurrentLocation] = useState(false);
+  const [salonSuggestions, setSalonSuggestions] = useState<SalonSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  // A salon picked from the typeahead that's >50km from the client's current
+  // position — held here until they explicitly confirm or cancel, per the
+  // "are you sure?" requirement (see selectSalonSuggestion below).
+  const [pendingFarSalon, setPendingFarSalon] = useState<{ suggestion: SalonSuggestion; distanceKm: number } | null>(null);
   const [pocName, setPocName]     = useState("");
   const [pocPhone, setPocPhone]   = useState("");
   const [step, setStep]           = useState<"services" | "datetime" | "confirm">("services");
@@ -735,6 +741,63 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
   const [availableGateways, setAvailableGateways] = useState<Set<BookingPayMethod>>(
     new Set<BookingPayMethod>(["payfast", "ozow", "happypay"])
   );
+  const geo = useGeolocation();
+
+  // Meeting-address typeahead — suggests approved salons as the client
+  // types, so they can pick a real salon address instead of free-typing it.
+  // Skipped entirely while "use my current location" is ticked.
+  useEffect(() => {
+    if (useCurrentLocation) { setSalonSuggestions([]); return; }
+    const term = address.replace(/[,()%]/g, "").trim();
+    if (term.length < 2) { setSalonSuggestions([]); return; }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      supabase
+        .from("partner_salons")
+        .select("id, name, address, suburb, city, latitude, longitude")
+        .eq("status", "approved")
+        .eq("is_active", true)
+        .or(`name.ilike.%${term}%,address.ilike.%${term}%,suburb.ilike.%${term}%`)
+        .limit(5)
+        .then(({ data }) => { if (!cancelled) setSalonSuggestions((data ?? []) as SalonSuggestion[]); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, useCurrentLocation]);
+
+  const selectSalonSuggestion = (s: SalonSuggestion) => {
+    const full = [s.name, s.address].filter(Boolean).join(" — ");
+    if (geo.status === "granted" && geo.coords && s.latitude != null && s.longitude != null) {
+      const d = distanceKm(geo.coords, { latitude: s.latitude, longitude: s.longitude });
+      if (d > NEARBY_RADIUS_KM) {
+        setPendingFarSalon({ suggestion: s, distanceKm: d });
+        setShowSuggestions(false);
+        return;
+      }
+    }
+    setAddress(full);
+    setShowSuggestions(false);
+  };
+
+  const confirmFarSalon = () => {
+    if (!pendingFarSalon) return;
+    const s = pendingFarSalon.suggestion;
+    setAddress([s.name, s.address].filter(Boolean).join(" — "));
+    setPendingFarSalon(null);
+  };
+
+  const toggleUseCurrentLocation = (checked: boolean) => {
+    setUseCurrentLocation(checked);
+    setShowSuggestions(false);
+    setSalonSuggestions([]);
+    setPendingFarSalon(null);
+    if (checked) {
+      geo.request();
+      setAddress("My current location (shared via GPS)");
+    } else {
+      setAddress("");
+    }
+  };
 
   useEffect(() => {
     supabase.from("services").select("id, name, price, duration_minutes, tags").eq("artist_id", artist.id).eq("is_active", true)
@@ -798,7 +861,7 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
   }, [availableGateways]);
 
   const handlePayFast = async () => {
-    if (!selected) return;
+    if (!selected || !address.trim() || !pocName.trim() || !pocPhone.trim()) return;
     setLoading(true); setError("");
     try {
       const res = await fetch("/api/payfast/initiate", {
@@ -821,7 +884,7 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
   };
 
   const handleOzow = async () => {
-    if (!selected) return;
+    if (!selected || !address.trim() || !pocName.trim() || !pocPhone.trim()) return;
     setLoading(true); setError("");
     try {
       const res = await fetch("/api/ozow/initiate", {
@@ -839,7 +902,7 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
   };
 
   const handleHappyPay = async () => {
-    if (!selected) return;
+    if (!selected || !address.trim() || !pocName.trim() || !pocPhone.trim()) return;
     setLoading(true); setError("");
     try {
       const res = await fetch("/api/happypay/initiate", {
@@ -874,17 +937,7 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
               <StarRating rating={artist.rating} reviewCount={artist.review_count} size={12} />
             </div>
           </div>
-          <button
-            onClick={() => onToggleWishlist()}
-            aria-label={isWishlisted ? "Remove from wishlist" : "Save to wishlist"}
-            aria-pressed={isWishlisted}
-            style={{ marginLeft: "auto", background: "none", border: "none", display: "flex", alignItems: "center", cursor: "pointer", padding: "0.25rem" }}
-          >
-            <svg width="19" height="19" viewBox="0 0 24 24" fill={isWishlisted ? "#E53935" : "none"} stroke="#E53935" strokeWidth="1.75">
-              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
-            </svg>
-          </button>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: "1.4rem", color: "var(--light)", lineHeight: 1, cursor: "pointer" }}>×</button>
+          <button onClick={onClose} style={{ marginLeft: "auto", background: "none", border: "none", fontSize: "1.4rem", color: "var(--light)", lineHeight: 1, cursor: "pointer" }}>×</button>
         </div>
 
         {step === "services" && (
@@ -928,13 +981,65 @@ function BookingDrawer({ artist, onClose, user, isWishlisted, onToggleWishlist }
             <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
               <input type="date" value={date} min={minDate.toISOString().split("T")[0]} onChange={e => setDate(e.target.value)} style={inputStyle} />
               <input type="time" value={time} onChange={e => setTime(e.target.value)} style={inputStyle} />
-              <input type="text" placeholder="Meeting address (optional)" value={address} onChange={e => setAddress(e.target.value)} style={inputStyle} />
+
               <div>
-                <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.5rem" }}>Point of contact (optional)</p>
+                <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.5rem" }}>Meeting address *</p>
+                <div style={{ position: "relative" }}>
+                  <input
+                    type="text"
+                    placeholder="Search a salon, or type your address (e.g. home, office)"
+                    value={address}
+                    disabled={useCurrentLocation}
+                    onChange={e => { setAddress(e.target.value); setShowSuggestions(true); }}
+                    onFocus={() => { geo.request(); if (salonSuggestions.length > 0) setShowSuggestions(true); }}
+                    onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                    style={{ ...inputStyle, opacity: useCurrentLocation ? 0.6 : 1 }}
+                  />
+                  {showSuggestions && salonSuggestions.length > 0 && (
+                    <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, background: "#fff", border: "1.5px solid rgba(155,127,184,0.2)", borderRadius: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.1)", zIndex: 20, maxHeight: 220, overflowY: "auto" }}>
+                      {salonSuggestions.map(s => (
+                        <button key={s.id} type="button" onMouseDown={() => selectSalonSuggestion(s)}
+                          style={{ display: "block", width: "100%", textAlign: "left", padding: "0.6rem 0.9rem", background: "none", border: "none", borderBottom: "1px solid rgba(155,127,184,0.08)", cursor: "pointer" }}>
+                          <div style={{ fontWeight: 500, fontSize: "0.85rem" }}>{s.name}</div>
+                          <div style={{ fontSize: "0.75rem", color: "var(--grey)" }}>{[s.address, s.suburb].filter(Boolean).join(", ")}</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {pendingFarSalon && (
+                  <div style={{ marginTop: "0.6rem", background: "#FFF4E5", border: "1.5px solid #F0B429", borderRadius: 12, padding: "0.85rem 1rem" }}>
+                    <p style={{ fontSize: "0.82rem", color: "#7A4E00", margin: "0 0 0.7rem" }}>
+                      The chosen salon is more than {NEARBY_RADIUS_KM}km away from where you are (about {Math.round(pendingFarSalon.distanceKm)}km). Are you sure you want to select this address?
+                    </p>
+                    <div style={{ display: "flex", gap: "0.6rem" }}>
+                      <button type="button" onClick={confirmFarSalon} className="btn-plum" style={{ padding: "0.4rem 0.9rem", fontSize: "0.8rem" }}>Yes, use it</button>
+                      <button type="button" onClick={() => setPendingFarSalon(null)} className="btn-outline" style={{ padding: "0.4rem 0.9rem", fontSize: "0.8rem" }}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+
+                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem", color: "var(--grey)", cursor: "pointer", marginTop: "0.6rem" }}>
+                  <input type="checkbox" checked={useCurrentLocation} onChange={e => toggleUseCurrentLocation(e.target.checked)} />
+                  Use my current location instead
+                </label>
+                {useCurrentLocation && geo.status === "checking" && <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: "0.35rem 0 0" }}>Getting your location…</p>}
+                {useCurrentLocation && (geo.status === "denied" || geo.status === "unavailable") && <p style={{ fontSize: "0.78rem", color: "#E53935", margin: "0.35rem 0 0" }}>Couldn&apos;t get your location — untick this and type your address instead.</p>}
+              </div>
+
+              <div>
+                <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Point of contact *</p>
+                <p style={{ fontSize: "0.78rem", color: "var(--light)", marginBottom: "0.6rem" }}>A trusted person who can be reached during the appointment — required for your safety.</p>
                 <input type="text" placeholder="Contact name" value={pocName} onChange={e => setPocName(e.target.value)} style={{ ...inputStyle, marginBottom: "0.75rem" }} />
                 <input type="tel" placeholder="Contact phone" value={pocPhone} onChange={e => setPocPhone(e.target.value)} style={inputStyle} />
               </div>
-              <button className="btn-plum" disabled={!date || !time} onClick={() => setStep("confirm")}>Review booking</button>
+
+              <button
+                className="btn-plum"
+                disabled={!date || !time || !(address.trim() || useCurrentLocation) || !pocName.trim() || !pocPhone.trim() || !!pendingFarSalon}
+                onClick={() => setStep("confirm")}
+              >Review booking</button>
             </div>
           </>
         )}
