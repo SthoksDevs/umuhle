@@ -12,6 +12,7 @@ import type { User } from "@supabase/supabase-js";
 import type { Profile } from "@/types";
 
 import { isOpenNow as sharedIsOpenNow, isOpenOnDate, hoursRangeForDate, WEEKDAY_LABELS, type OpeningHours } from "@/lib/opening-hours";
+import { TIMES } from "@/lib/booking-times";
 
 type Salon = {
   id: string; name: string; description: string | null;
@@ -23,9 +24,6 @@ type Salon = {
 };
 type IgPost = { id: string; media_url: string; permalink: string; caption?: string };
 type StoreBookingInsert = { salon_id: string; client_id: string | null; client_name: string; client_phone: string; service: string; booking_date: string; booking_time: string; notes: string | null };
-
-const TIMES: string[] = [];
-for (let h = 7; h < 20; h++) { TIMES.push(`${String(h).padStart(2,"0")}:00`); TIMES.push(`${String(h).padStart(2,"0")}:30`); }
 
 function isOpenNow(s: Salon) {
   return sharedIsOpenNow(s.opening_hours).open;
@@ -374,10 +372,10 @@ export default function StoreDetailPage() {
             <section style={{ marginTop:"1.5rem" }}>
               <h2 style={{ fontFamily:"var(--font-display)",fontWeight:400,fontSize:"1.25rem",marginBottom:"0.65rem" }}>Contact</h2>
               <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-                {salon.phone && <a href={`tel:${salon.phone}`} style={{ color:"var(--plum)",fontSize:"0.9rem",textDecoration:"none" }}>📞 {salon.phone}</a>}
-                {salon.phone && <a href={`https://wa.me/${salon.phone.replace(/\D/g,"")}`} target="_blank" rel="noopener noreferrer" style={{ color:"#25D366",fontSize:"0.9rem",textDecoration:"none" }}>💬 WhatsApp</a>}
-                {salon.email && <a href={`mailto:${salon.email}`} style={{ color:"var(--plum)",fontSize:"0.9rem",textDecoration:"none",overflowWrap:"anywhere" }}>✉️ {salon.email}</a>}
-                {salon.website && <a href={salon.website} target="_blank" rel="noopener noreferrer" style={{ color:"var(--plum)",fontSize:"0.9rem",textDecoration:"none",overflowWrap:"anywhere" }}>🌐 {salon.website.replace(/^https?:\/\//,"")}</a>}
+                {salon.phone && <a href={`tel:${salon.phone}`} style={{ color:"var(--onyx)",fontSize:"0.9rem",textDecoration:"none" }}>📞 {salon.phone}</a>}
+                {salon.phone && <a href={`https://wa.me/${salon.phone.replace(/\D/g,"")}`} target="_blank" rel="noopener noreferrer" style={{ color:"var(--onyx)",fontSize:"0.9rem",textDecoration:"none" }}>💬 WhatsApp</a>}
+                {salon.email && <a href={`mailto:${salon.email}`} style={{ color:"var(--onyx)",fontSize:"0.9rem",textDecoration:"none",overflowWrap:"anywhere" }}>✉️ {salon.email}</a>}
+                {salon.website && <a href={salon.website} target="_blank" rel="noopener noreferrer" style={{ color:"var(--onyx)",fontSize:"0.9rem",textDecoration:"none",overflowWrap:"anywhere" }}>🌐 {salon.website.replace(/^https?:\/\//,"")}</a>}
               </div>
             </section>
           </div>
