@@ -13,6 +13,7 @@
 import nodemailer from "nodemailer";
 import { createClient } from "@supabase/supabase-js";
 import { gatewayLabel, type PaymentGateway } from "@/lib/payments/gateways";
+import type { ReviewType } from "@/lib/review-invites";
 
 const ADMIN_EMAIL = "info@umuhle.co.za";
 
@@ -859,5 +860,87 @@ export async function sendAdminPendingDigestEmail(opts: {
       <p style="margin:0 0 1.25rem;font-size:0.9rem;color:#666">Daily summary of everything waiting for action across the platform.</p>
       ${sectionsHtml}
       <p style="margin:1rem 0 0"><a href="https://umuhle.co.za/admin" style="color:#9B7FB8;font-weight:600;text-decoration:none">Open admin dashboard →</a></p>`),
+  });
+}
+
+// ── Review invites ─────────────────────────────────────────────────────────────
+// Sent once a booking/order-item/salon-visit is completed — see
+// lib/review-invites.ts for the token these link to, and
+// app/api/bookings/[id]/status, app/api/order-items/confirm/[token], and
+// app/api/store-bookings/[id]/status for the three call sites.
+//
+// Customer copy only, no admin copy — this is a nudge, not something admin
+// needs to track (same posture as sendOrderItemShippedEmail above, which
+// also skips the admin copy).
+//
+// One generic function covering all four review types rather than four
+// near-identical ones — see lib/review-invites.ts for the shared ReviewType.
+
+const REVIEW_EMAIL_COPY: Record<ReviewType, {
+  subject: string;
+  heading: string;
+  blurb: (targetName: string) => string;
+  buttonLabel: string;
+}> = {
+  client_to_artist: {
+    subject: "How was your appointment?",
+    heading: "Tell us about your appointment",
+    blurb: (name) =>
+      `Thank you for booking with <strong>${name}</strong>. We would love to hear about your experience. Your review helps other clients find the right beauty professional.`,
+    buttonLabel: "Leave a review",
+  },
+
+  artist_to_client: {
+    subject: "How was your client?",
+    heading: "Tell us about your client",
+    blurb: (name) =>
+      `You recently completed a booking with <strong>${name}</strong>. Please share your experience. Your feedback is private and helps us keep Umuhle a trusted community for everyone.`,
+    buttonLabel: "Rate your client",
+  },
+
+  client_to_product: {
+    subject: "How was your order?",
+    heading: "Tell us what you think",
+    blurb: (name) =>
+      `Have you had a chance to use <strong>${name}</strong>? We would appreciate your feedback. Your review helps other customers make informed choices.`,
+    buttonLabel: "Leave a review",
+  },
+
+  client_to_salon: {
+    subject: "How was your visit?",
+    heading: "Tell us about your visit",
+    blurb: (name) =>
+      `Thank you for visiting <strong>${name}</strong>. We would love to hear about your experience. Your review helps other clients discover great beauty establishments.`,
+    buttonLabel: "Leave a review",
+  },
+};
+
+function reviewInviteUrl(token: string) {
+  return `https://umuhle.co.za/review/${token}`;
+}
+
+export async function sendReviewInviteEmail(opts: {
+  reviewType:  ReviewType;
+  toEmail:     string;
+  toName:      string;
+  targetName:  string;
+  inviteToken: string;
+  referenceId: string; // booking id / order item id / salon id — for email_log only
+}) {
+  if (!opts.toEmail) return;
+  const copy = REVIEW_EMAIL_COPY[opts.reviewType];
+  const link = reviewInviteUrl(opts.inviteToken);
+  const plainBlurb = copy.blurb(opts.targetName).replace(/<[^>]+>/g, "");
+
+  await sendToAll([opts.toEmail], {
+    subject:     copy.subject,
+    template:    `review_invite_${opts.reviewType}`,
+    referenceId: opts.referenceId,
+    text:        `Hi ${opts.toName},\n\n${plainBlurb}\n\n${link}\n\nThe Umuhle Team`,
+    html:        emailWrapper(copy.heading, `
+      <p style="margin:0 0 1rem">Hi ${opts.toName},</p>
+      <p style="margin:0 0 1.5rem;font-size:0.85rem;color:#666">${copy.blurb(opts.targetName)}</p>
+      <p style="margin:0 0 1.5rem"><a href="${link}" style="display:inline-block;background:#9B7FB8;color:#fff;font-weight:600;text-decoration:none;padding:0.75rem 1.5rem;border-radius:10px">${copy.buttonLabel}</a></p>
+      <p style="margin:0 0 1.5rem">The Umuhle Team</p>`),
   });
 }
