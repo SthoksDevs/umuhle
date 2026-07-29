@@ -211,6 +211,13 @@ export interface Product {
   starts_at?: string | null;
   expires_at?: string | null;
   payfast_payment_id?: string | null;
+  // ── Gallery + variation fields ──
+  // Not yet columns on `products` (checked July 2026) — kept optional so the
+  // product page's gallery rail and Colour/Size pickers render once these
+  // are added, without breaking on today's rows where they're simply absent.
+  gallery_urls?: string[] | null;
+  colors?: string[] | null;
+  sizes?: string[] | null;
 }
 
 export interface CartItem {
