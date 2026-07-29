@@ -35,6 +35,11 @@ export default function ConfirmReceiptPage() {
   const [confirming, setConfirming] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Only populated by a fresh POST confirm (see handleConfirm below) — a
+  // durable copy of this same link is also emailed/WhatsApp'd (see
+  // lib/review-invites.ts), so there's no need to re-fetch it on a later
+  // visit to an already-confirmed link just to show the card again.
+  const [reviewUrl, setReviewUrl] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -65,6 +70,7 @@ export default function ConfirmReceiptPage() {
         setError(json?.error ?? "Something went wrong. Please try again.");
         return;
       }
+      if (json?.reviewUrl) setReviewUrl(json.reviewUrl);
       setConfirmed(true);
     } catch {
       setError("Something went wrong. Please try again.");
@@ -98,11 +104,16 @@ export default function ConfirmReceiptPage() {
             <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.5rem", marginBottom: "0.5rem", color: "var(--onyx)" }}>
               Thanks for confirming!
             </h1>
-            <p style={{ color: "var(--grey)" }}>
+            <p style={{ color: "var(--grey)", marginBottom: reviewUrl ? "1.5rem" : 0 }}>
               {info?.productName
                 ? `Glad ${info.productName} arrived safely.`
                 : "Glad your order arrived safely."}
             </p>
+            {reviewUrl && (
+              <a href={reviewUrl} className="btn-plum" style={{ display: "inline-block", padding: "0.85rem 2rem", fontSize: "0.95rem", textDecoration: "none" }}>
+                Leave a review
+              </a>
+            )}
           </>
         ) : info ? (
           <>
