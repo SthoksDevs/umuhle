@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
@@ -25,6 +25,20 @@ const CAT_LABEL: Record<string, string> = {
   "lashes": "Lashes",
 };
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
+
+function HeartIcon({ filled, size = 16 }: { filled: boolean; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? "#E53935" : "none"} stroke="#E53935" strokeWidth="1.75">
+      <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+    </svg>
+  );
+}
+
+const circleBtn: React.CSSProperties = {
+  width: 34, height: 34, borderRadius: "50%", background: "rgba(255,255,255,0.92)",
+  border: "none", display: "flex", alignItems: "center", justifyContent: "center",
+  cursor: "pointer", boxShadow: "0 2px 8px rgba(0,0,0,0.2)", padding: 0, flexShrink: 0,
+};
 
 // ── Related product card ───────────────────────────────────────────────────────
 function RelatedCard({ product, onAdd }: { product: Product; onAdd: (p: Product) => void }) {
@@ -84,6 +98,10 @@ export default function ProductDetailPage() {
   const [showAuth, setShowAuth] = useState(false);
   const [added, setAdded]       = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedColor, setSelectedColor] = useState<string | null>(null);
+  const [selectedSize, setSelectedSize]   = useState<string | null>(null);
+  const [zoomOpen, setZoomOpen] = useState(false);
+  const [zoom, setZoom]         = useState(1.5);
 
   // Auth
   useEffect(() => {
@@ -118,6 +136,8 @@ export default function ProductDetailPage() {
 
       setProduct(data as Product);
       setSelectedImage((data as Product).image_url ?? null);
+      setSelectedColor((data as Product).colors?.[0] ?? null);
+      setSelectedSize((data as Product).sizes?.[0] ?? null);
 
       // Related products: same category, exclude current
       const { data: rel } = await supabase
@@ -143,6 +163,17 @@ export default function ProductDetailPage() {
   const maxQty    = Math.min(product?.stock_count ?? 1, 10);
   const catLabel  = CAT_LABEL[product?.category ?? ""] ?? product?.category ?? "";
   const catImage  = CATEGORY_IMAGE[product?.category ?? ""] ?? "/umuhle-icon.png";
+
+  // Gallery = main image + any gallery images, deduped. gallery_urls isn't a
+  // products column yet (checked July 2026) — this renders nothing extra
+  // until that lands, but is ready for it.
+  const images = useMemo(() => {
+    if (!product) return [] as string[];
+    const urls = [product.image_url, ...(product.gallery_urls ?? [])].filter((u): u is string => !!u);
+    return Array.from(new Set(urls));
+  }, [product]);
+
+  const openZoom = (level: number) => { setZoom(level); setZoomOpen(true); };
 
   const handleAddToCart = (prod?: Product) => {
     const target = prod ?? product;
@@ -194,8 +225,8 @@ export default function ProductDetailPage() {
       <div style={{ minHeight: "100vh", background: "var(--white)", display: "flex", flexDirection: "column" }}>
         <SiteHeader initialUser={user} />
         <main style={{ maxWidth: 960, margin: "0 auto", padding: "2.5rem 1.5rem", flex: 1, width: "100%", boxSizing: "border-box" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3rem", alignItems: "start" }}>
-            <div style={{ borderRadius: 20, height: 420, background: "linear-gradient(90deg,#f0eaf6 25%,#e8e0f0 50%,#f0eaf6 75%)", backgroundSize: "200% 100%", animation: "shimmer 1.4s infinite" }} />
+          <div className="product-detail-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3rem", alignItems: "start" }}>
+            <div className="product-image-section" style={{ borderRadius: 20, aspectRatio: "1/1", background: "linear-gradient(90deg,#f0eaf6 25%,#e8e0f0 50%,#f0eaf6 75%)", backgroundSize: "200% 100%", animation: "shimmer 1.4s infinite" }} />
             <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
               {[40, 60, 100, 80, 60].map((w, i) => (
                 <div key={i} style={{ height: i === 0 ? 14 : i === 1 ? 28 : i === 2 ? 16 : 20, background: "#f0eaf6", borderRadius: 6, width: `${w}%` }} />
@@ -225,6 +256,8 @@ export default function ProductDetailPage() {
     );
   }
 
+  const productIsWishlisted = isWishlisted(product.id);
+
   // ── Product detail ───────────────────────────────────────────────────────────
   return (
     <>
@@ -244,45 +277,100 @@ export default function ProductDetailPage() {
           </div>
 
           {/* Main layout */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3rem", alignItems: "start" }}>
+          <div className="product-detail-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3rem", alignItems: "start" }}>
 
-            {/* Left: image */}
+            {/* Image section: fills width, clickable/zoomable, gallery rail
+                floats left, wishlist heart + zoom controls float top-right. */}
             <div>
-              <div style={{ borderRadius: 20, overflow: "hidden", background: "var(--plum-t)", aspectRatio: "1/1", display: "flex", alignItems: "center", justifyContent: "center", position: "relative", marginBottom: "0.75rem" }}>
-                {selectedImage ? (
-                  <Image src={selectedImage} alt={product.name} fill style={{ objectFit: "cover" }} sizes="480px" priority />
-                ) : (
-                  <Image src={catImage} alt={catLabel} width={180} height={180} style={{ objectFit: "contain", opacity: 0.75 }} />
-                )}
+              <div className="product-image-section" style={{ position: "relative", borderRadius: 20, overflow: "hidden", background: "var(--plum-t)", aspectRatio: "1/1" }}>
+                <button
+                  type="button"
+                  onClick={() => openZoom(1.5)}
+                  aria-label="Open image"
+                  style={{ position: "absolute", inset: 0, border: "none", padding: 0, background: "none", cursor: "zoom-in", width: "100%", height: "100%" }}
+                >
+                  {selectedImage ? (
+                    <Image src={selectedImage} alt={product.name} fill style={{ objectFit: "cover" }} sizes="480px" priority />
+                  ) : (
+                    <span style={{ display: "flex", width: "100%", height: "100%", alignItems: "center", justifyContent: "center" }}>
+                      <Image src={catImage} alt={catLabel} width={180} height={180} style={{ objectFit: "contain", opacity: 0.75 }} />
+                    </span>
+                  )}
+                </button>
+
                 {!inStock && (
-                  <div style={{ position: "absolute", top: 16, left: 16, background: "rgba(0,0,0,0.55)", color: "#fff", borderRadius: 100, padding: "0.3rem 0.9rem", fontSize: "0.75rem", fontWeight: 700 }}>Out of stock</div>
+                  <div style={{ position: "absolute", top: 16, left: 16, background: "rgba(0,0,0,0.55)", color: "#fff", borderRadius: 100, padding: "0.3rem 0.9rem", fontSize: "0.75rem", fontWeight: 700, zIndex: 5 }}>Out of stock</div>
                 )}
+
+                {/* Gallery rail — only when there's more than one image; the
+                    currently-shown image's block renders bigger than its
+                    neighbours. */}
+                {images.length > 1 && (
+                  <div style={{ position: "absolute", top: 12, left: 12, display: "flex", flexDirection: "column", gap: 8, zIndex: 5 }}>
+                    {images.map(img => {
+                      const active = img === selectedImage;
+                      const size = active ? 60 : 42;
+                      return (
+                        <button
+                          key={img}
+                          type="button"
+                          onClick={() => setSelectedImage(img)}
+                          aria-label="Show image"
+                          aria-current={active}
+                          style={{
+                            position: "relative", width: size, height: size, borderRadius: 10, overflow: "hidden", padding: 0, flexShrink: 0,
+                            border: active ? "2px solid #fff" : "2px solid rgba(255,255,255,0.65)",
+                            boxShadow: "0 2px 8px rgba(0,0,0,0.25)", cursor: "pointer", transition: "width 0.2s, height 0.2s", opacity: active ? 1 : 0.85,
+                          }}
+                        >
+                          <Image src={img} alt="" fill style={{ objectFit: "cover" }} sizes="70px" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Wishlist heart, then zoom +/- below it */}
+                <div style={{ position: "absolute", top: 12, right: 12, display: "flex", flexDirection: "column", gap: 8, zIndex: 5 }}>
+                  <button
+                    type="button"
+                    onClick={() => toggleWishlist(product, () => setShowAuth(true))}
+                    aria-label={productIsWishlisted ? "Remove from wishlist" : "Save to wishlist"}
+                    aria-pressed={productIsWishlisted}
+                    style={circleBtn}
+                  >
+                    <HeartIcon filled={productIsWishlisted} />
+                  </button>
+                  <button type="button" onClick={() => openZoom(Math.min(3, zoom + 0.5))} aria-label="Zoom in" style={{ ...circleBtn, fontSize: "1.1rem", fontWeight: 700, color: "var(--plum)" }}>+</button>
+                  <button type="button" onClick={() => openZoom(1)} aria-label="Zoom out" style={{ ...circleBtn, fontSize: "1.1rem", fontWeight: 700, color: "var(--plum)" }}>−</button>
+                </div>
               </div>
             </div>
 
-            {/* Right: details */}
+            {/* Details: name → description → category → price + save-for-later
+                → stock → variations → qty → total → sticky add-to-cart */}
             <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
 
-              {/* Category badge + heart */}
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                {catLabel ? (
-                  <span style={{ display: "inline-block", background: "var(--plum-t)", color: "var(--plum)", borderRadius: 100, padding: "0.3rem 0.9rem", fontSize: "0.75rem", fontWeight: 600 }}>{catLabel}</span>
-                ) : <span />}
+              <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "clamp(1.5rem,3vw,2rem)", color: "var(--onyx)", lineHeight: 1.2 }}>{product.name}</h1>
+
+              {product.description && (
+                <p style={{ color: "var(--grey)", lineHeight: 1.65, fontSize: "0.95rem" }}>{product.description}</p>
+              )}
+
+              {catLabel && (
+                <span style={{ display: "inline-block", width: "fit-content", background: "var(--plum-t)", color: "var(--plum)", borderRadius: 100, padding: "0.3rem 0.9rem", fontSize: "0.75rem", fontWeight: 600 }}>{catLabel}</span>
+              )}
+
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
+                <p style={{ fontSize: "1.75rem", fontWeight: 700, color: "var(--plum)" }}>{fmt(product.price)}</p>
                 <button
                   onClick={() => toggleWishlist(product, () => setShowAuth(true))}
-                  aria-label={isWishlisted(product.id) ? "Remove from wishlist" : "Save to wishlist"}
-                  aria-pressed={isWishlisted(product.id)}
-                  style={{ display: "flex", alignItems: "center", gap: "0.4rem", background: "#fff", border: "1.5px solid rgba(155,127,184,0.3)", borderRadius: 100, padding: "0.4rem 0.9rem", cursor: "pointer", fontSize: "0.8rem", color: "var(--plum)" }}
+                  aria-pressed={productIsWishlisted}
+                  className="btn-outline"
+                  style={{ padding: "0.4rem 0.9rem", fontSize: "0.8rem", whiteSpace: "nowrap" }}
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill={isWishlisted(product.id) ? "#E53935" : "none"} stroke="#E53935" strokeWidth="1.75"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-                  {isWishlisted(product.id) ? "Saved" : "Save for later"}
+                  {productIsWishlisted ? "Saved" : "Save for later"}
                 </button>
-              </div>
-
-              {/* Name + price */}
-              <div>
-                <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "clamp(1.5rem,3vw,2rem)", color: "var(--onyx)", marginBottom: "0.5rem", lineHeight: 1.2 }}>{product.name}</h1>
-                <p style={{ fontSize: "1.75rem", fontWeight: 700, color: "var(--plum)" }}>{fmt(product.price)}</p>
               </div>
 
               {/* Stock indicator */}
@@ -292,50 +380,6 @@ export default function ProductDetailPage() {
                   {inStock ? `In stock (${product.stock_count} available)` : "Out of stock"}
                 </span>
               </div>
-
-              {/* Description */}
-              {product.description && (
-                <p style={{ color: "var(--grey)", lineHeight: 1.65, fontSize: "0.95rem" }}>{product.description}</p>
-              )}
-
-              <div style={{ borderTop: "1px solid rgba(155,127,184,0.12)", paddingTop: "1.25rem" }} />
-
-              {/* Quantity + add to cart */}
-              {inStock && (
-                <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", border: "1.5px solid rgba(155,127,184,0.3)", borderRadius: 100, padding: "0.3rem 0.6rem" }}>
-                    <button
-                      onClick={() => setQuantity(q => Math.max(1, q - 1))}
-                      style={{ background: "none", border: "none", color: "var(--plum)", fontWeight: 700, fontSize: "1.2rem", cursor: "pointer", width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "50%" }}
-                    >−</button>
-                    <span style={{ fontSize: "1rem", fontWeight: 600, minWidth: 24, textAlign: "center" }}>{quantity}</span>
-                    <button
-                      onClick={() => setQuantity(q => Math.min(maxQty, q + 1))}
-                      style={{ background: "none", border: "none", color: "var(--plum)", fontWeight: 700, fontSize: "1.2rem", cursor: "pointer", width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "50%" }}
-                    >+</button>
-                  </div>
-                  <button
-                    className="btn-plum"
-                    style={{ flex: 1, padding: "0.75rem 1.5rem", fontSize: "0.95rem",
-                      background: added ? "#2E7D32" : undefined,
-                      transition: "background 0.25s" }}
-                    onClick={() => handleAddToCart()}
-                  >
-                    {added ? "Added to cart ✓" : `Add ${quantity > 1 ? `${quantity} ` : ""}to cart — ${fmt(product.price * quantity)}`}
-                  </button>
-                </div>
-              )}
-
-              {/* Go to cart shortcut if already in cart */}
-              {inCart && !added && (
-                <button
-                  onClick={() => router.push("/cart")}
-                  className="btn-outline"
-                  style={{ padding: "0.65rem 1.5rem", fontSize: "0.875rem" }}
-                >
-                  View cart →
-                </button>
-              )}
 
               {/* Partner info */}
               {product.partner && (
@@ -347,6 +391,103 @@ export default function ProductDetailPage() {
                   </div>
                 </div>
               )}
+
+              {/* Variations — only render once these fields actually exist on
+                  a product (see the Product type note on gallery_urls/colors/sizes). */}
+              {!!product.colors?.length && (
+                <div>
+                  <p style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--onyx)", marginBottom: "0.5rem" }}>Colour</p>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                    {product.colors.map(c => (
+                      <button
+                        key={c}
+                        onClick={() => setSelectedColor(c)}
+                        style={{
+                          display: "flex", alignItems: "center", gap: "0.4rem", padding: "0.35rem 0.75rem", borderRadius: 100, fontSize: "0.8rem", cursor: "pointer",
+                          border: selectedColor === c ? "1.5px solid var(--plum)" : "1.5px solid rgba(155,127,184,0.3)",
+                          background: selectedColor === c ? "var(--plum-t)" : "#fff", color: "var(--onyx)",
+                        }}
+                      >
+                        <span style={{ width: 14, height: 14, borderRadius: "50%", background: c.toLowerCase(), border: "1px solid rgba(0,0,0,0.15)", display: "inline-block" }} />
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {!!product.sizes?.length && (
+                <div>
+                  <p style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--onyx)", marginBottom: "0.5rem" }}>Size</p>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                    {product.sizes.map(s => (
+                      <button
+                        key={s}
+                        onClick={() => setSelectedSize(s)}
+                        style={{
+                          padding: "0.35rem 0.9rem", borderRadius: 100, fontSize: "0.8rem", cursor: "pointer",
+                          border: selectedSize === s ? "1.5px solid var(--plum)" : "1.5px solid rgba(155,127,184,0.3)",
+                          background: selectedSize === s ? "var(--plum-t)" : "#fff", color: "var(--onyx)",
+                        }}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ borderTop: "1px solid rgba(155,127,184,0.12)", paddingTop: "1.25rem" }} />
+
+              {inStock && (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                    <span style={{ fontSize: "0.85rem", color: "var(--grey)" }}>Quantity</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", border: "1.5px solid rgba(155,127,184,0.3)", borderRadius: 100, padding: "0.3rem 0.6rem" }}>
+                      <button
+                        onClick={() => setQuantity(q => Math.max(1, q - 1))}
+                        style={{ background: "none", border: "none", color: "var(--plum)", fontWeight: 700, fontSize: "1.2rem", cursor: "pointer", width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "50%" }}
+                      >−</button>
+                      <span style={{ fontSize: "1rem", fontWeight: 600, minWidth: 24, textAlign: "center" }}>{quantity}</span>
+                      <button
+                        onClick={() => setQuantity(q => Math.min(maxQty, q + 1))}
+                        style={{ background: "none", border: "none", color: "var(--plum)", fontWeight: 700, fontSize: "1.2rem", cursor: "pointer", width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "50%" }}
+                      >+</button>
+                    </div>
+                  </div>
+
+                  <p style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--onyx)" }}>
+                    Total: <span style={{ color: "var(--plum)" }}>{fmt(product.price * quantity)}</span>
+                  </p>
+                </>
+              )}
+
+              {/* Go to cart shortcut if already in cart */}
+              {inCart && !added && (
+                <button
+                  onClick={() => router.push("/cart")}
+                  className="btn-outline"
+                  style={{ padding: "0.65rem 1.5rem", fontSize: "0.875rem", width: "fit-content" }}
+                >
+                  View cart →
+                </button>
+              )}
+
+              {/* Sticky until it reaches its natural spot at the end of this
+                  column (native position:sticky — no JS/observer needed). */}
+              <button
+                className="btn-plum product-detail-cta"
+                disabled={!inStock}
+                style={{
+                  padding: "1rem 1.5rem", fontSize: "1rem", fontWeight: 700, whiteSpace: "nowrap",
+                  background: added ? "#2E7D32" : !inStock ? "#bbb" : undefined,
+                  cursor: !inStock ? "not-allowed" : "pointer",
+                  transition: "background 0.25s",
+                  position: "sticky", bottom: 0,
+                }}
+                onClick={() => inStock && handleAddToCart()}
+              >
+                {added ? "Added to cart ✓" : !inStock ? "Sold out" : "Add to Cart"}
+              </button>
             </div>
           </div>
 
@@ -375,6 +516,27 @@ export default function ProductDetailPage() {
               <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>Create an account to save items and checkout.</p>
               <Link href="?auth=login"><button className="btn-plum" style={{ width: "100%", marginBottom: "0.75rem" }} onClick={() => setShowAuth(false)}>Sign in</button></Link>
               <Link href="?auth=register"><button className="btn-outline" style={{ width: "100%" }} onClick={() => setShowAuth(false)}>Create account</button></Link>
+            </div>
+          </div>
+        )}
+
+        {/* Zoom / lightbox modal */}
+        {zoomOpen && selectedImage && (
+          <div className="modal-overlay" style={{ background: "rgba(10,8,12,0.92)" }} onClick={e => { if (e.target === e.currentTarget) setZoomOpen(false); }}>
+            <button
+              onClick={() => setZoomOpen(false)}
+              aria-label="Close"
+              style={{ position: "absolute", top: 20, right: 20, background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", width: 40, height: 40, borderRadius: "50%", fontSize: "1.4rem", cursor: "pointer", zIndex: 2 }}
+            >×</button>
+            <div style={{ width: "min(560px,90vw)", height: "min(560px,60vh)", position: "relative", overflow: "hidden" }}>
+              <div style={{ position: "relative", width: "100%", height: "100%", transform: `scale(${zoom})`, transition: "transform 0.2s", transformOrigin: "center" }}>
+                <Image src={selectedImage} alt={product.name} fill style={{ objectFit: "contain" }} sizes="90vw" />
+              </div>
+            </div>
+            <div style={{ position: "absolute", bottom: 28, left: "50%", transform: "translateX(-50%)", display: "flex", alignItems: "center", gap: "0.75rem", background: "rgba(255,255,255,0.12)", borderRadius: 100, padding: "0.4rem 0.6rem" }}>
+              <button onClick={() => setZoom(z => Math.max(1, z - 0.5))} aria-label="Zoom out" style={{ ...circleBtn, background: "#fff" }}>−</button>
+              <span style={{ color: "#fff", fontSize: "0.8rem", minWidth: 40, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
+              <button onClick={() => setZoom(z => Math.min(3, z + 0.5))} aria-label="Zoom in" style={{ ...circleBtn, background: "#fff" }}>+</button>
             </div>
           </div>
         )}
