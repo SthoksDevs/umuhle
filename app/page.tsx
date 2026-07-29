@@ -750,6 +750,21 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
   );
   const geo = useGeolocation();
 
+  // Local calendar date as YYYY-MM-DD, matching what <input type="date">
+  // expects. Deliberately NOT toISOString() (that's UTC and can roll back
+  // to "yesterday" for anyone browsing between midnight and 02:00 SAST).
+  const toLocalDateStr = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+  const todayStr = toLocalDateStr(new Date());
+  const nowTimeStr = (() => {
+    const n = new Date();
+    return `${String(n.getHours()).padStart(2, "0")}:${String(n.getMinutes()).padStart(2, "0")}`;
+  })();
+
   // Meeting-address typeahead — suggests approved salons as the client
   // types, so they can pick a real salon address instead of free-typing it.
   // Skipped entirely while "use my current location" is ticked.
@@ -837,12 +852,15 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
   }, [artist.id, date]);
 
   // If the previously-picked time turns out to be taken once we hear back
-  // for the newly-selected date, clear it rather than leaving a now-invalid
-  // slot silently selected.
+  // for the newly-selected date, or (for a same-day booking) the clock has
+  // simply moved past it, clear it rather than leaving a now-invalid slot
+  // silently selected.
   useEffect(() => {
-    if (time && takenTimes.has(time)) setTime("");
+    if (!time) return;
+    if (takenTimes.has(time)) { setTime(""); return; }
+    if (date === todayStr && time < nowTimeStr) setTime("");
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [takenTimes]);
+  }, [takenTimes, date]);
 
   // Relevant-product upsells for the chosen service — matched purely by
   // curated tag overlap (see UPSELL_TAG_GROUPS), never by broad category.
@@ -960,7 +978,6 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
 
   const handleBookingPay = payMethod === "payfast" ? handlePayFast : payMethod === "ozow" ? handleOzow : handleHappyPay;
 
-  const minDate = new Date(); minDate.setDate(minDate.getDate() + 1);
   const inputStyle: React.CSSProperties = { padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", width: "100%", boxSizing: "border-box" };
 
   return (
@@ -1018,7 +1035,7 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
             <button onClick={() => setStep("services")} style={{ background: "none", border: "none", color: "var(--plum)", fontSize: "0.85rem", cursor: "pointer", marginBottom: "1rem" }}>Back</button>
             <h4 style={{ fontWeight: 500, marginBottom: "1rem" }}>Pick a date &amp; time</h4>
             <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              <input type="date" value={date} min={minDate.toISOString().split("T")[0]} onChange={e => { setDate(e.target.value); setTime(""); }} style={inputStyle} />
+              <input type="date" value={date} min={todayStr} onChange={e => { setDate(e.target.value); setTime(""); }} style={inputStyle} />
 
               <div>
                 <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.5rem" }}>
@@ -1028,22 +1045,24 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(72px,1fr))", gap: "0.5rem" }}>
                   {TIMES.map(t => {
                     const isTaken = takenTimes.has(t);
+                    const isPast = date === todayStr && t < nowTimeStr;
+                    const isDisabled = isTaken || isPast;
                     const isSelected = time === t;
                     return (
                       <button
                         key={t}
                         type="button"
-                        disabled={!date || isTaken}
+                        disabled={!date || isDisabled}
                         onClick={() => setTime(t)}
-                        title={isTaken ? "Artist unavailable at this time" : undefined}
+                        title={isTaken ? "Artist unavailable at this time" : isPast ? "This time has already passed" : undefined}
                         style={{
                           padding: "0.5rem 0.4rem", borderRadius: 10, fontSize: "0.82rem", textAlign: "center",
                           border: isSelected ? "1.5px solid var(--plum)" : "1.5px solid rgba(155,127,184,0.25)",
-                          background: isTaken ? "#F2F2F2" : isSelected ? "var(--plum)" : "#fff",
-                          color: isTaken ? "#bbb" : isSelected ? "#fff" : "var(--onyx)",
+                          background: isDisabled ? "#F2F2F2" : isSelected ? "var(--plum)" : "#fff",
+                          color: isDisabled ? "#bbb" : isSelected ? "#fff" : "var(--onyx)",
                           fontWeight: isSelected ? 600 : 400,
-                          cursor: !date ? "default" : isTaken ? "not-allowed" : "pointer",
-                          textDecoration: isTaken ? "line-through" : "none",
+                          cursor: !date ? "default" : isDisabled ? "not-allowed" : "pointer",
+                          textDecoration: isDisabled ? "line-through" : "none",
                         }}
                       >
                         {t}
