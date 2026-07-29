@@ -206,6 +206,10 @@ button { cursor: pointer; font-family: var(--font-body); }
   align-items: start;
 }
 
+.product-detail-grid > * {
+  min-width: 0;
+}
+
 @media (max-width: 768px) {
   .product-detail-grid {
     grid-template-columns: 1fr !important;
@@ -215,8 +219,14 @@ button { cursor: pointer; font-family: var(--font-body); }
 
 @media (max-width: 640px) {
   /* Image section fills the width but is capped to half the screen's
-     height on mobile, per the product page mobile-optimisation pass. */
+     height on mobile, per the product page mobile-optimisation pass.
+     width: 100% is required here — the element also has aspect-ratio: 1/1
+     inline, and once height is a fixed value (50vh) an auto width gets
+     derived from that aspect ratio instead of the column width, which on
+     tall phones is wider than the viewport and forces the whole page to
+     scroll horizontally. */
   .product-image-section {
+    width: 100% !important;
     height: 50vh !important;
     max-height: 50vh !important;
   }
