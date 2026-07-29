@@ -330,7 +330,9 @@ export default function ProductDetailPage() {
                   </div>
                 )}
 
-                {/* Wishlist heart, then zoom +/- below it */}
+                {/* Wishlist heart, then zoom-in below it. Zoom-out only
+                    appears inside the modal (opened via this + button) —
+                    it doesn't make sense on the unzoomed base image. */}
                 <div style={{ position: "absolute", top: 12, right: 12, display: "flex", flexDirection: "column", gap: 8, zIndex: 5 }}>
                   <button
                     type="button"
@@ -342,7 +344,6 @@ export default function ProductDetailPage() {
                     <HeartIcon filled={productIsWishlisted} />
                   </button>
                   <button type="button" onClick={() => openZoom(Math.min(3, zoom + 0.5))} aria-label="Zoom in" style={{ ...circleBtn, fontSize: "1.1rem", fontWeight: 700, color: "var(--plum)" }}>+</button>
-                  <button type="button" onClick={() => openZoom(1)} aria-label="Zoom out" style={{ ...circleBtn, fontSize: "1.1rem", fontWeight: 700, color: "var(--plum)" }}>−</button>
                 </div>
               </div>
             </div>
