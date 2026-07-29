@@ -59,6 +59,9 @@ export async function createBookingIntent(
 
   if (!service) return { error: "Service not found" };
 
+  if (!opts.meetingAddress?.trim()) return { error: "Meeting address is required" };
+  if (!opts.clientPocName?.trim() || !opts.clientPocPhone?.trim()) return { error: "Point of contact name and phone are required" };
+
   const { data: artist } = await supabase
     .from("artists")
     .select("display_name, point_of_contact_name, point_of_contact_phone")
