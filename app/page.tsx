@@ -544,7 +544,8 @@ export default function Home() {
             {!loading && artists.length === 0 && geo.status === "granted" && (
               <div style={{ textAlign: "center", padding: "3rem 0" }}>
                 <p style={{ color: "var(--grey)" }}>
-                  No artists within {radiusKm}km of you right now. Try widening your search radius in the filter above.
+                  No artists within {radiusKm}km of you right now.
+                  {radiusKm < NEARBY_RADIUS_KM && " Try widening your search radius in the filter above."}
                 </p>
               </div>
             )}

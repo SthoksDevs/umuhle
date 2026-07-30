@@ -317,7 +317,10 @@ export default function StoresPage() {
           <div style={{ textAlign: "center", padding: "4rem", color: "var(--grey)" }}>Loading stores…</div>
         ) : filtered.length === 0 && geo.status === "granted" ? (
           <div style={{ textAlign: "center", padding: "4rem" }}>
-            <p style={{ fontSize: "1.1rem", color: "var(--grey)" }}>No salons within {radiusKm}km of you right now. Try widening your search radius in the filter above.</p>
+            <p style={{ fontSize: "1.1rem", color: "var(--grey)" }}>
+              No salons within {radiusKm}km of you right now.
+              {radiusKm < NEARBY_RADIUS_KM && " Try widening your search radius in the filter above."}
+            </p>
           </div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign: "center", padding: "4rem" }}>
