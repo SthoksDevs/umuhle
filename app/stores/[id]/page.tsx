@@ -7,6 +7,7 @@ import Image from "next/image";
 import Link from "next/link";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
+import ReviewsList from "@/components/ReviewsList";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Profile } from "@/types";
@@ -21,6 +22,7 @@ type Salon = {
   opening_hours: OpeningHours | null; gallery_urls: string[] | null;
   instagram_username: string | null; youtube_url: string | null;
   services: string[] | null; latitude: number | null; longitude: number | null;
+  rating: number | null; review_count: number | null;
 };
 type IgPost = { id: string; media_url: string; permalink: string; caption?: string };
 type StoreBookingInsert = { salon_id: string; client_id: string | null; client_name: string; client_phone: string; service: string; booking_date: string; booking_time: string; notes: string | null };
@@ -381,6 +383,8 @@ export default function StoreDetailPage() {
           </div>
 
         </div>
+
+        <ReviewsList salonId={salon.id} rating={salon.rating} reviewCount={salon.review_count} />
       </div>
       <Footer />
     </div>

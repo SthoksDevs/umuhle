@@ -20,9 +20,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { creditOrderItemPayout } from "@/lib/payouts";
-import { createReviewInvite, buildReviewUrl } from "@/lib/review-invites";
-import { sendReviewInviteEmail } from "@/lib/email";
-import { notifyReviewInvite } from "@/lib/whatsapp";
 
 function serviceClient() {
   return createClient(
@@ -102,69 +99,7 @@ export async function POST(_req: NextRequest, props: { params: Promise<{ token: 
     creditReason = e instanceof Error ? e.message : "Unknown error";
   }
 
-  // Product review invite (client_to_product) — own try/catch, independent
-  // of payout crediting above, same reasoning as the other status-hook
-  // routes: a notification hiccup shouldn't affect the response or the
-  // payout. Returns reviewUrl so the confirm-receipt page can also offer it
-  // inline, right when the customer is already here — the email/WhatsApp
-  // link (see lib/review-invites.ts) is the durable copy for later.
-  let reviewUrl: string | null = null;
-  try {
-    const { data: full } = await service
-      .from("order_items")
-      .select(`
-        id,
-        product:products(id, name, partner_id),
-        order:orders(contact_name, contact_whatsapp, client_id, client:profiles!client_id(full_name, phone, email))
-      `)
-      .eq("id", item.id)
-      .single();
-
-    const product = Array.isArray(full?.product) ? full?.product[0] : full?.product;
-    const order = Array.isArray(full?.order) ? full?.order[0] : full?.order;
-    const client = order ? (Array.isArray(order.client) ? order.client[0] : order.client) : null;
-
-    if (product?.partner_id && order?.client_id) {
-      const token_ = await createReviewInvite(service, {
-        reviewType: "client_to_product",
-        reviewerId: order.client_id,
-        reviewedId: product.partner_id,
-        orderItemId: item.id,
-      });
-
-      if (token_) {
-        reviewUrl = buildReviewUrl(token_);
-        const clientName = order.contact_name ?? client?.full_name ?? "there";
-        const clientPhone = order.contact_whatsapp ?? client?.phone ?? null;
-
-        if (client?.email) {
-          try {
-            await sendReviewInviteEmail({
-              reviewType:  "client_to_product",
-              toEmail:     client.email,
-              toName:      clientName,
-              targetName:  product.name ?? "your purchase",
-              inviteToken: token_,
-              referenceId: item.id,
-            });
-          } catch (e) {
-            console.error(`[order-items/confirm/${params.token}] review-invite email error:`, e);
-          }
-        }
-        if (clientPhone) {
-          await notifyReviewInvite({
-            phone: clientPhone,
-            name: clientName,
-            targetName: product.name ?? "your purchase",
-            reviewUrl,
-            kind: "product",
-          });
-        }
-      }
-    }
-  } catch (e) {
-    console.error(`[order-items/confirm/${params.token}] review invite error:`, e);
-  }
-
-  return NextResponse.json({ ok: true, credited, creditReason, reviewUrl });
+  // Product review invite is sent 5 days after delivery, not here — see
+  // app/api/cron/review-invites/route.ts.
+  return NextResponse.json({ ok: true, credited, creditReason });
 }

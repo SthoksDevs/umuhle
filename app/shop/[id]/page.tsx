@@ -14,6 +14,7 @@ import { useCart, setPendingCartAdd, getPendingCartAdd, clearPendingCartAdd } fr
 import { useProductWishlist, getPendingWishlistAdd, clearPendingWishlistAdd } from "@/lib/product-wishlist-context";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
+import ReviewsList from "@/components/ReviewsList";
 
 const CATEGORY_IMAGE: Record<string, string> = {
   "hair":   "/hair.png",
@@ -535,6 +536,8 @@ export default function ProductDetailPage() {
               </button>
             </div>
           </div>
+
+          <ReviewsList productId={product.id} rating={product.rating} reviewCount={product.review_count} />
 
           {/* Related products */}
           {related.length > 0 && (

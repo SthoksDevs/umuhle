@@ -1358,7 +1358,15 @@ function SalonBookingsInbox({ salonId }: { salonId: string }) {
   }, [salonId]);
  
   const updateStatus = async (id: string, status: string) => {
-    await supabase.from("store_bookings").update({ status }).eq("id", id);
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) return;
+    const res = await fetch(`/api/store-bookings/${id}/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ status }),
+    });
+    if (!res.ok) return;
     setBookings(prev => prev.map(b => b.id === id ? { ...b, status } : b));
   };
  

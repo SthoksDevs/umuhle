@@ -218,6 +218,9 @@ export interface Product {
   gallery_urls?: string[] | null;
   colors?: string[] | null;
   sizes?: string[] | null;
+  // ── Review aggregate (kept in sync by reviews_sync_product_salon_rating_trigger) ──
+  rating?: number | null;
+  review_count?: number | null;
 }
 
 export interface CartItem {

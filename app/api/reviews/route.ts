@@ -120,6 +120,44 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ reviews: data ?? [] });
   }
 
+  // ── Public reviews for a salon (shown on the store detail page) ─────────
+  const salonId = searchParams.get("salonId");
+  if (salonId) {
+    const limitParam = Number(searchParams.get("limit"));
+    const limit = Math.min(Number.isFinite(limitParam) && limitParam > 0 ? limitParam : 10, 50);
+
+    const { data, error } = await service
+      .from("reviews")
+      .select("id, rating, comment, created_at, reviewer:profiles!reviews_reviewer_id_fkey(full_name, avatar_url)")
+      .eq("salon_id", salonId)
+      .eq("review_type", "client_to_salon")
+      .eq("moderation_status", "approved")
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ reviews: data ?? [] });
+  }
+
+  // ── Public reviews for a product (shown on the product detail page) ─────
+  const productId = searchParams.get("productId");
+  if (productId) {
+    const limitParam = Number(searchParams.get("limit"));
+    const limit = Math.min(Number.isFinite(limitParam) && limitParam > 0 ? limitParam : 10, 50);
+
+    const { data, error } = await service
+      .from("reviews")
+      .select("id, rating, comment, created_at, reviewer:profiles!reviews_reviewer_id_fkey(full_name, avatar_url)")
+      .eq("product_id", productId)
+      .eq("review_type", "client_to_product")
+      .eq("moderation_status", "approved")
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ reviews: data ?? [] });
+  }
+
   // ── "Have I already reviewed these bookings?" (for button state) ────────
   const bookingIdsParam = searchParams.get("bookingIds");
   if (bookingIdsParam) {
@@ -143,5 +181,5 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ reviews });
   }
 
-  return NextResponse.json({ error: "artistId or bookingIds query param required" }, { status: 400 });
+  return NextResponse.json({ error: "artistId, salonId, productId, or bookingIds query param required" }, { status: 400 });
 }
