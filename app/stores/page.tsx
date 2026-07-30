@@ -1,7 +1,7 @@
 "use client";
 // app/stores/page.tsx — Stores archive page (uses partner_salons table)
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import SiteHeader from "@/components/SiteHeader";
@@ -10,6 +10,7 @@ import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Profile } from "@/types";
 import { useGeolocation, type GeoStatus } from "@/lib/geolocation";
+import { getProvince } from "@/lib/provinces";
 import ProximityFilter from "@/components/ProximityFilter";
 
 // Default/max reach of the "Filter by proximity" slider (5km steps, see
@@ -19,6 +20,12 @@ import ProximityFilter from "@/components/ProximityFilter";
 const NEARBY_RADIUS_KM = 50;
 const PROXIMITY_MIN_KM = 5;
 const PROXIMITY_STEP_KM = 5;
+
+// Radius used only to fetch same-province fallback candidates (see
+// fetchProvinceFallback below) — wide enough to cover the whole country so
+// we get every location-tagged salon back, then filter to the customer's
+// own province client-side via lib/provinces.ts.
+const PROVINCE_FALLBACK_RADIUS_KM = 2000;
 
 import { isOpenNow, type OpeningHours } from "@/lib/opening-hours";
 
@@ -39,13 +46,14 @@ type Salon = {
 };
 
 // ── Store card ─────────────────────────────────────────────────────────────────
-function StoreCard({ salon }: { salon: Salon }) {
+function StoreCard({ salon, farDistanceKm }: { salon: Salon; farDistanceKm?: number }) {
   const { open, label } = isOpenNow(salon.opening_hours);
   const cover = salon.gallery_urls?.[0] ?? null;
+  const isFar = typeof farDistanceKm === "number";
   return (
     <Link href={`/stores/${salon.id}`} style={{ textDecoration: "none", color: "inherit" }}>
       <div
-        style={{ borderRadius: 18, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.15)", background: "#fff", transition: "transform 0.2s, box-shadow 0.2s", cursor: "pointer" }}
+        style={{ borderRadius: 18, overflow: "hidden", border: isFar ? "1.5px solid var(--nude)" : "1.5px solid rgba(155,127,184,0.15)", background: isFar ? "rgba(194,127,184,0.04)" : "#fff", transition: "transform 0.2s, box-shadow 0.2s", cursor: "pointer" }}
         onMouseEnter={e => { const el = e.currentTarget as HTMLDivElement; el.style.transform = "translateY(-3px)"; el.style.boxShadow = "0 12px 40px rgba(155,127,184,0.15)"; }}
         onMouseLeave={e => { const el = e.currentTarget as HTMLDivElement; el.style.transform = ""; el.style.boxShadow = ""; }}
       >
@@ -60,6 +68,11 @@ function StoreCard({ salon }: { salon: Salon }) {
           {salon.instagram_username && (
             <span style={{ position: "absolute", bottom: 10, right: 10, background: "rgba(255,255,255,0.9)", borderRadius: 100, padding: "0.2rem 0.65rem", fontSize: "0.7rem", fontWeight: 500, color: "#C13584", backdropFilter: "blur(4px)" }}>
               IG
+            </span>
+          )}
+          {isFar && (
+            <span style={{ position: "absolute", bottom: 10, left: 10, background: "var(--nude)", color: "#fff", borderRadius: 100, padding: "0.2rem 0.65rem", fontSize: "0.72rem", fontWeight: 600, backdropFilter: "blur(4px)" }}>
+              ~{Math.round(farDistanceKm!)} km away
             </span>
           )}
         </div>
@@ -270,19 +283,67 @@ export default function StoresPage() {
     return () => { cancelled = true; };
   }, [geo.status, geo.coords, radiusKm]);
 
+  const matchesFilters = useCallback((s: Salon) => {
+    const q = search.toLowerCase();
+    const matchQ = !q || s.name.toLowerCase().includes(q) || (s.suburb ?? "").toLowerCase().includes(q) || (s.city ?? "").toLowerCase().includes(q);
+    const catFilters = activeFilters.filter(f => f !== "Open now");
+    const matchSvc = catFilters.length === 0 || catFilters.some(f => (s.services ?? []).includes(f.toLowerCase()));
+    const matchOpen = !activeFilters.includes("Open now") || isOpenNow(s.opening_hours).open;
+    return matchQ && matchSvc && matchOpen;
+  }, [search, activeFilters]);
+
   const filtered = salons
-    .filter(s => {
-      const q = search.toLowerCase();
-      const matchQ = !q || s.name.toLowerCase().includes(q) || (s.suburb ?? "").toLowerCase().includes(q) || (s.city ?? "").toLowerCase().includes(q);
-      const catFilters = activeFilters.filter(f => f !== "Open now");
-      const matchSvc = catFilters.length === 0 || catFilters.some(f => (s.services ?? []).includes(f.toLowerCase()));
-      const matchOpen = !activeFilters.includes("Open now") || isOpenNow(s.opening_hours).open;
-      return matchQ && matchSvc && matchOpen;
-    })
+    .filter(matchesFilters)
     .sort((a, b) => {
       if (!distanceById) return 0;
       return (distanceById[a.id] ?? Infinity) - (distanceById[b.id] ?? Infinity);
     });
+
+  // ── Province fallback (see lib/provinces.ts and app/page.tsx — same
+  // pattern). Only kicks in once the customer has already widened the
+  // proximity slider all the way to NEARBY_RADIUS_KM and still got zero
+  // results — instead of a dead end we show what's elsewhere in their own
+  // province, clearly flagged as further afield (warning-coloured card + a
+  // "Xkm away" badge). Replaces the old "show all instead" escape hatch.
+  const [provinceFallback, setProvinceFallback] = useState<{ salon: Salon; distanceKm: number }[]>([]);
+  const [provinceName, setProvinceName] = useState<string | null>(null);
+
+  const fetchProvinceFallback = useCallback(async () => {
+    if (!(filtered.length === 0 && geo.status === "granted" && geo.coords && radiusKm === NEARBY_RADIUS_KM)) {
+      setProvinceFallback([]);
+      return;
+    }
+    const myProvince = getProvince(geo.coords);
+    const { data: nearby, error: nearbyErr } = await supabase.rpc("nearby_salons", {
+      user_lat: geo.coords.latitude,
+      user_lng: geo.coords.longitude,
+      radius_km: PROVINCE_FALLBACK_RADIUS_KM,
+    });
+    if (nearbyErr || !nearby) { setProvinceFallback([]); return; }
+    const rows = (nearby ?? []) as { id: string; distance_km: number }[];
+    if (rows.length === 0) { setProvinceFallback([]); return; }
+
+    const { data } = await supabase
+      .from("partner_salons")
+      .select("id,name,description,address,suburb,city,phone,gallery_urls,instagram_username,opening_hours,services,latitude,longitude")
+      .eq("status", "approved")
+      .in("id", rows.map(r => r.id));
+
+    const distanceBySalonId = Object.fromEntries(rows.map(r => [r.id, r.distance_km]));
+    const inProvince = ((data ?? []) as Salon[])
+      .filter(matchesFilters)
+      .filter(s => s.latitude != null && s.longitude != null && getProvince({ latitude: s.latitude, longitude: s.longitude }) === myProvince)
+      .sort((a, b) => (distanceBySalonId[a.id] ?? Infinity) - (distanceBySalonId[b.id] ?? Infinity))
+      .slice(0, 8);
+
+    setProvinceName(myProvince);
+    setProvinceFallback(inProvince.map(s => ({ salon: s, distanceKm: distanceBySalonId[s.id] })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered.length, geo.status, geo.coords, radiusKm, matchesFilters]);
+
+  useEffect(() => {
+    fetchProvinceFallback();
+  }, [fetchProvinceFallback]);
 
   return (
     <div style={{ minHeight: "100vh", background: "#FAFAF8" }}>
@@ -334,6 +395,19 @@ export default function StoresPage() {
               {filtered.map(s => <StoreCard key={s.id} salon={s} />)}
             </div>
           </>
+        )}
+
+        {provinceFallback.length > 0 && (
+          <div style={{ marginTop: filtered.length === 0 ? "0.5rem" : "3rem" }}>
+            <p style={{ fontSize: "0.85rem", color: "var(--grey)", textAlign: "center", marginBottom: "1.25rem" }}>
+              A little further afield, in {provinceName}:
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: "1.25rem" }}>
+              {provinceFallback.map(({ salon, distanceKm: farKm }) => (
+                <StoreCard key={salon.id} salon={salon} farDistanceKm={farKm} />
+              ))}
+            </div>
+          </div>
         )}
 
         {/* List a Store CTA */}

@@ -14,6 +14,7 @@ import StarRating from "@/components/StarRating";
 import { gTag, fbq, ttq } from "@/lib/analytics";
 import { useCart } from "@/lib/cart-context";
 import { useGeolocation, distanceKm, type GeoStatus } from "@/lib/geolocation";
+import { getProvince } from "@/lib/provinces";
 import { TIMES } from "@/lib/booking-times";
 import ProximityFilter from "@/components/ProximityFilter";
 
@@ -25,6 +26,12 @@ import ProximityFilter from "@/components/ProximityFilter";
 const NEARBY_RADIUS_KM = 50;
 const PROXIMITY_MIN_KM = 5;
 const PROXIMITY_STEP_KM = 5;
+
+// Radius used only to fetch same-province fallback candidates (see
+// fetchProvinceFallback below) — wide enough to cover the whole country so
+// we get every location-tagged artist back, then filter to the customer's
+// own province client-side via lib/provinces.ts.
+const PROVINCE_FALLBACK_RADIUS_KM = 2000;
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
@@ -470,6 +477,58 @@ export default function Home() {
     return () => clearTimeout(t);
   }, [fetchArtists]);
 
+  // ── Province fallback (see lib/provinces.ts) ────────────────────────────
+  // Only kicks in once the customer has already widened the proximity
+  // slider all the way to NEARBY_RADIUS_KM and still got zero results — at
+  // that point there's nowhere further the slider itself can take them, so
+  // instead of a dead end we show what's elsewhere in their own province,
+  // clearly flagged as further afield (warning-coloured card + a "Xkm away"
+  // badge) so they can decide for themselves whether it's worth the trip.
+  // This is the replacement for the old "show all instead" escape hatch.
+  const [provinceFallback, setProvinceFallback] = useState<{ artist: Artist; distanceKm: number }[]>([]);
+  const [provinceName, setProvinceName] = useState<string | null>(null);
+
+  const fetchProvinceFallback = useCallback(async () => {
+    if (!(artists.length === 0 && geo.status === "granted" && geo.coords && radiusKm === NEARBY_RADIUS_KM)) {
+      setProvinceFallback([]);
+      return;
+    }
+    const myProvince = getProvince(geo.coords);
+    const { data: nearby, error: nearbyErr } = await supabase.rpc("nearby_artists", {
+      user_lat: geo.coords.latitude,
+      user_lng: geo.coords.longitude,
+      radius_km: PROVINCE_FALLBACK_RADIUS_KM,
+    });
+    if (nearbyErr || !nearby) { setProvinceFallback([]); return; }
+    const rows = (nearby ?? []) as { id: string; distance_km: number }[];
+    if (rows.length === 0) { setProvinceFallback([]); return; }
+
+    let query = supabase
+      .from("artists")
+      .select("*, services(id, name, price, duration_minutes, is_active)")
+      .eq("is_active", true)
+      .eq("moderation_status", "approved")
+      .in("id", rows.map(r => r.id));
+    if (user) query = query.neq("profile_id", user.id);
+    if (activeCategories.length > 0) query = query.in("category", activeCategories.map(c => c.toLowerCase()));
+    if (searchQuery.trim()) query = query.ilike("display_name", `%${searchQuery.trim()}%`);
+
+    const { data } = await query;
+    const distanceByArtistId = Object.fromEntries(rows.map(r => [r.id, r.distance_km]));
+    const inProvince = ((data ?? []) as Artist[])
+      .filter(a => a.latitude != null && a.longitude != null && getProvince({ latitude: a.latitude, longitude: a.longitude }) === myProvince)
+      .sort((a, b) => (distanceByArtistId[a.id] ?? Infinity) - (distanceByArtistId[b.id] ?? Infinity))
+      .slice(0, 8);
+
+    setProvinceName(myProvince);
+    setProvinceFallback(inProvince.map(a => ({ artist: a, distanceKm: distanceByArtistId[a.id] })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [artists.length, geo.status, geo.coords, radiusKm, activeCategories, searchQuery, user]);
+
+  useEffect(() => {
+    fetchProvinceFallback();
+  }, [fetchProvinceFallback]);
+
   const addToCart = (item: CartItem) => {
     setCart(prev => [...prev, item]);
     ttq("AddToCart", { contents: [{ content_id: item.id, content_name: item.name }], value: item.price / 100, currency: "ZAR" });
@@ -554,6 +613,31 @@ export default function Home() {
               <p style={{ color: "var(--grey)", textAlign: "center", padding: "3rem 0" }}>
                 No artists found. Try a different search or category.
               </p>
+            )}
+
+            {!loading && artists.length === 0 && provinceFallback.length > 0 && (
+              <div style={{ marginTop: "0.5rem", marginBottom: "1rem" }}>
+                <p style={{ fontSize: "0.85rem", color: "var(--grey)", textAlign: "center", marginBottom: "1.25rem" }}>
+                  A little further afield, in {provinceName}:
+                </p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: "1.25rem" }}>
+                  {provinceFallback.map(({ artist, distanceKm: farKm }) => (
+                    <ArtistCard
+                      key={artist.id}
+                      artist={artist}
+                      farDistanceKm={farKm}
+                      isWishlisted={wishlistIds.has(artist.id)}
+                      onToggleWishlist={() => toggleWishlist(artist.id)}
+                      onBook={() => {
+                        if (!user) { router.push("/?auth=login"); return; }
+                        setSelectedArtist(artist);
+                        ttq("ViewContent", { contents: [{ content_id: artist.id, content_name: artist.display_name }] });
+                        fbq("ViewContent", { content_ids: [artist.id], content_name: artist.display_name });
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
             )}
 
             {!loading && artists.length > 0 && (
@@ -643,8 +727,9 @@ export default function Home() {
 }
 
 // ─── Artist card ──────────────────────────────────────────────────────────────
-function ArtistCard({ artist, onBook, isWishlisted, onToggleWishlist }: { artist: Artist; onBook: () => void; isWishlisted: boolean; onToggleWishlist: () => Promise<void> }) {
+function ArtistCard({ artist, onBook, isWishlisted, onToggleWishlist, farDistanceKm }: { artist: Artist; onBook: () => void; isWishlisted: boolean; onToggleWishlist: () => Promise<void>; farDistanceKm?: number }) {
   const [busy, setBusy] = useState(false);
+  const isFar = typeof farDistanceKm === "number";
   const handleHeartClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (busy) return;
@@ -654,7 +739,7 @@ function ArtistCard({ artist, onBook, isWishlisted, onToggleWishlist }: { artist
   };
   return (
     <div
-      style={{ borderRadius: 18, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.15)", background: "#fff", transition: "transform 0.2s, box-shadow 0.2s" }}
+      style={{ borderRadius: 18, overflow: "hidden", border: isFar ? "1.5px solid var(--nude)" : "1.5px solid rgba(155,127,184,0.15)", background: isFar ? "rgba(194,127,184,0.04)" : "#fff", transition: "transform 0.2s, box-shadow 0.2s" }}
       onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.transform = "translateY(-3px)"; (e.currentTarget as HTMLDivElement).style.boxShadow = "0 12px 40px rgba(155,127,184,0.15)"; }}
       onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.transform = ""; (e.currentTarget as HTMLDivElement).style.boxShadow = ""; }}
     >
@@ -672,6 +757,11 @@ function ArtistCard({ artist, onBook, isWishlisted, onToggleWishlist }: { artist
             <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
           </svg>
         </button>
+        {isFar && (
+          <span style={{ position: "absolute", bottom: 10, left: 10, background: "var(--nude)", color: "#fff", borderRadius: 100, padding: "0.2rem 0.65rem", fontSize: "0.72rem", fontWeight: 600 }}>
+            ~{Math.round(farDistanceKm!)} km away
+          </span>
+        )}
       </div>
       <div style={{ padding: "1rem" }}>
         <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 500, fontSize: "1.05rem", marginBottom: "0.25rem" }}>{artist.display_name}</h3>
