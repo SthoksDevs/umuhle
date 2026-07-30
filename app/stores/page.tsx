@@ -9,12 +9,16 @@ import Footer from "@/components/Footer";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Profile } from "@/types";
-import { useGeolocation } from "@/lib/geolocation";
+import { useGeolocation, type GeoStatus } from "@/lib/geolocation";
+import ProximityFilter from "@/components/ProximityFilter";
 
-// Kept in sync with app/page.tsx's NEARBY_RADIUS_KM and
-// nearby_salons()'s own radius_km default in
+// Default/max reach of the "Filter by proximity" slider (5km steps, see
+// components/ProximityFilter.tsx). Kept in sync with app/page.tsx's
+// NEARBY_RADIUS_KM and nearby_salons()'s own radius_km default in
 // supabase/migrations/20260727_proximity_and_push.sql.
 const NEARBY_RADIUS_KM = 50;
+const PROXIMITY_MIN_KM = 5;
+const PROXIMITY_STEP_KM = 5;
 
 import { isOpenNow, type OpeningHours } from "@/lib/opening-hours";
 
@@ -91,12 +95,20 @@ function SearchWithFilter({
   activeFilters,
   onFiltersChange,
   placeholder = "Search…",
+  geoStatus,
+  radiusKm,
+  onRadiusChange,
+  onRequestLocation,
 }: {
   searchValue: string;
   onSearchChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   activeFilters: FilterCat[];
   onFiltersChange: (filters: FilterCat[]) => void;
   placeholder?: string;
+  geoStatus: GeoStatus;
+  radiusKm: number;
+  onRadiusChange: (km: number) => void;
+  onRequestLocation: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
@@ -116,7 +128,7 @@ function SearchWithFilter({
     onFiltersChange(next);
   };
 
-  const activeCount = activeFilters.length;
+  const activeCount = activeFilters.length + (radiusKm !== NEARBY_RADIUS_KM ? 1 : 0);
 
   return (
     <div ref={dropRef} style={{ maxWidth: 600, margin: "0 auto", position: "relative" }}>
@@ -169,8 +181,20 @@ function SearchWithFilter({
               );
             })}
           </div>
+
+          <ProximityFilter
+            geoStatus={geoStatus}
+            radiusKm={radiusKm}
+            onRadiusChange={onRadiusChange}
+            onRequestLocation={onRequestLocation}
+            minKm={PROXIMITY_MIN_KM}
+            maxKm={NEARBY_RADIUS_KM}
+            stepKm={PROXIMITY_STEP_KM}
+            subject="salons"
+          />
+
           {activeCount > 0 && (
-            <button onClick={() => onFiltersChange([])} style={{ marginTop: "0.75rem", width: "100%", padding: "0.45rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "transparent", color: "var(--grey)", fontSize: "0.82rem", cursor: "pointer" }}>
+            <button onClick={() => { onFiltersChange([]); onRadiusChange(NEARBY_RADIUS_KM); }} style={{ marginTop: "0.75rem", width: "100%", padding: "0.45rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "transparent", color: "var(--grey)", fontSize: "0.82rem", cursor: "pointer" }}>
               Clear filters
             </button>
           )}
@@ -190,9 +214,11 @@ export default function StoresPage() {
   const [search, setSearch] = useState("");
   const [activeFilters, setActiveFilters] = useState<FilterCat[]>([]);
 
-  // Proximity — see lib/geolocation.ts and app/page.tsx (same pattern).
+  // Proximity — see lib/geolocation.ts, components/ProximityFilter.tsx and
+  // app/page.tsx (same pattern). `radiusKm` is customer-controlled via the
+  // "Filter by proximity" slider in the filter dropdown.
   const geo = useGeolocation();
-  const [ignoreRadius, setIgnoreRadius] = useState(false);
+  const [radiusKm, setRadiusKm] = useState(NEARBY_RADIUS_KM);
   const [distanceById, setDistanceById] = useState<Record<string, number> | null>(null);
 
   useEffect(() => {
@@ -207,11 +233,11 @@ export default function StoresPage() {
     (async () => {
       setLoading(true);
 
-      if (geo.status === "granted" && geo.coords && !ignoreRadius) {
+      if (geo.status === "granted" && geo.coords) {
         const { data: nearby, error: nearbyErr } = await supabase.rpc("nearby_salons", {
           user_lat: geo.coords.latitude,
           user_lng: geo.coords.longitude,
-          radius_km: NEARBY_RADIUS_KM,
+          radius_km: radiusKm,
         });
         if (!nearbyErr) {
           const rows = (nearby ?? []) as { id: string; distance_km: number }[];
@@ -242,7 +268,7 @@ export default function StoresPage() {
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [geo.status, geo.coords, ignoreRadius]);
+  }, [geo.status, geo.coords, radiusKm]);
 
   const filtered = salons
     .filter(s => {
@@ -278,58 +304,20 @@ export default function StoresPage() {
             activeFilters={activeFilters}
             onFiltersChange={setActiveFilters}
             placeholder="Search by store name or suburb…"
+            geoStatus={geo.status}
+            radiusKm={radiusKm}
+            onRadiusChange={setRadiusKm}
+            onRequestLocation={geo.request}
           />
         </div>
       </div>
 
       <main style={{ maxWidth: 1200, margin: "0 auto", padding: "2rem 1.5rem" }}>
-        {/* Proximity banner — see lib/geolocation.ts */}
-        <div style={{ marginBottom: "1rem", fontSize: "0.82rem", color: "var(--grey)" }}>
-          {geo.status === "granted" && geo.coords && !ignoreRadius && (
-            <span>
-              Showing salons within {NEARBY_RADIUS_KM}km of you.{" "}
-              <button onClick={() => setIgnoreRadius(true)} style={{ background: "none", border: "none", padding: 0, color: "var(--plum)", fontWeight: 500, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}>
-                Show all instead
-              </button>
-            </span>
-          )}
-          {ignoreRadius && (
-            <span>
-              Showing all salons.{" "}
-              <button onClick={() => setIgnoreRadius(false)} style={{ background: "none", border: "none", padding: 0, color: "var(--plum)", fontWeight: 500, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}>
-                Show nearby only
-              </button>
-            </span>
-          )}
-          {!ignoreRadius && geo.status === "checking" && (
-            <span>Finding salons near you…</span>
-          )}
-          {!ignoreRadius && (geo.status === "idle" || geo.status === "denied") && (
-            <span>
-              {geo.status === "denied" ? "Location access blocked — s" : "S"}howing all salons.{" "}
-              <button onClick={geo.request} style={{ background: "none", border: "none", padding: 0, color: "var(--plum)", fontWeight: 500, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}>
-                See who&apos;s near you instead
-              </button>
-            </span>
-          )}
-          {!ignoreRadius && geo.status === "unavailable" && (
-            <span>
-              Couldn&apos;t pin your location just now — showing all salons.{" "}
-              <button onClick={geo.request} style={{ background: "none", border: "none", padding: 0, color: "var(--plum)", fontWeight: 500, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}>
-                Try again
-              </button>
-            </span>
-          )}
-        </div>
-
         {loading ? (
           <div style={{ textAlign: "center", padding: "4rem", color: "var(--grey)" }}>Loading stores…</div>
-        ) : filtered.length === 0 && geo.status === "granted" && !ignoreRadius ? (
+        ) : filtered.length === 0 && geo.status === "granted" ? (
           <div style={{ textAlign: "center", padding: "4rem" }}>
-            <p style={{ fontSize: "1.1rem", color: "var(--grey)", marginBottom: "0.75rem" }}>No salons within {NEARBY_RADIUS_KM}km of you right now.</p>
-            <button onClick={() => setIgnoreRadius(true)} className="btn-outline" style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem" }}>
-              Show all salons instead
-            </button>
+            <p style={{ fontSize: "1.1rem", color: "var(--grey)" }}>No salons within {radiusKm}km of you right now. Try widening your search radius in the filter above.</p>
           </div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign: "center", padding: "4rem" }}>
