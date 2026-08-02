@@ -301,6 +301,26 @@ export interface PartnerSalon {
   created_at: string;
 }
 
+export interface StoreBranch {
+  id: string;
+  salon_id: string;
+  name: string;
+  is_primary: boolean;
+  address: string | null;
+  suburb: string | null;
+  city: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  phone: string | null;
+  email: string | null;
+  opening_hours: Record<string, { open: string; close: string; closed?: boolean }>;
+  banner_url: string | null;
+  brand_color_primary: string | null;
+  brand_color_secondary: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface Referral {
   id: string;
   referrer_id: string;

@@ -216,6 +216,27 @@ CREATE TABLE public.partner_salons (
   CONSTRAINT partner_salons_pkey PRIMARY KEY (id),
   CONSTRAINT partner_salons_partner_id_fkey FOREIGN KEY (partner_id) REFERENCES public.profiles(id)
 );
+CREATE TABLE public.store_branches (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  salon_id uuid NOT NULL,
+  name text NOT NULL,
+  is_primary boolean NOT NULL DEFAULT false,
+  address text,
+  suburb text,
+  city text,
+  latitude numeric,
+  longitude numeric,
+  phone text,
+  email text,
+  opening_hours jsonb DEFAULT '{}'::jsonb,
+  banner_url text,
+  brand_color_primary text,
+  brand_color_secondary text,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT store_branches_pkey PRIMARY KEY (id),
+  CONSTRAINT store_branches_salon_id_fkey FOREIGN KEY (salon_id) REFERENCES public.partner_salons(id)
+);
 CREATE TABLE public.salon_subscription_payments (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   salon_id uuid NOT NULL,
