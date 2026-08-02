@@ -14,6 +14,7 @@ import type { Profile } from "@/types";
 
 import { isOpenNow as sharedIsOpenNow, isOpenOnDate, hoursRangeForDate, WEEKDAY_LABELS, type OpeningHours } from "@/lib/opening-hours";
 import { TIMES } from "@/lib/booking-times";
+import { gTag } from "@/lib/analytics";
 
 type Salon = {
   id: string; name: string; description: string | null;
@@ -159,6 +160,7 @@ function BookingForm({ salon }: { salon: Salon }) {
     const { error: err } = await supabase.from("store_bookings").insert(payload);
     setSaving(false);
     if (err) { setError("Something went wrong. Please try again."); return; }
+    gTag("form_submit", { form_name: "store_booking", store_id: salon.id, service: form.service });
     setDone(true);
   };
 
@@ -374,10 +376,10 @@ export default function StoreDetailPage() {
             <section style={{ marginTop:"1.5rem" }}>
               <h2 style={{ fontFamily:"var(--font-display)",fontWeight:400,fontSize:"1.25rem",marginBottom:"0.65rem" }}>Contact</h2>
               <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-                {salon.phone && <a href={`tel:${salon.phone}`} style={{ color:"var(--onyx)",fontSize:"0.9rem",textDecoration:"none" }}>📞 {salon.phone}</a>}
-                {salon.phone && <a href={`https://wa.me/${salon.phone.replace(/\D/g,"")}`} target="_blank" rel="noopener noreferrer" style={{ color:"var(--onyx)",fontSize:"0.9rem",textDecoration:"none" }}>💬 WhatsApp</a>}
-                {salon.email && <a href={`mailto:${salon.email}`} style={{ color:"var(--onyx)",fontSize:"0.9rem",textDecoration:"none",overflowWrap:"anywhere" }}>✉️ {salon.email}</a>}
-                {salon.website && <a href={salon.website} target="_blank" rel="noopener noreferrer" style={{ color:"var(--onyx)",fontSize:"0.9rem",textDecoration:"none",overflowWrap:"anywhere" }}>🌐 {salon.website.replace(/^https?:\/\//,"")}</a>}
+                {salon.phone && <a href={`tel:${salon.phone}`} onClick={() => gTag("click", { link_type: "call", store_id: salon.id })} style={{ color:"var(--onyx)",fontSize:"0.9rem",textDecoration:"none" }}>📞 {salon.phone}</a>}
+                {salon.phone && <a href={`https://wa.me/${salon.phone.replace(/\D/g,"")}`} target="_blank" rel="noopener noreferrer" onClick={() => gTag("click", { link_type: "whatsapp", store_id: salon.id })} style={{ color:"var(--onyx)",fontSize:"0.9rem",textDecoration:"none" }}>💬 WhatsApp</a>}
+                {salon.email && <a href={`mailto:${salon.email}`} onClick={() => gTag("click", { link_type: "email", store_id: salon.id })} style={{ color:"var(--onyx)",fontSize:"0.9rem",textDecoration:"none",overflowWrap:"anywhere" }}>✉️ {salon.email}</a>}
+                {salon.website && <a href={salon.website} target="_blank" rel="noopener noreferrer" onClick={() => gTag("click", { link_type: "website", store_id: salon.id })} style={{ color:"var(--onyx)",fontSize:"0.9rem",textDecoration:"none",overflowWrap:"anywhere" }}>🌐 {salon.website.replace(/^https?:\/\//,"")}</a>}
               </div>
             </section>
           </div>

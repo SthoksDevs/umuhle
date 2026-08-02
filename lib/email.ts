@@ -14,6 +14,7 @@ import nodemailer from "nodemailer";
 import { createClient } from "@supabase/supabase-js";
 import { gatewayLabel, type PaymentGateway } from "@/lib/payments/gateways";
 import type { ReviewType } from "@/lib/review-invites";
+import type { StoreBookingStats, StoreGA4Result, ReportPeriod } from "@/lib/store-analytics";
 
 const ADMIN_EMAIL = "info@umuhle.co.za";
 
@@ -860,6 +861,77 @@ export async function sendAdminPendingDigestEmail(opts: {
       <p style="margin:0 0 1.25rem;font-size:0.9rem;color:#666">Daily summary of everything waiting for action across the platform.</p>
       ${sectionsHtml}
       <p style="margin:1rem 0 0"><a href="https://umuhle.co.za/admin" style="color:#9B7FB8;font-weight:600;text-decoration:none">Open admin dashboard →</a></p>`),
+  });
+}
+
+// ── Store owner analytics report ────────────────────────────────────────────
+// Weekly/monthly performance summary for a salon owner — see
+// app/api/cron/store-analytics/route.ts for the cron that calls this, and
+// lib/store-analytics.ts for where bookingStats/ga4 come from.
+//
+// Owner copy only, no admin copy — this is the owner's own performance
+// data, not something Umuhle admin needs surfaced in their inbox too.
+
+export async function sendStoreAnalyticsReportEmail(opts: {
+  toEmail: string;
+  storeName: string;
+  period: ReportPeriod;
+  sinceLabel: string;
+  untilLabel: string;
+  bookingStats: StoreBookingStats;
+  ga4: StoreGA4Result;
+}) {
+  const { bookingStats, ga4 } = opts;
+  const periodLabel = opts.period === "weekly" ? "Weekly" : "Monthly";
+
+  const servicesHtml = bookingStats.topServices.length
+    ? `<ul style="margin:0;padding-left:1.1rem;font-size:0.9rem;color:#444;line-height:1.7">
+        ${bookingStats.topServices.map((s) => `<li style="text-transform:capitalize">${s.service} — <strong>${s.count}</strong> booking${s.count !== 1 ? "s" : ""}</li>`).join("")}
+      </ul>`
+    : `<p style="font-size:0.85rem;color:#999;margin:0">No booking requests in this period.</p>`;
+
+  const ga4Html = ga4.configured
+    ? `
+      <table style="width:100%;border-collapse:collapse;font-size:0.9rem;margin-bottom:1rem">
+        <tr><td style="padding:0.4rem 0;color:#666">Page views</td><td style="padding:0.4rem 0;font-weight:600">${ga4.pageViews}</td></tr>
+        <tr><td style="padding:0.4rem 0;color:#666">Booking form submissions</td><td style="padding:0.4rem 0;font-weight:600">${ga4.formSubmits}</td></tr>
+      </table>
+      ${ga4.clicksByType.length ? `
+        <p style="font-weight:600;font-size:0.85rem;margin:0 0 0.4rem;color:#1a1a1a">Contact clicks</p>
+        <ul style="margin:0 0 1rem;padding-left:1.1rem;font-size:0.85rem;color:#444;line-height:1.6">
+          ${ga4.clicksByType.map((c) => `<li style="text-transform:capitalize">${c.linkType} — ${c.count}</li>`).join("")}
+        </ul>` : ""}
+      ${ga4.funnel ? `
+        <p style="font-weight:600;font-size:0.85rem;margin:0 0 0.4rem;color:#1a1a1a">Where visitors started and stopped</p>
+        <ul style="margin:0;padding-left:1.1rem;font-size:0.85rem;color:#444;line-height:1.6">
+          ${ga4.funnel.map((f) => `<li>${f.step} — ${f.count}</li>`).join("")}
+        </ul>` : ""}`
+    : `<p style="font-size:0.85rem;color:#999;margin:0 0 1rem">Page views, clicks and visitor journey aren't connected yet — ask Umuhle to link Google Analytics to unlock this section.</p>`;
+
+  const bodyHtml = `
+    <p style="margin:0 0 1.25rem;font-size:0.9rem;color:#666">${periodLabel === "Weekly" ? "This week's" : "This month's"} performance for <strong>${opts.storeName}</strong> (${opts.sinceLabel} – ${opts.untilLabel}).</p>
+
+    <p style="font-weight:600;font-size:0.95rem;margin:0 0 0.5rem;color:#1a1a1a">Bookings</p>
+    <table style="width:100%;border-collapse:collapse;font-size:0.9rem;margin-bottom:1.25rem">
+      <tr><td style="padding:0.4rem 0;color:#666">Total requests</td><td style="padding:0.4rem 0;font-weight:600">${bookingStats.totalBookings}</td></tr>
+      <tr><td style="padding:0.4rem 0;color:#666">Confirmed</td><td style="padding:0.4rem 0;font-weight:600">${bookingStats.byStatus.confirmed}</td></tr>
+      <tr><td style="padding:0.4rem 0;color:#666">Completed</td><td style="padding:0.4rem 0;font-weight:600">${bookingStats.byStatus.completed}</td></tr>
+      <tr><td style="padding:0.4rem 0;color:#666">Cancelled</td><td style="padding:0.4rem 0;font-weight:600">${bookingStats.byStatus.cancelled}</td></tr>
+    </table>
+
+    <p style="font-weight:600;font-size:0.95rem;margin:0 0 0.5rem;color:#1a1a1a">Most-booked services</p>
+    <div style="margin-bottom:1.25rem">${servicesHtml}</div>
+
+    <p style="font-weight:600;font-size:0.95rem;margin:0 0 0.5rem;color:#1a1a1a">Website activity</p>
+    ${ga4Html}
+
+    <p style="font-size:0.78rem;color:#aaa;margin:1rem 0 0">Most-booked artists will appear here once branch staff profiles launch.</p>`;
+
+  await sendToAll([opts.toEmail], {
+    subject: `📊 ${periodLabel} report for ${opts.storeName}`,
+    template: "store_analytics_report",
+    text: `${periodLabel} performance for ${opts.storeName} (${opts.sinceLabel}–${opts.untilLabel})\n\nBookings: ${bookingStats.totalBookings} total, ${bookingStats.byStatus.confirmed} confirmed, ${bookingStats.byStatus.completed} completed, ${bookingStats.byStatus.cancelled} cancelled.\n\nTop services:\n${bookingStats.topServices.map((s) => `  - ${s.service}: ${s.count}`).join("\n") || "  (none)"}\n\n${ga4.configured ? `Page views: ${ga4.pageViews}\nForm submissions: ${ga4.formSubmits}` : "Website analytics not yet connected."}`,
+    html: emailWrapper(`${periodLabel} report — ${opts.storeName}`, bodyHtml),
   });
 }
 
