@@ -54,6 +54,7 @@ export interface StoreBookingStats {
   totalBookings: number;
   byStatus: Record<"pending" | "confirmed" | "completed" | "cancelled", number>;
   topServices: { service: string; count: number }[];
+  topStaff: { name: string; count: number }[];
 }
 
 export async function getStoreBookingStats(
@@ -65,7 +66,7 @@ export async function getStoreBookingStats(
 ): Promise<StoreBookingStats> {
   const { data, error } = await supabase
     .from("store_bookings")
-    .select("service, status")
+    .select("service, status, employee:branch_employees(name)")
     .eq("salon_id", salonId)
     .gte("created_at", sinceIso)
     .lte("created_at", untilIso);
@@ -75,17 +76,23 @@ export async function getStoreBookingStats(
   const rows = data ?? [];
   const byStatus: StoreBookingStats["byStatus"] = { pending: 0, confirmed: 0, completed: 0, cancelled: 0 };
   const serviceCounts = new Map<string, number>();
+  const staffCounts = new Map<string, number>();
 
-  for (const row of rows as { service: string; status: string }[]) {
+  for (const row of rows as unknown as { service: string; status: string; employee: { name: string } | null }[]) {
     if (row.status in byStatus) byStatus[row.status as keyof typeof byStatus]++;
     serviceCounts.set(row.service, (serviceCounts.get(row.service) ?? 0) + 1);
+    if (row.employee?.name) staffCounts.set(row.employee.name, (staffCounts.get(row.employee.name) ?? 0) + 1);
   }
 
   const topServices = [...serviceCounts.entries()]
     .map(([service, count]) => ({ service, count }))
     .sort((a, b) => b.count - a.count);
 
-  return { totalBookings: rows.length, byStatus, topServices };
+  const topStaff = [...staffCounts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+
+  return { totalBookings: rows.length, byStatus, topServices, topStaff };
 }
 
 // ── GA4 metrics (needs credentials) ─────────────────────────────────────────

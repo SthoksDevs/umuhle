@@ -321,6 +321,19 @@ export interface StoreBranch {
   created_at: string;
 }
 
+export interface BranchEmployee {
+  id: string;
+  branch_id: string;
+  artist_id: string | null;
+  name: string;
+  photo_url: string | null;
+  bio: string | null;
+  specialties: string[];
+  is_active: boolean;
+  display_order: number;
+  created_at: string;
+}
+
 export interface Referral {
   id: string;
   referrer_id: string;

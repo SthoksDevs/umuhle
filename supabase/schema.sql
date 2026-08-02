@@ -237,6 +237,21 @@ CREATE TABLE public.store_branches (
   CONSTRAINT store_branches_pkey PRIMARY KEY (id),
   CONSTRAINT store_branches_salon_id_fkey FOREIGN KEY (salon_id) REFERENCES public.partner_salons(id)
 );
+CREATE TABLE public.branch_employees (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  branch_id uuid NOT NULL,
+  artist_id uuid,
+  name text NOT NULL,
+  photo_url text,
+  bio text,
+  specialties text[] NOT NULL DEFAULT '{}',
+  is_active boolean NOT NULL DEFAULT true,
+  display_order integer NOT NULL DEFAULT 0,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT branch_employees_pkey PRIMARY KEY (id),
+  CONSTRAINT branch_employees_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.store_branches(id),
+  CONSTRAINT branch_employees_artist_id_fkey FOREIGN KEY (artist_id) REFERENCES public.artists(id)
+);
 CREATE TABLE public.salon_subscription_payments (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   salon_id uuid NOT NULL,
@@ -348,6 +363,8 @@ CREATE TABLE public.wishlists (
 CREATE TABLE public.store_bookings (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   salon_id uuid NOT NULL,
+  branch_id uuid,
+  branch_employee_id uuid,
   client_id uuid,
   client_name text NOT NULL,
   client_phone text NOT NULL,
@@ -359,6 +376,8 @@ CREATE TABLE public.store_bookings (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT store_bookings_pkey PRIMARY KEY (id),
   CONSTRAINT store_bookings_salon_id_fkey FOREIGN KEY (salon_id) REFERENCES public.partner_salons(id),
+  CONSTRAINT store_bookings_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.store_branches(id),
+  CONSTRAINT store_bookings_branch_employee_id_fkey FOREIGN KEY (branch_employee_id) REFERENCES public.branch_employees(id),
   CONSTRAINT store_bookings_client_id_fkey FOREIGN KEY (client_id) REFERENCES auth.users(id)
 );
 CREATE TABLE public.photo_upload_charges (

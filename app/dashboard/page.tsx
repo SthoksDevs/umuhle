@@ -602,6 +602,8 @@ type StoreBooking = {
   notes: string | null;
   status: string;
   created_at: string;
+  branch_employee_id: string | null;
+  employee: { name: string } | null;
 };
  
 type GalleryFile = { file: File; preview: string };
@@ -1348,7 +1350,7 @@ function SalonBookingsInbox({ salonId }: { salonId: string }) {
   useEffect(() => {
     supabase
       .from("store_bookings")
-      .select("*")
+      .select("*, employee:branch_employees(name)")
       .eq("salon_id", salonId)
       .order("booking_date", { ascending: true })
       .then(({ data }) => {
@@ -1396,6 +1398,7 @@ function SalonBookingsInbox({ salonId }: { salonId: string }) {
                 <p style={{ fontWeight: 600, fontSize: "0.95rem", margin: 0 }}>{b.client_name}</p>
                 <p style={{ fontSize: "0.8rem", color: "var(--grey)", margin: "2px 0 0" }}>
                   {b.booking_date} at {b.booking_time} · <span style={{ textTransform: "capitalize" }}>{b.service}</span>
+                  {b.employee?.name && <> · with <strong>{b.employee.name}</strong></>}
                 </p>
               </div>
               <span style={{ background: sc.bg, color: sc.color, borderRadius: 100, padding: "0.2rem 0.7rem", fontSize: "0.72rem", fontWeight: 600, textTransform: "capitalize", whiteSpace: "nowrap" }}>
@@ -1433,6 +1436,227 @@ function SalonBookingsInbox({ salonId }: { salonId: string }) {
   );
 }
  
+// ── Branch staff management for salon owners ───────────────────────────────────
+// One branch per salon today (see supabase/migrations/20260802_store_branches_foundation.sql)
+// so this always resolves the is_primary branch — multi-branch owners will
+// get a branch switcher here once that phase ships.
+
+type BranchStaffMember = {
+  id: string;
+  branch_id: string;
+  name: string;
+  photo_url: string | null;
+  bio: string | null;
+  specialties: string[];
+  is_active: boolean;
+  display_order: number;
+};
+
+function BranchStaffManager({ salonId, salonServices }: { salonId: string; salonServices: string[] }) {
+  const supabase = createClient();
+  const [branchId, setBranchId] = useState<string | null>(null);
+  const [staff, setStaff] = useState<BranchStaffMember[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<BranchStaffMember | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data: branch } = await supabase
+        .from("store_branches").select("id").eq("salon_id", salonId).eq("is_primary", true).maybeSingle();
+      if (!branch) { setLoading(false); return; }
+      setBranchId(branch.id);
+      const { data } = await supabase
+        .from("branch_employees").select("*").eq("branch_id", branch.id).order("display_order", { ascending: true });
+      setStaff((data as BranchStaffMember[]) ?? []);
+      setLoading(false);
+    })();
+  }, [salonId]);
+
+  const handleSaved = (saved: BranchStaffMember) => {
+    setStaff(prev => {
+      const idx = prev.findIndex(s => s.id === saved.id);
+      if (idx >= 0) { const n = [...prev]; n[idx] = saved; return n; }
+      return [...prev, saved];
+    });
+    setShowForm(false);
+    setEditing(null);
+  };
+
+  const toggleActive = async (member: BranchStaffMember) => {
+    const { data } = await supabase
+      .from("branch_employees").update({ is_active: !member.is_active }).eq("id", member.id).select().single();
+    if (data) handleSaved(data as BranchStaffMember);
+  };
+
+  const remove = async (id: string) => {
+    if (!confirm("Remove this staff member? Past bookings that mention them are kept.")) return;
+    await supabase.from("branch_employees").delete().eq("id", id);
+    setStaff(prev => prev.filter(s => s.id !== id));
+  };
+
+  if (loading) return <p style={{ color: "var(--grey)" }}>Loading…</p>;
+  if (!branchId) return <p style={{ color: "var(--grey)", fontSize: "0.9rem" }}>Save your store listing first, then add staff here.</p>;
+
+  if (showForm || editing) return (
+    <StaffForm
+      branchId={branchId}
+      salonServices={salonServices}
+      initial={editing}
+      onSaved={handleSaved}
+      onCancel={() => { setShowForm(false); setEditing(null); }}
+    />
+  );
+
+  return (
+    <div>
+      <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "1rem" }}>
+        Add the people clients can pick when booking. Hidden staff stay off the booking form but keep their history.
+      </p>
+
+      {staff.length === 0 && (
+        <p style={{ fontSize: "0.9rem", color: "var(--grey)", marginBottom: "1rem" }}>No staff added yet.</p>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1.25rem" }}>
+        {staff.map(member => (
+          <div key={member.id} style={{ display: "flex", alignItems: "center", gap: "0.85rem", background: "#fff", borderRadius: 14, border: "1.5px solid rgba(155,127,184,0.15)", padding: "0.85rem 1rem", opacity: member.is_active ? 1 : 0.55 }}>
+            <div style={{ width: 44, height: 44, borderRadius: "50%", overflow: "hidden", background: "#f3eef7", flexShrink: 0 }}>
+              {member.photo_url && <img src={member.photo_url} alt={member.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{ fontWeight: 600, fontSize: "0.9rem", margin: 0 }}>
+                {member.name}{!member.is_active && <span style={{ color: "#999", fontWeight: 400 }}> · hidden</span>}
+              </p>
+              {member.specialties.length > 0 && (
+                <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: "2px 0 0", textTransform: "capitalize" }}>{member.specialties.join(", ")}</p>
+              )}
+            </div>
+            <button onClick={() => setEditing(member)} style={{ background: "none", border: "none", color: "var(--plum)", fontSize: "0.8rem", fontWeight: 600, cursor: "pointer" }}>Edit</button>
+            <button onClick={() => toggleActive(member)} style={{ background: "none", border: "none", color: "var(--grey)", fontSize: "0.8rem", cursor: "pointer" }}>{member.is_active ? "Hide" : "Unhide"}</button>
+            <button onClick={() => remove(member.id)} style={{ background: "none", border: "none", color: "#A32D2D", fontSize: "0.8rem", cursor: "pointer" }}>Remove</button>
+          </div>
+        ))}
+      </div>
+
+      <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.6rem 1.5rem", borderRadius: 100, fontWeight: 600, fontSize: "0.85rem" }}>
+        + Add staff member
+      </button>
+    </div>
+  );
+}
+
+function StaffForm({ branchId, salonServices, initial, onSaved, onCancel }: {
+  branchId: string;
+  salonServices: string[];
+  initial: BranchStaffMember | null;
+  onSaved: (m: BranchStaffMember) => void;
+  onCancel: () => void;
+}) {
+  const supabase = createClient();
+  const [name, setName] = useState(initial?.name ?? "");
+  const [bio, setBio] = useState(initial?.bio ?? "");
+  const [specialties, setSpecialties] = useState<string[]>(initial?.specialties ?? []);
+  const [photoUrl, setPhotoUrl] = useState<string | null>(initial?.photo_url ?? null);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const services = salonServices.length ? salonServices : ALL_SERVICES;
+
+  const inputStyle: React.CSSProperties = {
+    width: "100%", padding: "0.75rem 1rem", borderRadius: 12,
+    border: "1.5px solid #E0E0E0", fontSize: "0.9rem", outline: "none",
+  };
+  const labelStyle: React.CSSProperties = {
+    fontSize: "0.8rem", fontWeight: 600, color: "#888",
+    display: "block", marginBottom: "0.3rem", marginTop: "0.85rem",
+  };
+
+  const toggleSpecialty = (s: string) => {
+    setSpecialties(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
+  };
+
+  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPhotoFile(file);
+    setPhotoUrl(URL.createObjectURL(file));
+  };
+
+  const save = async () => {
+    setError("");
+    if (!name.trim()) { setError("Name is required."); return; }
+    setSaving(true);
+    try {
+      let finalPhotoUrl = initial?.photo_url ?? null;
+      if (photoFile) {
+        const ext = photoFile.name.split(".").pop();
+        const path = `staff/${branchId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+        const { error: uploadErr } = await supabase.storage.from("salon-gallery").upload(path, photoFile, { upsert: false });
+        if (uploadErr) throw uploadErr;
+        finalPhotoUrl = supabase.storage.from("salon-gallery").getPublicUrl(path).data.publicUrl;
+      }
+      const payload = { branch_id: branchId, name: name.trim(), bio: bio.trim() || null, specialties, photo_url: finalPhotoUrl };
+      let data, err;
+      if (initial) {
+        ({ data, error: err } = await supabase.from("branch_employees").update(payload).eq("id", initial.id).select().single());
+      } else {
+        ({ data, error: err } = await supabase.from("branch_employees").insert(payload).select().single());
+      }
+      if (err) throw err;
+      onSaved(data as BranchStaffMember);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.5rem" }}>
+      <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.1rem" }}>
+        {initial ? "Edit staff member" : "Add staff member"}
+      </h3>
+
+      <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1rem" }}>
+        <div style={{ width: 56, height: 56, borderRadius: "50%", overflow: "hidden", background: "#f3eef7", flexShrink: 0 }}>
+          {photoUrl && <img src={photoUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+        </div>
+        <label style={{ fontSize: "0.82rem", color: "var(--plum)", fontWeight: 600, cursor: "pointer" }}>
+          {photoUrl ? "Change photo" : "Add photo (optional)"}
+          <input type="file" accept="image/*" onChange={handlePhotoChange} style={{ display: "none" }} />
+        </label>
+      </div>
+
+      <label style={labelStyle}>Name *</label>
+      <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Xoli" style={inputStyle} />
+
+      <label style={labelStyle}>Specialties</label>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {services.map(s => (
+          <button key={s} type="button" onClick={() => toggleSpecialty(s)} style={{ padding: "0.4rem 1rem", borderRadius: 100, fontSize: "0.85rem", cursor: "pointer", border: "1.5px solid", borderColor: specialties.includes(s) ? "var(--plum)" : "rgba(155,127,184,0.25)", background: specialties.includes(s) ? "var(--plum)" : "#fff", color: specialties.includes(s) ? "#fff" : "var(--grey)", fontWeight: specialties.includes(s) ? 600 : 400, textTransform: "capitalize" }}>{s}</button>
+        ))}
+      </div>
+      <p style={{ fontSize: "0.75rem", color: "#aaa", margin: "0.4rem 0 0" }}>Leave blank to show them for every service.</p>
+
+      <label style={labelStyle}>Short bio (optional)</label>
+      <textarea value={bio} onChange={e => setBio(e.target.value)} rows={2} placeholder="Specialises in balayage and curly cuts…" style={{ ...inputStyle, resize: "vertical" }} />
+
+      {error && <p style={{ color: "#E53935", fontSize: "0.82rem", marginTop: "0.85rem" }}>{error}</p>}
+
+      <div style={{ display: "flex", gap: 8, marginTop: "1.1rem" }}>
+        <button onClick={save} disabled={saving} className="btn-plum" style={{ padding: "0.7rem 1.75rem", borderRadius: 100, fontWeight: 600, cursor: saving ? "not-allowed" : "pointer" }}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+        <button onClick={onCancel} style={{ padding: "0.7rem 1.5rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.25)", background: "#fff", cursor: "pointer", fontWeight: 500 }}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── MySalonTab ────────────────────────────────────────────────────────────────
 // This replaces the MySalonTab function in your dashboard/page.tsx
  
@@ -1442,7 +1666,7 @@ function MySalonTab({ user }: { user: { id: string } }) {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<SalonListing | null>(null);
-  const [innerTab, setInnerTab] = useState<"listing" | "bookings">("listing");
+  const [innerTab, setInnerTab] = useState<"listing" | "bookings" | "staff">("listing");
  
   useEffect(() => {
     supabase
@@ -1559,15 +1783,15 @@ function MySalonTab({ user }: { user: { id: string } }) {
  
       {/* Inner tabs */}
       <div style={{ display: "flex", gap: 0, marginBottom: "1.25rem", borderRadius: 100, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.2)", width: "fit-content" }}>
-        {(["listing","bookings"] as const).map((t, i) => (
+        {(["listing","bookings","staff"] as const).map((t, i) => (
           <button key={t} onClick={() => setInnerTab(t)} style={{
             padding: "0.5rem 1.25rem", border: "none", cursor: "pointer", fontSize: "0.85rem",
             background: innerTab === t ? "var(--plum)" : "#fff",
             color: innerTab === t ? "#fff" : "var(--grey)",
             fontWeight: innerTab === t ? 600 : 400,
-            borderRight: i === 0 ? "1.5px solid rgba(155,127,184,0.2)" : "none",
+            borderRight: i < 2 ? "1.5px solid rgba(155,127,184,0.2)" : "none",
           }}>
-            {t === "listing" ? "Listing" : "Bookings"}
+            {t === "listing" ? "Listing" : t === "bookings" ? "Bookings" : "Staff"}
           </button>
         ))}
       </div>
@@ -1605,6 +1829,10 @@ function MySalonTab({ user }: { user: { id: string } }) {
  
       {innerTab === "bookings" && listing.id && (
         <SalonBookingsInbox salonId={listing.id} />
+      )}
+
+      {innerTab === "staff" && listing.id && (
+        <BranchStaffManager salonId={listing.id} salonServices={listing.services ?? []} />
       )}
     </div>
   );

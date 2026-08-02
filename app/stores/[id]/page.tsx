@@ -26,7 +26,8 @@ type Salon = {
   rating: number | null; review_count: number | null;
 };
 type IgPost = { id: string; media_url: string; permalink: string; caption?: string };
-type StoreBookingInsert = { salon_id: string; client_id: string | null; client_name: string; client_phone: string; service: string; booking_date: string; booking_time: string; notes: string | null };
+type StoreBookingInsert = { salon_id: string; branch_id: string | null; branch_employee_id: string | null; client_id: string | null; client_name: string; client_phone: string; service: string; booking_date: string; booking_time: string; notes: string | null };
+type BranchStaffOption = { id: string; name: string; photo_url: string | null; specialties: string[] };
 
 function isOpenNow(s: Salon) {
   return sharedIsOpenNow(s.opening_hours).open;
@@ -114,10 +115,39 @@ function BookingForm({ salon }: { salon: Salon }) {
   const oh = salon.opening_hours;
   const services = salon.services?.length ? salon.services : ["hair","nails","makeup","lashes"];
 
-  const [form, setForm] = useState({ name: "", phone: "", service: services[0], date: "", time: "", notes: "" });
+  const [form, setForm] = useState({ name: "", phone: "", service: services[0], date: "", time: "", notes: "", employeeId: "" });
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState("");
+  const [branchId, setBranchId] = useState<string | null>(null);
+  const [staff, setStaff] = useState<BranchStaffOption[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      const { data: branch } = await supabase
+        .from("store_branches").select("id").eq("salon_id", salon.id).eq("is_primary", true).maybeSingle();
+      if (!branch) return;
+      setBranchId(branch.id);
+      const { data } = await supabase
+        .from("branch_employees").select("id,name,photo_url,specialties")
+        .eq("branch_id", branch.id).eq("is_active", true).order("display_order", { ascending: true });
+      setStaff((data as BranchStaffOption[]) ?? []);
+    })();
+  }, [salon.id]);
+
+  // Staff shown for the currently-selected service: anyone tagged for it,
+  // plus anyone with no specialties set (they're available for everything).
+  const staffForService = staff.filter(s => s.specialties.length === 0 || s.specialties.includes(form.service));
+
+  // If the picked staff member no longer applies once the service changes
+  // (or was hidden), fall back to "No preference" rather than silently
+  // submitting a mismatched request.
+  useEffect(() => {
+    if (form.employeeId && !staffForService.some(s => s.id === form.employeeId)) {
+      setForm(f => ({ ...f, employeeId: "" }));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.service, staff]);
 
   // Hours can differ per day of the week (and be overridden for a specific
   // date via special_days), so both the valid time slots and the "closed
@@ -156,11 +186,11 @@ function BookingForm({ salon }: { salon: Salon }) {
     if (!dayOk()) { setError("The salon is closed on that date. Please pick another date."); return; }
     setSaving(true);
     const { data: { user } } = await supabase.auth.getUser();
-    const payload: StoreBookingInsert = { salon_id: salon.id, client_id: user?.id ?? null, client_name: form.name, client_phone: form.phone, service: form.service, booking_date: form.date, booking_time: form.time, notes: form.notes || null };
+    const payload: StoreBookingInsert = { salon_id: salon.id, branch_id: branchId, branch_employee_id: form.employeeId || null, client_id: user?.id ?? null, client_name: form.name, client_phone: form.phone, service: form.service, booking_date: form.date, booking_time: form.time, notes: form.notes || null };
     const { error: err } = await supabase.from("store_bookings").insert(payload);
     setSaving(false);
     if (err) { setError("Something went wrong. Please try again."); return; }
-    gTag("form_submit", { form_name: "store_booking", store_id: salon.id, service: form.service });
+    gTag("form_submit", { form_name: "store_booking", store_id: salon.id, service: form.service, branch_employee_id: form.employeeId || undefined });
     setDone(true);
   };
 
@@ -190,6 +220,23 @@ function BookingForm({ salon }: { salon: Salon }) {
           <button key={svc} onClick={() => setForm(f=>({...f,service:svc}))} style={{ padding: "0.4rem 1rem", borderRadius: 100, fontSize: "0.85rem", cursor: "pointer", border: "1.5px solid", borderColor: form.service===svc?"var(--plum)":"rgba(155,127,184,0.25)", background: form.service===svc?"var(--plum)":"#fff", color: form.service===svc?"#fff":"var(--grey)", fontWeight: form.service===svc?600:400, textTransform: "capitalize" }}>{svc}</button>
         ))}
       </div>
+
+      {staffForService.length > 0 && (
+        <>
+          <label style={lbl}>Who would you like to see? (optional)</label>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: "0.85rem" }}>
+            <button onClick={() => setForm(f=>({...f,employeeId:""}))} style={{ padding: "0.4rem 1rem", borderRadius: 100, fontSize: "0.85rem", cursor: "pointer", border: "1.5px solid", borderColor: !form.employeeId?"var(--plum)":"rgba(155,127,184,0.25)", background: !form.employeeId?"var(--plum)":"#fff", color: !form.employeeId?"#fff":"var(--grey)", fontWeight: !form.employeeId?600:400 }}>No preference</button>
+            {staffForService.map(s => (
+              <button key={s.id} onClick={() => setForm(f=>({...f,employeeId:s.id}))} style={{ display: "flex", alignItems: "center", gap: 6, padding: "0.3rem 1rem 0.3rem 0.3rem", borderRadius: 100, fontSize: "0.85rem", cursor: "pointer", border: "1.5px solid", borderColor: form.employeeId===s.id?"var(--plum)":"rgba(155,127,184,0.25)", background: form.employeeId===s.id?"var(--plum)":"#fff", color: form.employeeId===s.id?"#fff":"var(--grey)", fontWeight: form.employeeId===s.id?600:400 }}>
+                <span style={{ width: 22, height: 22, borderRadius: "50%", overflow: "hidden", background: "rgba(255,255,255,0.4)", flexShrink: 0 }}>
+                  {s.photo_url && <img src={s.photo_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                </span>
+                {s.name}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
 
       <div className="store-form-field-row" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: "0 1rem" }}>
         <div>

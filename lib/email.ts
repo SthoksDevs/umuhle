@@ -908,6 +908,12 @@ export async function sendStoreAnalyticsReportEmail(opts: {
         </ul>` : ""}`
     : `<p style="font-size:0.85rem;color:#999;margin:0 0 1rem">Page views, clicks and visitor journey aren't connected yet — ask Umuhle to link Google Analytics to unlock this section.</p>`;
 
+  const staffHtml = bookingStats.topStaff.length
+    ? `<ul style="margin:0;padding-left:1.1rem;font-size:0.9rem;color:#444;line-height:1.7">
+        ${bookingStats.topStaff.map((s) => `<li>${s.name} — <strong>${s.count}</strong> booking${s.count !== 1 ? "s" : ""}</li>`).join("")}
+      </ul>`
+    : `<p style="font-size:0.85rem;color:#999;margin:0">No bookings requested a specific staff member in this period.</p>`;
+
   const bodyHtml = `
     <p style="margin:0 0 1.25rem;font-size:0.9rem;color:#666">${periodLabel === "Weekly" ? "This week's" : "This month's"} performance for <strong>${opts.storeName}</strong> (${opts.sinceLabel} – ${opts.untilLabel}).</p>
 
@@ -922,15 +928,16 @@ export async function sendStoreAnalyticsReportEmail(opts: {
     <p style="font-weight:600;font-size:0.95rem;margin:0 0 0.5rem;color:#1a1a1a">Most-booked services</p>
     <div style="margin-bottom:1.25rem">${servicesHtml}</div>
 
-    <p style="font-weight:600;font-size:0.95rem;margin:0 0 0.5rem;color:#1a1a1a">Website activity</p>
-    ${ga4Html}
+    <p style="font-weight:600;font-size:0.95rem;margin:0 0 0.5rem;color:#1a1a1a">Most-booked staff</p>
+    <div style="margin-bottom:1.25rem">${staffHtml}</div>
 
-    <p style="font-size:0.78rem;color:#aaa;margin:1rem 0 0">Most-booked artists will appear here once branch staff profiles launch.</p>`;
+    <p style="font-weight:600;font-size:0.95rem;margin:0 0 0.5rem;color:#1a1a1a">Website activity</p>
+    ${ga4Html}`;
 
   await sendToAll([opts.toEmail], {
     subject: `📊 ${periodLabel} report for ${opts.storeName}`,
     template: "store_analytics_report",
-    text: `${periodLabel} performance for ${opts.storeName} (${opts.sinceLabel}–${opts.untilLabel})\n\nBookings: ${bookingStats.totalBookings} total, ${bookingStats.byStatus.confirmed} confirmed, ${bookingStats.byStatus.completed} completed, ${bookingStats.byStatus.cancelled} cancelled.\n\nTop services:\n${bookingStats.topServices.map((s) => `  - ${s.service}: ${s.count}`).join("\n") || "  (none)"}\n\n${ga4.configured ? `Page views: ${ga4.pageViews}\nForm submissions: ${ga4.formSubmits}` : "Website analytics not yet connected."}`,
+    text: `${periodLabel} performance for ${opts.storeName} (${opts.sinceLabel}–${opts.untilLabel})\n\nBookings: ${bookingStats.totalBookings} total, ${bookingStats.byStatus.confirmed} confirmed, ${bookingStats.byStatus.completed} completed, ${bookingStats.byStatus.cancelled} cancelled.\n\nTop services:\n${bookingStats.topServices.map((s) => `  - ${s.service}: ${s.count}`).join("\n") || "  (none)"}\n\nTop staff:\n${bookingStats.topStaff.map((s) => `  - ${s.name}: ${s.count}`).join("\n") || "  (none)"}\n\n${ga4.configured ? `Page views: ${ga4.pageViews}\nForm submissions: ${ga4.formSubmits}` : "Website analytics not yet connected."}`,
     html: emailWrapper(`${periodLabel} report — ${opts.storeName}`, bodyHtml),
   });
 }
