@@ -187,12 +187,30 @@ export async function getStoreGA4Metrics(
   let funnel: StoreGA4Metrics["funnel"] = null;
   try {
     const funnelRes = await ga4Fetch("v1alpha", token, {
-      dateRange: dateRanges[0],
+      dateRanges,
       funnel: {
         steps: [
-          { name: "Viewed store page", filterExpression: { funnelEventFilter: { eventName: "page_view" } } },
-          { name: "Clicked contact/booking link", filterExpression: { funnelEventFilter: { eventName: "click", funnelParameterFilterExpression: { funnelParameterFilter: { fieldName: "store_id", stringFilter: { matchType: "EXACT", value: storeId } } } } } },
-          { name: "Submitted booking form", filterExpression: { funnelEventFilter: { eventName: "form_submit", funnelParameterFilterExpression: { funnelParameterFilter: { fieldName: "store_id", stringFilter: { matchType: "EXACT", value: storeId } } } } } },
+          {
+            name: "Viewed store page",
+            filterExpression: { funnelEventFilter: {
+              eventName: "page_view",
+              funnelParameterFilterExpression: { funnelParameterFilter: { eventParameterName: "page_location", stringFilter: { matchType: "CONTAINS", value: storePath } } },
+            } },
+          },
+          {
+            name: "Clicked contact/booking link",
+            filterExpression: { funnelEventFilter: {
+              eventName: "click",
+              funnelParameterFilterExpression: { funnelParameterFilter: { eventParameterName: "store_id", stringFilter: { matchType: "EXACT", value: storeId } } },
+            } },
+          },
+          {
+            name: "Submitted booking form",
+            filterExpression: { funnelEventFilter: {
+              eventName: "form_submit",
+              funnelParameterFilterExpression: { funnelParameterFilter: { eventParameterName: "store_id", stringFilter: { matchType: "EXACT", value: storeId } } },
+            } },
+          },
         ],
       },
     });
