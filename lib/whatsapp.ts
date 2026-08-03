@@ -431,3 +431,27 @@ export async function notifyReviewInvite(opts: {
 
   return sendTextMessage(opts.phone, msg);
 }
+
+/**
+ * One WhatsApp message per customer per cron run, covering every product
+ * that just became reviewable — see sendProductReviewDigestEmail in
+ * lib/email.ts (the reliable counterpart to this) for why this replaced
+ * one notifyReviewInvite call per order item.
+ */
+export async function notifyProductReviewDigest(opts: {
+  phone:        string;
+  name:         string;
+  productNames: string[];
+  reviewUrl:    string;
+}) {
+  const list =
+    opts.productNames.length === 1 ? opts.productNames[0]
+    : opts.productNames.length === 2 ? `${opts.productNames[0]} and ${opts.productNames[1]}`
+    : `${opts.productNames.slice(0, -1).join(", ")} and ${opts.productNames[opts.productNames.length - 1]}`;
+
+  const msg = opts.productNames.length > 1
+    ? `*How was your recent order?*\n\nHi ${opts.name}, we'd love your feedback on your recent purchases — *${list}*.\n\nLeave a quick review: ${opts.reviewUrl}`
+    : `*How was your purchase?*\n\nHi ${opts.name}, we'd love your feedback on *${list}*.\n\nLeave a quick review: ${opts.reviewUrl}`;
+
+  return sendTextMessage(opts.phone, msg);
+}

@@ -63,6 +63,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ token: s
   let targetImage: string | null = null;
   let subtitle: string | null = null;
   let alreadyReviewed = false;
+  let productItems: Array<{ token: string; targetName: string; targetImage: string | null }> = [];
 
   if (invite.review_type === "client_to_artist" || invite.review_type === "artist_to_client") {
     const { data: booking } = await service
@@ -116,6 +117,48 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ token: s
       .eq("reviewer_id", invite.reviewer_id)
       .maybeSingle();
     alreadyReviewed = Boolean(existing);
+
+    // Full pending list for this reviewer, not just this one token — see
+    // app/api/cron/review-invites/route.ts, which now sends one digest
+    // link per customer covering every unreviewed product at once rather
+    // than a separate email per item.
+    const { data: siblingInvites } = await service
+      .from("review_invites")
+      .select("token, order_item_id")
+      .eq("review_type", "client_to_product")
+      .eq("reviewer_id", invite.reviewer_id);
+
+    const siblingItemIds = Array.from(
+      new Set((siblingInvites ?? []).map((s) => s.order_item_id).filter((id): id is string => Boolean(id)))
+    );
+
+    const [{ data: siblingProducts }, { data: siblingReviews }] = await Promise.all([
+      siblingItemIds.length
+        ? service.from("order_items").select("id, product:products(name, image_url)").in("id", siblingItemIds)
+        : Promise.resolve({ data: [] as Array<{ id: string; product: unknown }> }),
+      siblingItemIds.length
+        ? service.from("reviews").select("order_item_id").eq("reviewer_id", invite.reviewer_id).in("order_item_id", siblingItemIds)
+        : Promise.resolve({ data: [] as Array<{ order_item_id: string | null }> }),
+    ]);
+
+    const reviewedItemIds = new Set((siblingReviews ?? []).map((r) => r.order_item_id));
+    const productById = new Map(
+      (siblingProducts ?? []).map((row) => [
+        row.id,
+        first(row.product) as { name: string | null; image_url: string | null } | null,
+      ])
+    );
+
+    productItems = (siblingInvites ?? [])
+      .filter((s) => s.order_item_id && !reviewedItemIds.has(s.order_item_id))
+      .map((s) => {
+        const p = productById.get(s.order_item_id!);
+        return {
+          token: s.token,
+          targetName: p?.name ?? "this product",
+          targetImage: p?.image_url ?? null,
+        };
+      });
   }
 
   else if (invite.review_type === "client_to_salon") {
@@ -143,6 +186,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ token: s
     targetImage,
     subtitle,
     alreadyReviewed,
+    ...(invite.review_type === "client_to_product" ? { productItems } : {}),
   });
 }
 

@@ -6,6 +6,16 @@
 // app/api/order-items/confirm/[token]/route.ts, which used to send this
 // immediately and no longer does.
 //
+// One invite ROW per order_item still (a review targets one order_item at
+// a time, and the unique constraint on reviews is per order_item), but
+// only one EMAIL and one WhatsApp message per customer per run — grouped
+// below by client_id — instead of the old one-per-item behaviour, which
+// was spammy for anyone who bought more than one thing. The link in that
+// single message points at any one of the customer's pending invite
+// tokens; app/api/reviews/invite/[token] resolves and lists ALL of that
+// reviewer's not-yet-reviewed product invites, so the page always shows
+// their complete pending list even if it's grown since this run.
+//
 // Idempotent by construction: an order_item is "done" the moment it gets a
 // review_invites row, so a missed day (deploy downtime, etc.) is simply
 // caught on the next run rather than causing a duplicate or a gap.
@@ -15,8 +25,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { createReviewInvite, buildReviewUrl } from "@/lib/review-invites";
-import { sendReviewInviteEmail } from "@/lib/email";
-import { notifyReviewInvite } from "@/lib/whatsapp";
+import { sendProductReviewDigestEmail } from "@/lib/email";
+import { notifyProductReviewDigest } from "@/lib/whatsapp";
 
 const DELAY_DAYS = 5;
 const BATCH_LIMIT = 200;
@@ -75,7 +85,16 @@ export async function GET(request: NextRequest) {
 
   const pending = candidates.filter((c) => !alreadyInvited.has(c.id));
 
-  let sent = 0;
+  type ClientGroup = {
+    clientName:   string;
+    clientEmail:  string | null;
+    clientPhone:  string | null;
+    productNames: string[];
+    inviteToken:  string; // any one of this client's tokens created this run
+  };
+  const byClient = new Map<string, ClientGroup>();
+
+  let invitesCreated = 0;
   for (const item of pending) {
     const product = Array.isArray(item.product) ? item.product[0] : item.product;
     const order = Array.isArray(item.order) ? item.order[0] : item.order;
@@ -91,39 +110,60 @@ export async function GET(request: NextRequest) {
         orderItemId: item.id,
       });
       if (!inviteToken) continue;
+      invitesCreated++;
 
-      const url = buildReviewUrl(inviteToken);
-      const clientName = order.contact_name ?? client?.full_name ?? "there";
-      const clientPhone = order.contact_whatsapp ?? client?.phone ?? null;
-
-      if (client?.email) {
-        try {
-          await sendReviewInviteEmail({
-            reviewType:  "client_to_product",
-            toEmail:     client.email,
-            toName:      clientName,
-            targetName:  product.name ?? "your purchase",
-            inviteToken,
-            referenceId: item.id,
-          });
-        } catch (e) {
-          console.error(`[cron/review-invites] email error for order_item ${item.id}:`, e);
-        }
-      }
-      if (clientPhone) {
-        await notifyReviewInvite({
-          phone:      clientPhone,
-          name:       clientName,
-          targetName: product.name ?? "your purchase",
-          reviewUrl:  url,
-          kind:       "product",
+      const productName = product.name ?? "your purchase";
+      const existing = byClient.get(order.client_id);
+      if (existing) {
+        if (!existing.productNames.includes(productName)) existing.productNames.push(productName);
+      } else {
+        byClient.set(order.client_id, {
+          // Prefer the account holder's own profile details over a specific
+          // order's delivery contact — this message may now cover several
+          // orders at once, so it addresses the customer, not whoever
+          // received one particular delivery.
+          clientName:   client?.full_name ?? order.contact_name ?? "there",
+          clientEmail:  client?.email ?? null,
+          clientPhone:  client?.phone ?? order.contact_whatsapp ?? null,
+          productNames: [productName],
+          inviteToken,
         });
       }
-      sent++;
     } catch (e) {
       console.error(`[cron/review-invites] error for order_item ${item.id}:`, e);
     }
   }
 
-  return NextResponse.json({ sent, skipped: candidates.length - pending.length, total: candidates.length });
+  let customersNotified = 0;
+  for (const [clientId, group] of byClient) {
+    if (group.clientEmail) {
+      try {
+        await sendProductReviewDigestEmail({
+          toEmail:      group.clientEmail,
+          toName:       group.clientName,
+          productNames: group.productNames,
+          inviteToken:  group.inviteToken,
+          referenceId:  clientId,
+        });
+      } catch (e) {
+        console.error(`[cron/review-invites] email error for client ${clientId}:`, e);
+      }
+    }
+    if (group.clientPhone) {
+      await notifyProductReviewDigest({
+        phone:        group.clientPhone,
+        name:         group.clientName,
+        productNames: group.productNames,
+        reviewUrl:    buildReviewUrl(group.inviteToken),
+      });
+    }
+    customersNotified++;
+  }
+
+  return NextResponse.json({
+    invitesCreated,
+    customersNotified,
+    skipped: candidates.length - pending.length,
+    total: candidates.length,
+  });
 }

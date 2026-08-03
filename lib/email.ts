@@ -998,6 +998,53 @@ function reviewInviteUrl(token: string) {
   return `https://umuhle.co.za/review/${token}`;
 }
 
+function joinNames(names: string[]) {
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * One email per customer per cron run, covering every product that just
+ * became reviewable — not one email per order item (see
+ * app/api/cron/review-invites/route.ts, which now groups by client_id
+ * before calling this). `inviteToken` can be ANY one of that customer's
+ * pending client_to_product invites: the landing page it links to
+ * (app/review/[token]) resolves and lists ALL of the reviewer's
+ * not-yet-reviewed product invites server-side, not just this one, so it
+ * always reflects the customer's current full list even if they wait a
+ * few days and more become eligible in the meantime.
+ */
+export async function sendProductReviewDigestEmail(opts: {
+  toEmail:      string;
+  toName:       string;
+  productNames: string[];
+  inviteToken:  string;
+  referenceId:  string; // client id — for email_log only.
+}) {
+  if (!opts.toEmail || opts.productNames.length === 0) return;
+  const link = reviewInviteUrl(opts.inviteToken);
+  const list = joinNames(opts.productNames);
+  const multiple = opts.productNames.length > 1;
+  const subject = multiple ? "How was your recent order?" : "How was your order?";
+  const blurb = multiple
+    ? `Have you had a chance to use your recent purchases — <strong>${list}</strong>? We would appreciate your feedback on each. Your reviews help other customers make informed choices.`
+    : `Have you had a chance to use <strong>${list}</strong>? We would appreciate your feedback. Your review helps other customers make informed choices.`;
+  const plainBlurb = blurb.replace(/<[^>]+>/g, "");
+
+  await sendToAll([opts.toEmail], {
+    subject,
+    template:    "review_invite_client_to_product_digest",
+    referenceId: opts.referenceId,
+    text:        `Hi ${opts.toName},\n\n${plainBlurb}\n\n${link}\n\nThe Umuhle Team`,
+    html:        emailWrapper("Tell us what you think", `
+      <p style="margin:0 0 1rem">Hi ${opts.toName},</p>
+      <p style="margin:0 0 1.5rem;font-size:0.85rem;color:#666">${blurb}</p>
+      <p style="margin:0 0 1.5rem"><a href="${link}" style="display:inline-block;background:#9B7FB8;color:#fff;font-weight:600;text-decoration:none;padding:0.75rem 1.5rem;border-radius:10px">Leave a review</a></p>
+      <p style="margin:0 0 1.5rem">The Umuhle Team</p>`),
+  });
+}
+
 export async function sendReviewInviteEmail(opts: {
   reviewType:  ReviewType;
   toEmail:     string;

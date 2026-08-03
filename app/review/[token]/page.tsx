@@ -27,6 +27,23 @@ interface InviteInfo {
   targetImage: string | null;
   subtitle: string | null;
   alreadyReviewed: boolean;
+  // Only present for client_to_product: every one of this reviewer's
+  // pending (not yet reviewed) product invites, not just this token — see
+  // app/api/reviews/invite/[token]/route.ts. Lets one email/WhatsApp link
+  // cover everything the customer still owes a review, however many
+  // separate order items that spans.
+  productItems?: Array<{ token: string; targetName: string; targetImage: string | null }>;
+}
+
+interface ProductReviewItem {
+  token: string;
+  targetName: string;
+  targetImage: string | null;
+  rating: number;
+  comment: string;
+  submitting: boolean;
+  submitted: boolean;
+  error: string | null;
 }
 
 const COPY: Record<ReviewType, { heading: string; placeholder: string; fallbackEmoji: string; thanks: string }> = {
@@ -68,6 +85,10 @@ export default function ReviewInvitePage() {
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Only used when reviewType === "client_to_product" — one entry per
+  // pending item, rendered as a list instead of the single form above.
+  const [items, setItems] = useState<ProductReviewItem[]>([]);
+
   const load = useCallback(async () => {
     if (!token) return;
     setLoading(true);
@@ -77,7 +98,13 @@ export default function ReviewInvitePage() {
       if (!res.ok) { setNotFound(true); return; }
       const json = (await res.json()) as InviteInfo;
       setInfo(json);
-      if (json.alreadyReviewed) setSubmitted(true);
+      if (json.reviewType === "client_to_product") {
+        setItems((json.productItems ?? []).map((p) => ({
+          ...p, rating: 0, comment: "", submitting: false, submitted: false, error: null,
+        })));
+      } else if (json.alreadyReviewed) {
+        setSubmitted(true);
+      }
     } catch {
       setNotFound(true);
     } finally {
@@ -113,6 +140,34 @@ export default function ReviewInvitePage() {
     }
   };
 
+  const updateItem = (idx: number, patch: Partial<ProductReviewItem>) => {
+    setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
+  };
+
+  const submitItem = async (idx: number) => {
+    const it = items[idx];
+    if (!it || it.rating < 1) { updateItem(idx, { error: "Please select a star rating." }); return; }
+    updateItem(idx, { submitting: true, error: null });
+    try {
+      const res = await fetch(`/api/reviews/invite/${it.token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rating: it.rating, comment: it.comment.trim() || undefined }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // A 409 here means it was already reviewed (e.g. the link was used
+        // twice) — treat that as success rather than an error.
+        if (res.status === 409) { updateItem(idx, { submitted: true, submitting: false }); return; }
+        updateItem(idx, { error: json?.error ?? "Something went wrong. Please try again.", submitting: false });
+        return;
+      }
+      updateItem(idx, { submitted: true, submitting: false });
+    } catch {
+      updateItem(idx, { error: "Something went wrong. Please try again.", submitting: false });
+    }
+  };
+
   const copy = info ? COPY[info.reviewType] : null;
 
   return (
@@ -134,6 +189,78 @@ export default function ReviewInvitePage() {
               It may be incomplete, or already used. If you think this is a mistake, get in touch with us at info@umuhle.co.za.
             </p>
           </>
+        ) : info?.reviewType === "client_to_product" ? (
+          items.length === 0 || items.every((it) => it.submitted) ? (
+            <>
+              <p style={{ fontSize: "2.5rem", marginBottom: "0.75rem" }}>✓</p>
+              <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.5rem", marginBottom: "0.5rem", color: "var(--onyx)" }}>
+                {items.length === 0 ? "You're all caught up!" : "Thanks for your reviews!"}
+              </h1>
+              <p style={{ color: "var(--grey)" }}>
+                {items.length === 0
+                  ? "You don't have any pending reviews right now."
+                  : "Your reviews help other shoppers decide."}
+              </p>
+            </>
+          ) : (
+            <>
+              <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "1.5rem", marginBottom: "0.35rem", color: "var(--onyx)" }}>
+                {items.length > 1 ? "Rate your recent purchases" : "Rate this product"}
+              </h1>
+              <p style={{ color: "var(--grey)", fontSize: "0.85rem", marginBottom: "1.75rem" }}>
+                Optional — tell other shoppers what you thought. Shown on each product&apos;s page.
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+                {items.map((it, idx) => (
+                  <div key={it.token} style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.25rem", textAlign: "left" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: it.submitted ? 0 : "1rem" }}>
+                      <div style={{ width: 48, height: 48, borderRadius: 12, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, overflow: "hidden" }}>
+                        {it.targetImage ? (
+                          <Image src={it.targetImage} alt={it.targetName} width={48} height={48} style={{ objectFit: "cover" }} />
+                        ) : (
+                          <span style={{ fontSize: "1.1rem" }}>🛍️</span>
+                        )}
+                      </div>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <p style={{ fontWeight: 500, fontSize: "0.9rem", margin: 0 }}>{it.targetName}</p>
+                      </div>
+                      {it.submitted && (
+                        <span style={{ color: "var(--plum)", fontSize: "0.85rem", fontWeight: 500, flexShrink: 0 }}>✓ Reviewed</span>
+                      )}
+                    </div>
+
+                    {!it.submitted && (
+                      <>
+                        <div style={{ display: "flex", justifyContent: "center", margin: "0.75rem 0" }}>
+                          <StarRating interactive value={it.rating} onChange={(v) => updateItem(idx, { rating: v })} size={30} />
+                        </div>
+                        <textarea
+                          value={it.comment}
+                          onChange={(e) => updateItem(idx, { comment: e.target.value })}
+                          placeholder="Optional — tell other shoppers what you thought."
+                          rows={2}
+                          maxLength={500}
+                          style={{
+                            width: "100%", padding: "0.7rem 0.9rem", borderRadius: 12, border: "1.5px solid #E0E0E0",
+                            fontSize: "0.85rem", fontFamily: "var(--font-body)", resize: "none", boxSizing: "border-box", marginBottom: "0.85rem",
+                          }}
+                        />
+                        {it.error && <p style={{ color: "#E53935", fontSize: "0.8rem", marginBottom: "0.75rem" }}>{it.error}</p>}
+                        <button
+                          onClick={() => submitItem(idx)}
+                          disabled={it.submitting || it.rating < 1}
+                          className="btn-plum"
+                          style={{ width: "100%", padding: "0.7rem", fontSize: "0.88rem", opacity: it.rating < 1 ? 0.6 : 1 }}
+                        >
+                          {it.submitting ? "Submitting…" : "Submit review"}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )
         ) : submitted ? (
           <>
             <p style={{ fontSize: "2.5rem", marginBottom: "0.75rem" }}>✓</p>
