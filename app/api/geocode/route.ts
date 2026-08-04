@@ -20,6 +20,38 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+const NOMINATIM_HEADERS = {
+  // Nominatim's usage policy requires an identifying User-Agent.
+  "User-Agent": "UmuhleMarketplace/1.0 (info@umuhle.co.za)",
+};
+
+// Naively joining address + suburb + city + postalCode + "South Africa"
+// breaks the moment any of those already appear inside the address field —
+// e.g. an owner pastes a full address ("56 Main Rd, Sandton, 2196, South
+// Africa") into the address box, which then gets suburb/city/postcode/
+// country all bolted on again, producing a heavily duplicated string that
+// Nominatim's parser can fail to match at all. This only appends a part if
+// it isn't already present (case-insensitive) in what's been built so far.
+function buildQuery(address: string, suburb?: string, city?: string, postalCode?: string): string {
+  const parts = [address.trim()];
+  const already = () => parts.join(" ").toLowerCase();
+  for (const part of [suburb, city, postalCode, "South Africa"]) {
+    const t = (part ?? "").trim();
+    if (t && !already().includes(t.toLowerCase())) parts.push(t);
+  }
+  return parts.filter(Boolean).join(", ");
+}
+
+async function nominatimSearch(query: string): Promise<{ lat: string; lon: string } | null> {
+  const res = await fetch(
+    `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=za&q=${encodeURIComponent(query)}`,
+    { headers: NOMINATIM_HEADERS }
+  );
+  if (!res.ok) return null;
+  const results = (await res.json()) as Array<{ lat: string; lon: string }>;
+  return results[0] ?? null;
+}
+
 export async function POST(req: NextRequest) {
   // Require a logged-in session so this can't be used as an open,
   // unauthenticated proxy to Nominatim from the public internet.
@@ -34,33 +66,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const parts = [body.address, body.suburb, body.city, body.postalCode, "South Africa"]
-    .map(p => (p ?? "").trim())
-    .filter(Boolean);
-  if (parts.length < 2) {
+  const address = (body.address ?? "").trim();
+  if (!address) {
     return NextResponse.json({ error: "Not enough address detail to geocode" }, { status: 400 });
   }
-  const query = parts.join(", ");
 
   try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=za&q=${encodeURIComponent(query)}`,
-      {
-        headers: {
-          // Nominatim's usage policy requires an identifying User-Agent.
-          "User-Agent": "UmuhleMarketplace/1.0 (info@umuhle.co.za)",
-        },
-      }
-    );
-    if (!res.ok) return NextResponse.json({ error: "Geocoding service unavailable" }, { status: 502 });
-
-    const results = (await res.json()) as Array<{ lat: string; lon: string }>;
-    if (!results.length) {
-      return NextResponse.json({ error: "No match found for that address" }, { status: 404 });
+    // Try the fullest query first; if Nominatim can't match that (a real
+    // possibility with messier, longer strings), fall back to just the
+    // address line + country, which is more forgiving.
+    const full = buildQuery(address, body.suburb, body.city, body.postalCode);
+    let hit = await nominatimSearch(full);
+    if (!hit) {
+      const simple = buildQuery(address);
+      if (simple !== full) hit = await nominatimSearch(simple);
     }
 
-    const latitude = parseFloat(results[0].lat);
-    const longitude = parseFloat(results[0].lon);
+    if (!hit) return NextResponse.json({ error: "No match found for that address" }, { status: 404 });
+
+    const latitude = parseFloat(hit.lat);
+    const longitude = parseFloat(hit.lon);
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
       return NextResponse.json({ error: "Geocoding returned an invalid result" }, { status: 502 });
     }
