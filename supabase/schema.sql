@@ -197,6 +197,7 @@ CREATE TABLE public.partner_salons (
   address text,
   suburb text,
   city text,
+  postal_code text,
   latitude numeric,
   longitude numeric,
   phone text,

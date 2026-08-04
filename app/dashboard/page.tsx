@@ -581,6 +581,9 @@ type SalonListing = {
   address: string;
   suburb: string;
   city: string;
+  postal_code: string;
+  latitude?: number | null;
+  longitude?: number | null;
   phone: string;
   email: string;
   website: string;
@@ -623,6 +626,7 @@ const emptySalon = (): SalonListing => ({
   address: "",
   suburb: "",
   city: "",
+  postal_code: "",
   phone: "",
   email: "",
   website: "",
@@ -777,12 +781,51 @@ if (openDays.length === 0) {
     setSaving(true);
     try {
       const galleryUrls = await uploadGallery();
+
+      // Best-effort geocode so the public store page can show the
+      // "Find us here" map. Never blocks saving — if it fails or times
+      // out, we just keep whatever coordinates the listing already had.
+      let latitude = form.latitude ?? null;
+      let longitude = form.longitude ?? null;
+      try {
+        const geoRes = await fetch("/api/geocode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            address: form.address,
+            suburb: form.suburb,
+            city: form.city,
+            postalCode: form.postal_code,
+          }),
+        });
+        if (geoRes.ok) {
+          const geo = await geoRes.json();
+          if (geo.latitude && geo.longitude) {
+            latitude = geo.latitude;
+            longitude = geo.longitude;
+          }
+        }
+      } catch {
+        // Geocoding is a nice-to-have, not a save-blocker.
+      }
+
+      // Only brand-new listings (and ones still pending/rejected from a
+      // prior submission) go back into the review queue. Once a listing
+      // has been approved and is live, the owner's own edits — fixing a
+      // phone number, updating the address, adding photos — must not
+      // knock it back into "Under review" and off the Stores page.
+      const status: "pending" | "approved" =
+        isEdit && initial.status === "approved" ? "approved" : "pending";
+
       const payload = {
         name: form.name,
         description: form.description,
         address: form.address,
         suburb: form.suburb,
         city: form.city,
+        postal_code: form.postal_code || null,
+        latitude,
+        longitude,
         phone: form.phone,
         email: form.email,
         website: form.website || null,
@@ -792,7 +835,7 @@ if (openDays.length === 0) {
         youtube_url: form.youtube_url || null,
         services: form.services,
         partner_id: userId,
-        status: "pending",
+        status,
       };
  
       let data, err;
@@ -838,6 +881,12 @@ if (openDays.length === 0) {
  
       <label style={labelStyle}>Full address *</label>
       <input required value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} placeholder="123 Main Street, Sandton" style={inputStyle} />
+
+      <label style={labelStyle}>Postal code</label>
+      <input value={form.postal_code ?? ""} onChange={e => setForm(f => ({ ...f, postal_code: e.target.value }))} placeholder="e.g. 2196" style={{ ...inputStyle, maxWidth: 220 }} />
+      <p style={{ fontSize: "0.75rem", color: "#aaa", marginTop: "0.3rem" }}>
+        Helps us place your store accurately on the &ldquo;Find us here&rdquo; map on your public page.
+      </p>
  
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 1rem" }}>
         <div>
@@ -1841,7 +1890,7 @@ function MySalonTab({ user }: { user: { id: string } }) {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<SalonListing | null>(null);
-  const [innerTab, setInnerTab] = useState<"listing" | "services" | "staff" | "bookings">("listing");
+  const [innerTab, setInnerTab] = useState<"listing" | "staff" | "bookings">("listing");
  
   useEffect(() => {
     supabase
@@ -1958,7 +2007,7 @@ function MySalonTab({ user }: { user: { id: string } }) {
  
       {/* Inner tabs */}
       <div style={{ display: "flex", gap: 0, marginBottom: "1.25rem", borderRadius: 100, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.2)", width: "fit-content" }}>
-        {(["listing","services","staff","bookings"] as const).map((t, i, arr) => (
+        {(["listing","staff","bookings"] as const).map((t, i, arr) => (
           <button key={t} onClick={() => setInnerTab(t)} style={{
             padding: "0.5rem 1.25rem", border: "none", cursor: "pointer", fontSize: "0.85rem",
             background: innerTab === t ? "var(--plum)" : "#fff",
@@ -1966,15 +2015,18 @@ function MySalonTab({ user }: { user: { id: string } }) {
             fontWeight: innerTab === t ? 600 : 400,
             borderRight: i < arr.length - 1 ? "1.5px solid rgba(155,127,184,0.2)" : "none",
           }}>
-            {t === "listing" ? "Listing" : t === "services" ? "Services" : t === "staff" ? "Staff" : "Bookings"}
+            {t === "listing" ? "Listing" : t === "staff" ? "Staff" : "Bookings"}
           </button>
         ))}
       </div>
  
       {innerTab === "listing" && (
+        <>
         <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.25rem" }}>
           <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "0.75rem" }}>{listing.name}</h3>
-          <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.5rem" }}>📍 {listing.address}, {listing.suburb}</p>
+          <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.5rem" }}>
+            📍 {listing.address}, {listing.suburb}{listing.postal_code ? `, ${listing.postal_code}` : ""}
+          </p>
           {listing.services?.length > 0 && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: "0.75rem" }}>
               {listing.services.map(s => (
@@ -2000,10 +2052,14 @@ function MySalonTab({ user }: { user: { id: string } }) {
             </a>
           )}
         </div>
-      )}
- 
-      {innerTab === "services" && listing.id && (
-        <ServiceManager salonId={listing.id} salonCategories={listing.services ?? []} />
+
+        {listing.id && (
+          <div style={{ marginTop: "1.5rem" }}>
+            <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "0.75rem" }}>Services</h3>
+            <ServiceManager salonId={listing.id} salonCategories={listing.services ?? []} />
+          </div>
+        )}
+        </>
       )}
 
       {innerTab === "staff" && listing.id && (
