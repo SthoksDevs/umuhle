@@ -80,6 +80,8 @@ export async function fulfillPayment(
         return await fulfillProductListing(supabase, event, tag);
       case "salon":
         return await fulfillSalon(supabase, event, tag);
+      case "store_booking_deposit":
+        return await fulfillStoreBookingDeposit(supabase, event, tag);
       default: {
         const exhaustiveCheck: never = event.type;
         console.warn(`${tag} unknown payment type`, exhaustiveCheck);
@@ -570,4 +572,48 @@ async function fulfillSalon(supabase: SupabaseClient, event: PaymentEvent, tag: 
   }
 
   return { ok: true, message: "Salon subscription activated" };
+}
+
+// ── Store booking deposit ────────────────────────────────────────────────────
+// Unlike the artist "booking" flow above, there's no separate intent table —
+// the store_bookings row already exists at this point (the initiate route
+// inserts it up front with status "pending", deposit_status "pending", the
+// same way initiateAd()/initiateSalon() insert their row before redirecting).
+// paid    → flip the deposit to "paid" and the booking straight to
+//           "confirmed" — a paid deposit IS the confirmation for this flow.
+// cancelled/failed → leave `status` alone (still "pending"). The booking
+//           itself is still a real, useful lead for the salon — visible in
+//           their bookings inbox exactly like a free/no-deposit request —
+//           it just never got secured with a deposit.
+
+async function fulfillStoreBookingDeposit(supabase: SupabaseClient, event: PaymentEvent, tag: string): Promise<FulfillmentResult> {
+  if (event.outcome === "paid") {
+    const { data: booking, error } = await supabase
+      .from("store_bookings")
+      .update({
+        deposit_status: "paid",
+        status: "confirmed",
+        gateway_order_id: event.gatewayPaymentId ?? null,
+        deposit_paid_at: new Date().toISOString(),
+      })
+      .eq("id", event.referenceId)
+      .eq("deposit_status", "pending") // guards a duplicate ITN from re-applying this
+      .select("id")
+      .single();
+
+    if (error || !booking) {
+      console.warn(`${tag} store booking not found or already processed`, event.referenceId);
+      return { ok: true, message: "Already processed or unknown booking" };
+    }
+
+    return { ok: true, message: "Store booking deposit confirmed" };
+  }
+
+  await supabase
+    .from("store_bookings")
+    .update({ deposit_status: "failed" })
+    .eq("id", event.referenceId)
+    .eq("deposit_status", "pending");
+
+  return { ok: true, message: `Store booking deposit ${event.outcome}` };
 }

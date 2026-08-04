@@ -213,6 +213,7 @@ CREATE TABLE public.partner_salons (
   services ARRAY DEFAULT '{}'::text[],
   photo_credits integer NOT NULL DEFAULT 0,
   status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text])),
+  deposit_amount integer,
   CONSTRAINT partner_salons_pkey PRIMARY KEY (id),
   CONSTRAINT partner_salons_partner_id_fkey FOREIGN KEY (partner_id) REFERENCES public.profiles(id)
 );
@@ -374,6 +375,11 @@ CREATE TABLE public.store_bookings (
   notes text,
   status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'completed'::text, 'cancelled'::text])),
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  deposit_amount integer,
+  deposit_status text NOT NULL DEFAULT 'none'::text CHECK (deposit_status = ANY (ARRAY['none'::text, 'pending'::text, 'paid'::text, 'failed'::text])),
+  payment_method text,
+  gateway_order_id text,
+  deposit_paid_at timestamp with time zone,
   CONSTRAINT store_bookings_pkey PRIMARY KEY (id),
   CONSTRAINT store_bookings_salon_id_fkey FOREIGN KEY (salon_id) REFERENCES public.partner_salons(id),
   CONSTRAINT store_bookings_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.store_branches(id),

@@ -198,6 +198,23 @@ button { cursor: pointer; font-family: var(--font-body); }
   }
 }
 
+/* ── Salon detail page: Contact blocks + floating WhatsApp button ── */
+.contact-block {
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.contact-block:hover {
+  transform: translateY(-2px);
+  border-color: rgba(155, 127, 184, 0.4);
+  box-shadow: 0 8px 20px rgba(155, 127, 184, 0.12);
+}
+
+.store-whatsapp-float {
+  transition: transform 0.15s ease;
+}
+.store-whatsapp-float:hover {
+  transform: scale(1.06);
+}
+
 /* ── Shop product detail page ── */
 .product-detail-grid {
   display: grid;

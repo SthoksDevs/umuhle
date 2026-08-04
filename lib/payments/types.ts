@@ -9,8 +9,8 @@
 
 import type { PaymentGateway } from "./gateways";
 
-/** The five things a payment on Umuhle can be for. */
-export type PaymentType = "booking" | "order" | "ad" | "salon" | "product_listing";
+/** The six things a payment on Umuhle can be for. */
+export type PaymentType = "booking" | "order" | "ad" | "salon" | "product_listing" | "store_booking_deposit";
 
 export type PaymentOutcome = "paid" | "cancelled" | "failed";
 
@@ -21,9 +21,10 @@ export interface PaymentEvent {
   outcome: PaymentOutcome;
   /**
    * The id of the row this payment is for: booking_intents.id, orders.id,
-   * ads.id, products.id, or salon_subscription_payments.id, depending on
-   * `type`. Always OUR OWN id — what we sent the gateway as the payment
-   * reference — never the gateway's own transaction id.
+   * ads.id, products.id, salon_subscription_payments.id, or (for
+   * "store_booking_deposit") store_bookings.id, depending on `type`. Always
+   * OUR OWN id — what we sent the gateway as the payment reference — never
+   * the gateway's own transaction id.
    */
   referenceId: string;
   /**

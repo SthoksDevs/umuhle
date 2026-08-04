@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const type: "booking" | "order" | "ad" | "salon" | "product_listing" = body.type ?? "booking";
+  const type: "booking" | "order" | "ad" | "salon" | "product_listing" | "store_booking_deposit" = body.type ?? "booking";
 
   // Prefer the explicit env var; fall back to the request host so it also
   // works on preview deployments without re-setting the env var.
@@ -59,6 +59,8 @@ export async function POST(req: NextRequest) {
         return await initiateProductListing(supabase, user.id, profile, firstName, lastName, body, baseUrl);
       case "salon":
         return await initiateSalon(supabase, user.id, profile, firstName, lastName, body, baseUrl);
+      case "store_booking_deposit":
+        return await initiateStoreBookingDeposit(supabase, user.id, profile, firstName, lastName, body, baseUrl);
       default:
         return NextResponse.json({ error: "Unknown type" }, { status: 400 });
     }
@@ -248,6 +250,82 @@ async function initiateProductListing(
     email:           profile.email,
     baseUrl,
     customStr1:      "product_listing",
+  });
+
+  return NextResponse.json({ payfastUrl: PAYFAST_URL, params });
+}
+
+// ── Store booking deposit ──────────────────────────────────────────────────────
+// Requires login (the account-active check at the top of this route already
+// enforces that) — unlike the salon's free/no-deposit "Request booking" flow
+// on the store page itself, which stays guest-friendly and never touches
+// this route. The store_bookings row is inserted here, up front, mirroring
+// initiateAd()/initiateSalon() above; the PayFast ITN (fulfillStoreBookingDeposit
+// in lib/payments/fulfillment.ts) flips it to deposit_status "paid" /
+// status "confirmed" once payment completes.
+
+async function initiateStoreBookingDeposit(
+  supabase: Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>,
+  userId: string,
+  profile: { email: string },
+  firstName: string,
+  lastName: string,
+  body: Record<string, string>,
+  baseUrl: string
+) {
+  const { salonId, branchId, employeeId, clientName, clientPhone, service, bookingDate, bookingTime, notes } = body;
+
+  if (!salonId || !clientName || !clientPhone || !service || !bookingDate || !bookingTime) {
+    return NextResponse.json({ error: "Please fill in all required fields." }, { status: 400 });
+  }
+
+  const { data: salon } = await supabase
+    .from("partner_salons")
+    .select("id, name, deposit_amount")
+    .eq("id", salonId)
+    .single();
+
+  if (!salon) return NextResponse.json({ error: "Salon not found" }, { status: 404 });
+  if (!salon.deposit_amount || salon.deposit_amount <= 0) {
+    return NextResponse.json({ error: "This salon doesn't take deposits." }, { status: 400 });
+  }
+
+  const { data: booking, error } = await supabase
+    .from("store_bookings")
+    .insert({
+      salon_id: salonId,
+      branch_id: branchId || null,
+      branch_employee_id: employeeId || null,
+      client_id: userId,
+      client_name: clientName,
+      client_phone: clientPhone,
+      service,
+      booking_date: bookingDate,
+      booking_time: bookingTime,
+      notes: notes || null,
+      status: "pending",
+      deposit_amount: salon.deposit_amount,
+      deposit_status: "pending",
+      payment_method: "payfast",
+    })
+    .select("id")
+    .single();
+
+  if (error || !booking) {
+    console.error("Failed to create store booking for deposit:", error);
+    return NextResponse.json({ error: "Failed to create booking" }, { status: 500 });
+  }
+
+  const params = buildPaymentParams({
+    paymentId:       booking.id,
+    amount:          salon.deposit_amount,
+    itemName:        `Booking deposit — ${salon.name}`,
+    itemDescription: `${service} on ${bookingDate} at ${bookingTime}`,
+    firstName,
+    lastName,
+    email:           profile.email,
+    baseUrl,
+    customStr1:      "store_booking_deposit",
   });
 
   return NextResponse.json({ payfastUrl: PAYFAST_URL, params });
