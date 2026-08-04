@@ -24,11 +24,16 @@ type Salon = {
   instagram_username: string | null; youtube_url: string | null;
   services: string[] | null; latitude: number | null; longitude: number | null;
   rating: number | null; review_count: number | null;
-  deposit_amount: number | null; // cents — null/0 = this salon doesn't take deposits
+  deposit_amount: number | null; // unused — superseded by salon_services.deposit_amount (per service, not per salon)
 };
 type IgPost = { id: string; media_url: string; permalink: string; caption?: string };
-type StoreBookingInsert = { salon_id: string; branch_id: string | null; branch_employee_id: string | null; client_id: string | null; client_name: string; client_phone: string; service: string; booking_date: string; booking_time: string; notes: string | null };
+type StoreBookingInsert = { salon_id: string; branch_id: string | null; branch_employee_id: string | null; client_id: string | null; client_name: string; client_phone: string; service: string; service_id: string | null; service_price: number | null; booking_date: string; booking_time: string; notes: string | null };
 type BranchStaffOption = { id: string; name: string; photo_url: string | null; specialties: string[] };
+// A real, priced, individually-bookable service (see supabase/migrations/
+// 20260804_salon_services.sql) — distinct from `salon.services`, which is
+// just the four coarse category tags. A salon with none of these yet
+// falls back to that plain category picker below, no price, no deposit.
+type SalonServiceOption = { id: string; category: string; name: string; price: number; deposit_amount: number | null };
 
 function isOpenNow(s: Salon) {
   return sharedIsOpenNow(s.opening_hours).open;
@@ -175,13 +180,15 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
   const oh = salon.opening_hours;
   const services = salon.services?.length ? salon.services : ["hair","nails","makeup","lashes"];
 
-  const [form, setForm] = useState({ name: "", phone: "", service: services[0], date: "", time: "", notes: "", employeeId: "" });
+  const [form, setForm] = useState({ name: "", phone: "", service: services[0], serviceId: "", date: "", time: "", notes: "", employeeId: "" });
   const [saving, setSaving] = useState(false);
   const [depositSaving, setDepositSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState("");
   const [branchId, setBranchId] = useState<string | null>(null);
   const [staff, setStaff] = useState<BranchStaffOption[]>([]);
+  const [structuredServices, setStructuredServices] = useState<SalonServiceOption[]>([]);
+  const [structuredLoading, setStructuredLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
@@ -196,9 +203,40 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
     })();
   }, [salon.id]);
 
-  // Staff shown for the currently-selected service: anyone tagged for it,
-  // plus anyone with no specialties set (they're available for everything).
-  const staffForService = staff.filter(s => s.specialties.length === 0 || s.specialties.includes(form.service));
+  // The real, priced service list — if the salon has added any via the
+  // "Manage services" dashboard screen, this replaces the plain category
+  // picker below entirely.
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from("salon_services").select("id,category,name,price,deposit_amount")
+        .eq("salon_id", salon.id).eq("is_active", true)
+        .order("display_order", { ascending: true }).order("created_at", { ascending: true });
+      setStructuredServices((data as SalonServiceOption[]) ?? []);
+      setStructuredLoading(false);
+    })();
+  }, [salon.id]);
+
+  const hasStructuredServices = structuredServices.length > 0;
+  const selectedService = structuredServices.find(s => s.id === form.serviceId) ?? null;
+
+  // Default to the first priced service once the list loads in.
+  useEffect(() => {
+    if (hasStructuredServices && !form.serviceId) {
+      setForm(f => ({ ...f, serviceId: structuredServices[0].id }));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [structuredServices]);
+
+  // Whichever picker is active, this is the category to match staff
+  // specialties against — the coarse string itself in fallback mode, or
+  // the selected priced service's own category in structured mode.
+  const currentCategory = hasStructuredServices ? (selectedService?.category ?? null) : form.service;
+
+  // Staff shown for the currently-selected service: anyone tagged for its
+  // category, plus anyone with no specialties set (they're available for
+  // everything).
+  const staffForService = staff.filter(s => s.specialties.length === 0 || (currentCategory && s.specialties.includes(currentCategory)));
 
   // If the picked staff member no longer applies once the service changes
   // (or was hidden), fall back to "No preference" rather than silently
@@ -208,7 +246,7 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
       setForm(f => ({ ...f, employeeId: "" }));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.service, staff]);
+  }, [currentCategory, staff]);
 
   // Hours can differ per day of the week (and be overridden for a specific
   // date via special_days), so both the valid time slots and the "closed
@@ -243,6 +281,7 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
 
   const fieldsOk = () => {
     if (!form.name || !form.phone || !form.date || !form.time) { setError("Please fill in all required fields."); return false; }
+    if (hasStructuredServices && !form.serviceId) { setError("Please choose a service."); return false; }
     if (!dayOk()) { setError("The salon is closed on that date. Please pick another date."); return false; }
     return true;
   };
@@ -252,11 +291,24 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
     if (!fieldsOk()) return;
     setSaving(true);
     const { data: { user: authUser } } = await supabase.auth.getUser();
-    const payload: StoreBookingInsert = { salon_id: salon.id, branch_id: branchId, branch_employee_id: form.employeeId || null, client_id: authUser?.id ?? null, client_name: form.name, client_phone: form.phone, service: form.service, booking_date: form.date, booking_time: form.time, notes: form.notes || null };
+    const payload: StoreBookingInsert = {
+      salon_id: salon.id,
+      branch_id: branchId,
+      branch_employee_id: form.employeeId || null,
+      client_id: authUser?.id ?? null,
+      client_name: form.name,
+      client_phone: form.phone,
+      service: hasStructuredServices ? (selectedService?.name ?? "") : form.service,
+      service_id: hasStructuredServices ? (selectedService?.id ?? null) : null,
+      service_price: hasStructuredServices ? (selectedService?.price ?? null) : null,
+      booking_date: form.date,
+      booking_time: form.time,
+      notes: form.notes || null,
+    };
     const { error: err } = await supabase.from("store_bookings").insert(payload);
     setSaving(false);
     if (err) { setError("Something went wrong. Please try again."); return; }
-    gTag("form_submit", { form_name: "store_booking", store_id: salon.id, service: form.service, branch_employee_id: form.employeeId || undefined });
+    gTag("form_submit", { form_name: "store_booking", store_id: salon.id, service: payload.service, branch_employee_id: form.employeeId || undefined });
     setDone(true);
   };
 
@@ -280,7 +332,7 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
           employeeId: form.employeeId || null,
           clientName: form.name,
           clientPhone: form.phone,
-          service: form.service,
+          serviceId: selectedService?.id,
           bookingDate: form.date,
           bookingTime: form.time,
           notes: form.notes,
@@ -289,7 +341,7 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Couldn't start payment.");
 
-      gTag("form_submit", { form_name: "store_booking_deposit", store_id: salon.id, service: form.service });
+      gTag("form_submit", { form_name: "store_booking_deposit", store_id: salon.id, service: selectedService?.name });
 
       const f = document.createElement("form");
       f.method = "POST"; f.action = data.payfastUrl;
@@ -315,7 +367,7 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
     </div>
   );
 
-  const depositRand = salon.deposit_amount ? (salon.deposit_amount / 100).toFixed(2) : null;
+  const depositRand = hasStructuredServices && selectedService?.deposit_amount ? (selectedService.deposit_amount / 100).toFixed(2) : null;
 
   return (
     <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.5rem" }}>
@@ -327,11 +379,21 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
       </div>
 
       <label style={lbl}>Service *</label>
-      <select value={form.service} onChange={e => setForm(f=>({...f,service:e.target.value}))} style={{ ...inp, appearance: "none" }}>
-        {services.map(svc => (
-          <option key={svc} value={svc}>{svc.charAt(0).toUpperCase() + svc.slice(1)}</option>
-        ))}
-      </select>
+      {structuredLoading ? (
+        <div style={{ ...inp, color: "#999" }}>Loading services…</div>
+      ) : hasStructuredServices ? (
+        <select value={form.serviceId} onChange={e => setForm(f=>({...f,serviceId:e.target.value}))} style={{ ...inp, appearance: "none" }}>
+          {structuredServices.map(s => (
+            <option key={s.id} value={s.id}>{s.name} — R{(s.price / 100).toFixed(0)}</option>
+          ))}
+        </select>
+      ) : (
+        <select value={form.service} onChange={e => setForm(f=>({...f,service:e.target.value}))} style={{ ...inp, appearance: "none" }}>
+          {services.map(svc => (
+            <option key={svc} value={svc}>{svc.charAt(0).toUpperCase() + svc.slice(1)}</option>
+          ))}
+        </select>
+      )}
 
       {staffForService.length > 0 && (
         <>

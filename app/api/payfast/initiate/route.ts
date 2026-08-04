@@ -273,21 +273,37 @@ async function initiateStoreBookingDeposit(
   body: Record<string, string>,
   baseUrl: string
 ) {
-  const { salonId, branchId, employeeId, clientName, clientPhone, service, bookingDate, bookingTime, notes } = body;
+  const { salonId, branchId, employeeId, clientName, clientPhone, serviceId, bookingDate, bookingTime, notes } = body;
 
-  if (!salonId || !clientName || !clientPhone || !service || !bookingDate || !bookingTime) {
+  if (!salonId || !clientName || !clientPhone || !serviceId || !bookingDate || !bookingTime) {
     return NextResponse.json({ error: "Please fill in all required fields." }, { status: 400 });
   }
 
   const { data: salon } = await supabase
     .from("partner_salons")
-    .select("id, name, deposit_amount")
+    .select("id, name")
     .eq("id", salonId)
     .single();
 
   if (!salon) return NextResponse.json({ error: "Salon not found" }, { status: 404 });
-  if (!salon.deposit_amount || salon.deposit_amount <= 0) {
-    return NextResponse.json({ error: "This salon doesn't take deposits." }, { status: 400 });
+
+  // The deposit lives on the specific service, not the salon — a R150
+  // haircut and a R450 colour can (and usually will) need different
+  // deposits. serviceId is trusted from the client for which service was
+  // picked, but its price/deposit are always re-read here, and its
+  // salon_id cross-checked against salonId, rather than trusting anything
+  // money-related the client sent.
+  const { data: service } = await supabase
+    .from("salon_services")
+    .select("id, name, price, deposit_amount")
+    .eq("id", serviceId)
+    .eq("salon_id", salonId)
+    .eq("is_active", true)
+    .single();
+
+  if (!service) return NextResponse.json({ error: "That service is no longer available." }, { status: 404 });
+  if (!service.deposit_amount || service.deposit_amount <= 0) {
+    return NextResponse.json({ error: "This service doesn't take a deposit." }, { status: 400 });
   }
 
   const { data: booking, error } = await supabase
@@ -299,12 +315,14 @@ async function initiateStoreBookingDeposit(
       client_id: userId,
       client_name: clientName,
       client_phone: clientPhone,
-      service,
+      service: service.name,
+      service_id: service.id,
+      service_price: service.price,
       booking_date: bookingDate,
       booking_time: bookingTime,
       notes: notes || null,
       status: "pending",
-      deposit_amount: salon.deposit_amount,
+      deposit_amount: service.deposit_amount,
       deposit_status: "pending",
       payment_method: "payfast",
     })
@@ -318,9 +336,9 @@ async function initiateStoreBookingDeposit(
 
   const params = buildPaymentParams({
     paymentId:       booking.id,
-    amount:          salon.deposit_amount,
+    amount:          service.deposit_amount,
     itemName:        `Booking deposit — ${salon.name}`,
-    itemDescription: `${service} on ${bookingDate} at ${bookingTime}`,
+    itemDescription: `${service.name} on ${bookingDate} at ${bookingTime}`,
     firstName,
     lastName,
     email:           profile.email,

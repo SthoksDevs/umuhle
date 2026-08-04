@@ -1657,6 +1657,181 @@ function StaffForm({ branchId, salonServices, initial, onSaved, onCancel }: {
   );
 }
 
+// ── ServiceManager ───────────────────────────────────────────────────────────
+// Real, priced, individually-bookable services for a salon (see
+// supabase/migrations/20260804_salon_services.sql) — separate from the
+// coarse hair/nails/makeup/lashes category tags on the salon listing
+// itself, which stay exactly as they were (stores-listing filters, staff
+// specialty matching). A salon with zero rows here is unaffected: its
+// public booking form just falls back to the old plain category picker,
+// no price, no deposit — this screen is what turns the priced/deposit
+// flow on, per service, once the owner adds one.
+
+type SalonService = {
+  id: string;
+  salon_id: string;
+  category: string;
+  name: string;
+  description: string | null;
+  price: number;                  // cents
+  deposit_amount: number | null;  // cents — null = no deposit for this service
+  is_active: boolean;
+  display_order: number;
+};
+
+function ServiceManager({ salonId, salonCategories }: { salonId: string; salonCategories: string[] }) {
+  const supabase = createClient();
+  const [services, setServices] = useState<SalonService[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState<{ id?: string; name: string; category: string; description: string; priceRand: string; depositRand: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const categories = salonCategories.length ? salonCategories : ALL_SERVICES;
+
+  const load = useCallback(async () => {
+    const { data } = await supabase
+      .from("salon_services").select("*").eq("salon_id", salonId)
+      .order("display_order", { ascending: true }).order("created_at", { ascending: true });
+    setServices((data as SalonService[]) ?? []);
+    setLoading(false);
+  }, [salonId, supabase]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const startAdd = () => { setError(""); setForm({ name: "", category: categories[0] ?? "hair", description: "", priceRand: "", depositRand: "" }); };
+  const startEdit = (s: SalonService) => {
+    setError("");
+    setForm({ id: s.id, name: s.name, category: s.category, description: s.description ?? "", priceRand: String(s.price / 100), depositRand: s.deposit_amount ? String(s.deposit_amount / 100) : "" });
+  };
+
+  const save = async () => {
+    if (!form) return;
+    const priceNum = parseFloat(form.priceRand);
+    if (!form.name.trim()) { setError("Give the service a name."); return; }
+    if (!Number.isFinite(priceNum) || priceNum <= 0) { setError("Enter a valid price."); return; }
+    let depositCents: number | null = null;
+    if (form.depositRand.trim()) {
+      const depositNum = parseFloat(form.depositRand);
+      if (!Number.isFinite(depositNum) || depositNum <= 0) { setError("Enter a valid deposit amount, or leave it blank for no deposit."); return; }
+      if (depositNum > priceNum) { setError("The deposit can't be more than the price."); return; }
+      depositCents = Math.round(depositNum * 100);
+    }
+    setSaving(true); setError("");
+    const payload = {
+      salon_id: salonId,
+      category: form.category,
+      name: form.name.trim(),
+      description: form.description.trim() || null,
+      price: Math.round(priceNum * 100),
+      deposit_amount: depositCents,
+    };
+    const { error: err } = form.id
+      ? await supabase.from("salon_services").update(payload).eq("id", form.id)
+      : await supabase.from("salon_services").insert({ ...payload, is_active: true });
+    setSaving(false);
+    if (err) { setError(err.message); return; }
+    setForm(null);
+    await load();
+  };
+
+  const toggleActive = async (s: SalonService) => {
+    await supabase.from("salon_services").update({ is_active: !s.is_active }).eq("id", s.id);
+    await load();
+  };
+
+  const remove = async (id: string) => {
+    if (!confirm("Remove this service? Customers won't be able to book it anymore.")) return;
+    await supabase.from("salon_services").delete().eq("id", id);
+    await load();
+  };
+
+  if (loading) return <p style={{ color: "var(--grey)" }}>Loading…</p>;
+
+  if (form) return (
+    <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.5rem" }}>
+      <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.1rem" }}>
+        {form.id ? "Edit service" : "Add a service"}
+      </h3>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginBottom: "0.9rem" }}>
+        <div>
+          <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Service name *</label>
+          <input value={form.name} onChange={e => setForm(f => f && ({ ...f, name: e.target.value }))} placeholder="e.g. Ladies cut & blow wave" style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem" }} />
+        </div>
+        <div>
+          <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Category</label>
+          <select value={form.category} onChange={e => setForm(f => f && ({ ...f, category: e.target.value }))} style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem", textTransform: "capitalize" }}>
+            {categories.map(c => <option key={c} value={c} style={{ textTransform: "capitalize" }}>{c}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Price (ZAR) *</label>
+          <input type="number" min="0" step="1" value={form.priceRand} onChange={e => setForm(f => f && ({ ...f, priceRand: e.target.value }))} placeholder="150" style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem" }} />
+        </div>
+        <div>
+          <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Deposit (ZAR, optional)</label>
+          <input type="number" min="0" step="1" value={form.depositRand} onChange={e => setForm(f => f && ({ ...f, depositRand: e.target.value }))} placeholder="Leave blank for no deposit" style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem" }} />
+        </div>
+      </div>
+
+      <div style={{ marginBottom: "0.9rem" }}>
+        <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Description (optional)</label>
+        <textarea value={form.description} onChange={e => setForm(f => f && ({ ...f, description: e.target.value }))} rows={2} style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem", resize: "vertical" }} />
+      </div>
+
+      {error && <p style={{ color: "#E53935", fontSize: "0.82rem", marginBottom: "0.9rem" }}>{error}</p>}
+
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={save} disabled={saving} className="btn-plum" style={{ padding: "0.7rem 1.75rem", borderRadius: 100, fontWeight: 600, cursor: saving ? "not-allowed" : "pointer" }}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+        <button onClick={() => { setForm(null); setError(""); }} style={{ padding: "0.7rem 1.5rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.25)", background: "#fff", cursor: "pointer", fontWeight: 500 }}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "1rem" }}>
+        Add the services clients can actually book and pay for — each with its own price, and an optional deposit to secure the booking upfront.
+      </p>
+
+      {services.length === 0 && (
+        <p style={{ fontSize: "0.9rem", color: "var(--grey)", marginBottom: "1rem" }}>
+          No priced services yet — until you add one, the booking form shows your service categories with no price or deposit, same as before.
+        </p>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", marginBottom: "1.25rem" }}>
+        {services.map(s => (
+          <div key={s.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem", padding: "0.9rem 1.1rem", borderRadius: 12, border: "1.5px solid rgba(155,127,184,0.12)", background: "#fff", opacity: s.is_active ? 1 : 0.55 }}>
+            <div style={{ minWidth: 0 }}>
+              <p style={{ margin: 0, fontWeight: 600, fontSize: "0.9rem" }}>{s.name}</p>
+              <p style={{ margin: "0.15rem 0 0", fontSize: "0.78rem", color: "var(--grey)", textTransform: "capitalize" }}>
+                {fmt(s.price)}{s.deposit_amount ? ` · ${fmt(s.deposit_amount)} deposit` : ""} · {s.category}{!s.is_active ? " · Hidden" : ""}
+              </p>
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem", flexShrink: 0 }}>
+              <button type="button" onClick={() => toggleActive(s)} style={{ background: "none", border: "1.5px solid rgba(155,127,184,0.3)", borderRadius: 8, padding: "0.35rem 0.7rem", fontSize: "0.75rem", color: "var(--grey)", cursor: "pointer" }}>
+                {s.is_active ? "Hide" : "Unhide"}
+              </button>
+              <button type="button" onClick={() => startEdit(s)} style={{ background: "none", border: "1.5px solid rgba(155,127,184,0.3)", borderRadius: 8, padding: "0.35rem 0.7rem", fontSize: "0.75rem", color: "var(--grey)", cursor: "pointer" }}>Edit</button>
+              <button type="button" onClick={() => remove(s.id)} style={{ background: "none", border: "1.5px solid rgba(229,57,53,0.3)", borderRadius: 8, padding: "0.35rem 0.7rem", fontSize: "0.75rem", color: "#E53935", cursor: "pointer" }}>Delete</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <button onClick={startAdd} className="btn-plum" style={{ padding: "0.6rem 1.5rem", borderRadius: 100, fontWeight: 600, fontSize: "0.85rem" }}>
+        + Add a service
+      </button>
+    </div>
+  );
+}
+
 // ── MySalonTab ────────────────────────────────────────────────────────────────
 // This replaces the MySalonTab function in your dashboard/page.tsx
  
@@ -1666,7 +1841,7 @@ function MySalonTab({ user }: { user: { id: string } }) {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<SalonListing | null>(null);
-  const [innerTab, setInnerTab] = useState<"listing" | "bookings" | "staff">("listing");
+  const [innerTab, setInnerTab] = useState<"listing" | "services" | "staff" | "bookings">("listing");
  
   useEffect(() => {
     supabase
@@ -1783,15 +1958,15 @@ function MySalonTab({ user }: { user: { id: string } }) {
  
       {/* Inner tabs */}
       <div style={{ display: "flex", gap: 0, marginBottom: "1.25rem", borderRadius: 100, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.2)", width: "fit-content" }}>
-        {(["listing","bookings","staff"] as const).map((t, i) => (
+        {(["listing","services","staff","bookings"] as const).map((t, i, arr) => (
           <button key={t} onClick={() => setInnerTab(t)} style={{
             padding: "0.5rem 1.25rem", border: "none", cursor: "pointer", fontSize: "0.85rem",
             background: innerTab === t ? "var(--plum)" : "#fff",
             color: innerTab === t ? "#fff" : "var(--grey)",
             fontWeight: innerTab === t ? 600 : 400,
-            borderRight: i < 2 ? "1.5px solid rgba(155,127,184,0.2)" : "none",
+            borderRight: i < arr.length - 1 ? "1.5px solid rgba(155,127,184,0.2)" : "none",
           }}>
-            {t === "listing" ? "Listing" : t === "bookings" ? "Bookings" : "Staff"}
+            {t === "listing" ? "Listing" : t === "services" ? "Services" : t === "staff" ? "Staff" : "Bookings"}
           </button>
         ))}
       </div>
@@ -1827,12 +2002,16 @@ function MySalonTab({ user }: { user: { id: string } }) {
         </div>
       )}
  
-      {innerTab === "bookings" && listing.id && (
-        <SalonBookingsInbox salonId={listing.id} />
+      {innerTab === "services" && listing.id && (
+        <ServiceManager salonId={listing.id} salonCategories={listing.services ?? []} />
       )}
 
       {innerTab === "staff" && listing.id && (
         <BranchStaffManager salonId={listing.id} salonServices={listing.services ?? []} />
+      )}
+
+      {innerTab === "bookings" && listing.id && (
+        <SalonBookingsInbox salonId={listing.id} />
       )}
     </div>
   );

@@ -369,7 +369,7 @@ CREATE TABLE public.store_bookings (
   client_id uuid,
   client_name text NOT NULL,
   client_phone text NOT NULL,
-  service text NOT NULL CHECK (service = ANY (ARRAY['hair'::text, 'nails'::text, 'makeup'::text, 'lashes'::text])),
+  service text NOT NULL,
   booking_date date NOT NULL,
   booking_time time without time zone NOT NULL,
   notes text,
@@ -380,11 +380,28 @@ CREATE TABLE public.store_bookings (
   payment_method text,
   gateway_order_id text,
   deposit_paid_at timestamp with time zone,
+  service_id uuid,
+  service_price integer,
   CONSTRAINT store_bookings_pkey PRIMARY KEY (id),
   CONSTRAINT store_bookings_salon_id_fkey FOREIGN KEY (salon_id) REFERENCES public.partner_salons(id),
   CONSTRAINT store_bookings_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.store_branches(id),
   CONSTRAINT store_bookings_branch_employee_id_fkey FOREIGN KEY (branch_employee_id) REFERENCES public.branch_employees(id),
-  CONSTRAINT store_bookings_client_id_fkey FOREIGN KEY (client_id) REFERENCES auth.users(id)
+  CONSTRAINT store_bookings_client_id_fkey FOREIGN KEY (client_id) REFERENCES auth.users(id),
+  CONSTRAINT store_bookings_service_id_fkey FOREIGN KEY (service_id) REFERENCES public.salon_services(id)
+);
+CREATE TABLE public.salon_services (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  salon_id uuid NOT NULL,
+  category text NOT NULL CHECK (category = ANY (ARRAY['hair'::text, 'nails'::text, 'makeup'::text, 'lashes'::text])),
+  name text NOT NULL,
+  description text,
+  price integer NOT NULL,
+  deposit_amount integer,
+  is_active boolean NOT NULL DEFAULT true,
+  display_order integer NOT NULL DEFAULT 0,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT salon_services_pkey PRIMARY KEY (id),
+  CONSTRAINT salon_services_salon_id_fkey FOREIGN KEY (salon_id) REFERENCES public.partner_salons(id)
 );
 CREATE TABLE public.photo_upload_charges (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
