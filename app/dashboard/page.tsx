@@ -847,6 +847,18 @@ if (openDays.length === 0) {
           .from("partner_salons").insert(payload).select().single());
       }
       if (err) throw err;
+
+      // First-time submission only — never on edits to an existing
+      // listing. Fire-and-forget: the listing is already saved either way.
+      if (!form.id && data) {
+        const saved = data as SalonListing;
+        fetch("/api/salons/submitted", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ salonId: saved.id, salonName: saved.name }),
+        }).catch(() => {});
+      }
+
       setGallery([]);
       onSaved(data as SalonListing);
     } catch (e: unknown) {

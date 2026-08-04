@@ -812,6 +812,36 @@ export async function sendSalonPaidEmail(opts: {
   }
 }
 
+// ── New salon listing submitted for review ──────────────────────────────────
+// Fired exactly once, right after a partner's *first* store listing row is
+// inserted — see app/api/salons/submitted/route.ts, called from the
+// dashboard's SalonForm (app/dashboard/page.tsx) only on the create path,
+// never on edits, and never again after that first submission for a given
+// salon. This is the owner's own "we got it" receipt — separate from
+// sendAdminPendingDigestEmail below, which already covers admin's side
+// (a once-a-day summary of everything pending), so there's no admin copy
+// here.
+export async function sendSalonSubmittedEmail(opts: {
+  ownerName:  string;
+  ownerEmail: string;
+  salonName:  string;
+  salonId:    string;
+}) {
+  if (!opts.ownerEmail) return;
+
+  await sendToAll([opts.ownerEmail], {
+    subject:     `We've got your listing — ${opts.salonName} is under review`,
+    template:    "salon_submitted_owner",
+    referenceId: opts.salonId,
+    text:        `Hi ${opts.ownerName},\n\nThanks for listing ${opts.salonName} on Umuhle. Your store is now under review — we'll check it over and get it live within 24 hours.\n\nWe'll email you again as soon as it's approved. In the meantime you can keep adding services, photos, and business hours from your dashboard.\n\nUmuhle`,
+    html:        emailWrapper(`Thanks for listing ${opts.salonName} 💜`, `
+      <p style="margin:0 0 1.25rem">Hi ${opts.ownerName},</p>
+      <p style="margin:0 0 1.25rem">Thanks for listing <strong>${opts.salonName}</strong> on Umuhle. Your store is now under review — we'll check it over and get it live within 24 hours.</p>
+      <p style="margin:0 0 1.25rem">We'll email you again as soon as it's approved. In the meantime, you can keep adding services, photos, and business hours from your dashboard.</p>
+      <p style="margin:1rem 0 0"><a href="https://umuhle.co.za/dashboard" style="color:#9B7FB8;font-weight:600;text-decoration:none">Open your dashboard →</a></p>`),
+  });
+}
+
 // ── Daily admin "pending items" digest ─────────────────────────────────────────
 // Used by the once-a-day /api/cron/admin-digest job. Each section mirrors a
 // filter already used somewhere in the admin dashboard (Stores/Products/Ads
