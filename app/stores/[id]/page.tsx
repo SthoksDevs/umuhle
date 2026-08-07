@@ -27,7 +27,7 @@ type Salon = {
   deposit_amount: number | null; // unused — superseded by salon_services.deposit_amount (per service, not per salon)
 };
 type IgPost = { id: string; media_url: string; permalink: string; caption?: string };
-type StoreBookingInsert = { salon_id: string; branch_id: string | null; branch_employee_id: string | null; client_id: string | null; client_name: string; client_phone: string; service: string; service_id: string | null; service_price: number | null; booking_date: string; booking_time: string; notes: string | null };
+type StoreBookingInsert = { salon_id: string; branch_id: string | null; branch_employee_id: string | null; client_id: string | null; client_name: string; client_phone: string; client_email: string; service: string; service_id: string | null; service_price: number | null; booking_date: string; booking_time: string; notes: string | null };
 type BranchStaffOption = { id: string; name: string; photo_url: string | null; specialties: string[] };
 // A real, priced, individually-bookable service (see supabase/migrations/
 // 20260804_salon_services.sql) — distinct from `salon.services`, which is
@@ -173,9 +173,6 @@ function Gallery({ urls }: { urls: string[] }) {
 }
 
 // ── Booking form ──────────────────────────────────────────────────────────────
-type StoreDepositPayMethod = "tradesafe" | "ozow";
-const DEPOSIT_GATEWAY_LABEL: Record<StoreDepositPayMethod, string> = { tradesafe: "TradeSafe", ozow: "Ozow" };
-
 function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
   const supabase = createClient();
   const router = useRouter();
@@ -183,7 +180,7 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
   const oh = salon.opening_hours;
   const services = salon.services?.length ? salon.services : ["hair","nails","makeup","lashes"];
 
-  const [form, setForm] = useState({ name: "", phone: "", service: services[0], serviceId: "", date: "", time: "", notes: "", employeeId: "" });
+  const [form, setForm] = useState({ name: "", phone: "", email: "", service: services[0], serviceId: "", date: "", time: "", notes: "", employeeId: "" });
   const [saving, setSaving] = useState(false);
   const [depositSaving, setDepositSaving] = useState(false);
   const [done, setDone] = useState(false);
@@ -192,13 +189,6 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
   const [staff, setStaff] = useState<BranchStaffOption[]>([]);
   const [structuredServices, setStructuredServices] = useState<SalonServiceOption[]>([]);
   const [structuredLoading, setStructuredLoading] = useState(true);
-  // Deposits are TradeSafe-eligible whenever they clear the R50 minimum
-  // (see lib/payments/eligibility.ts) — mirrors the picker pattern in
-  // app/checkout/page.tsx and the BookingDrawer above, just more compact.
-  const [depositPayMethod, setDepositPayMethod] = useState<StoreDepositPayMethod>("tradesafe");
-  const [availableDepositGateways, setAvailableDepositGateways] = useState<Set<StoreDepositPayMethod>>(
-    new Set<StoreDepositPayMethod>(["tradesafe", "ozow"])
-  );
 
   useEffect(() => {
     (async () => {
@@ -290,7 +280,7 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
   }, [form.date]);
 
   const fieldsOk = () => {
-    if (!form.name || !form.phone || !form.date || !form.time) { setError("Please fill in all required fields."); return false; }
+    if (!form.name || !form.phone || !form.email || !form.date || !form.time) { setError("Please fill in all required fields."); return false; }
     if (hasStructuredServices && !form.serviceId) { setError("Please choose a service."); return false; }
     if (!dayOk()) { setError("The salon is closed on that date. Please pick another date."); return false; }
     return true;
@@ -308,6 +298,7 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
       client_id: authUser?.id ?? null,
       client_name: form.name,
       client_phone: form.phone,
+      client_email: form.email,
       service: hasStructuredServices ? (selectedService?.name ?? "") : form.service,
       service_id: hasStructuredServices ? (selectedService?.id ?? null) : null,
       service_price: hasStructuredServices ? (selectedService?.price ?? null) : null,
@@ -336,8 +327,7 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
     if (!fieldsOk()) return;
     setDepositSaving(true);
     try {
-      const endpoint = depositPayMethod === "tradesafe" ? "/api/tradesafe/initiate" : "/api/ozow/initiate";
-      const res = await fetch(endpoint, {
+      const res = await fetch("/api/tradesafe/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -347,6 +337,7 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
           employeeId: form.employeeId || null,
           clientName: form.name,
           clientPhone: form.phone,
+          clientEmail: form.email,
           serviceId: selectedService?.id,
           bookingDate: form.date,
           bookingTime: form.time,
@@ -355,13 +346,6 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
       });
       const data = await res.json();
       if (!res.ok) {
-        // Same fallback reasoning as app/checkout/page.tsx's handleTradeSafe.
-        if (data.code === "GATEWAY_INELIGIBLE" && data.fallback === "ozow" && depositPayMethod !== "ozow") {
-          setDepositPayMethod("ozow");
-          setDepositSaving(false);
-          setError(data.error ?? "Please pay via Ozow instead.");
-          return;
-        }
         throw new Error(data.error ?? "Couldn't start payment.");
       }
 
@@ -386,27 +370,6 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
 
   const depositRand = hasStructuredServices && selectedService?.deposit_amount ? (selectedService.deposit_amount / 100).toFixed(2) : null;
 
-  useEffect(() => {
-    if (!selectedService?.deposit_amount) return;
-    const params = new URLSearchParams({ type: "store_booking_deposit", amountCents: String(selectedService.deposit_amount) });
-    fetch(`/api/payments/gateways?${params}`)
-      .then((res) => res.json())
-      .then((data: { gateways: string[] }) => {
-        setAvailableDepositGateways(new Set<StoreDepositPayMethod>(data.gateways as StoreDepositPayMethod[]));
-      })
-      .catch(() => {
-        // If this fails, keep showing every method rather than hiding all
-        // payment options over a transient network error.
-      });
-  }, [selectedService?.deposit_amount]);
-
-  useEffect(() => {
-    if (availableDepositGateways.has(depositPayMethod)) return;
-    const fallback = (["tradesafe", "ozow"] as StoreDepositPayMethod[]).find((m) => availableDepositGateways.has(m));
-    if (fallback) setDepositPayMethod(fallback);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [availableDepositGateways]);
-
   return (
     <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.5rem" }}>
       <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.2rem", marginBottom: "1.25rem" }}>Book an appointment</h3>
@@ -415,6 +378,9 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
         <div><label style={lbl}>Your name *</label><input value={form.name} onChange={e => setForm(f=>({...f,name:e.target.value}))} placeholder="Full name" style={inp} /></div>
         <div><label style={lbl}>WhatsApp / phone *</label><input value={form.phone} onChange={e => setForm(f=>({...f,phone:e.target.value}))} placeholder="082 123 4567" type="tel" style={inp} /></div>
       </div>
+
+      <label style={lbl}>Email *</label>
+      <input value={form.email} onChange={e => setForm(f=>({...f,email:e.target.value}))} placeholder="you@example.com" type="email" required style={inp} />
 
       <label style={lbl}>Service *</label>
       {structuredLoading ? (
@@ -477,24 +443,9 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
             Pay a R{depositRand} deposit now and your slot is confirmed instantly — no waiting on a callback.
           </p>
           {user ? (
-            <>
-              {availableDepositGateways.size > 1 && (
-                <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.7rem" }}>
-                  {(["tradesafe", "ozow"] as StoreDepositPayMethod[]).filter((m) => availableDepositGateways.has(m)).map((m) => (
-                    <button key={m} type="button" onClick={() => setDepositPayMethod(m)}
-                      style={{ flex: 1, padding: "0.5rem", borderRadius: 100, fontSize: "0.8rem", fontWeight: 600, cursor: "pointer",
-                        border: `1.5px solid ${depositPayMethod === m ? "var(--plum)" : "rgba(155,127,184,0.25)"}`,
-                        background: depositPayMethod === m ? "var(--plum)" : "#fff",
-                        color: depositPayMethod === m ? "#fff" : "var(--plum-d)" }}>
-                      {DEPOSIT_GATEWAY_LABEL[m]}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <button onClick={payDeposit} disabled={depositSaving || saving} className="btn-plum" style={{ width: "100%", padding: "0.8rem", borderRadius: 100, fontSize: "0.92rem", fontWeight: 600, cursor: depositSaving?"not-allowed":"pointer", opacity: depositSaving?0.7:1 }}>
-                {depositSaving ? "Redirecting to payment…" : `Pay R${depositRand} deposit with ${DEPOSIT_GATEWAY_LABEL[depositPayMethod]}`}
-              </button>
-            </>
+            <button onClick={payDeposit} disabled={depositSaving || saving} className="btn-plum" style={{ width: "100%", padding: "0.8rem", borderRadius: 100, fontSize: "0.92rem", fontWeight: 600, cursor: depositSaving?"not-allowed":"pointer", opacity: depositSaving?0.7:1 }}>
+              {depositSaving ? "Redirecting to payment…" : `Pay R${depositRand} now to Book`}
+            </button>
           ) : (
             <button onClick={() => router.push(`${pathname}?auth=login`)} className="btn-plum" style={{ width: "100%", padding: "0.8rem", borderRadius: 100, fontSize: "0.92rem", fontWeight: 600 }}>
               Log in to pay deposit & confirm
