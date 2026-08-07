@@ -192,9 +192,9 @@ async function initiateStoreBookingDeposit(
   buyer: { firstName: string; lastName: string; email: string; mobile: string },
   body: Record<string, string>
 ) {
-  const { salonId, branchId, employeeId, clientName, clientPhone, serviceId, bookingDate, bookingTime, notes } = body;
+  const { salonId, branchId, employeeId, clientName, clientPhone, clientEmail, serviceId, bookingDate, bookingTime, notes } = body;
 
-  if (!salonId || !clientName || !clientPhone || !serviceId || !bookingDate || !bookingTime) {
+  if (!salonId || !clientName || !clientPhone || !clientEmail || !serviceId || !bookingDate || !bookingTime) {
     return NextResponse.json({ error: "Please fill in all required fields." }, { status: 400 });
   }
 
@@ -230,6 +230,7 @@ async function initiateStoreBookingDeposit(
       client_id: userId,
       client_name: clientName,
       client_phone: clientPhone,
+      client_email: clientEmail,
       service: service.name,
       service_id: service.id,
       service_price: service.price,
@@ -254,7 +255,7 @@ async function initiateStoreBookingDeposit(
     title: `Booking deposit — ${salon.name}`,
     description: `${service.name} on ${bookingDate} at ${bookingTime}`,
     amountCents: service.deposit_amount,
-    buyer,
+    buyer: { ...buyer, email: clientEmail },
     daysToDeliver: 1,
     daysToInspect: 3,
   });
@@ -266,4 +267,3 @@ async function initiateStoreBookingDeposit(
 
   return NextResponse.json({ redirectUrl: created_tx.checkoutUrl });
 }
-
