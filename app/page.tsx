@@ -42,12 +42,10 @@ const CAT_ICONS: Record<string, string> = { hair: "✂", nails: "◈", makeup: "
 type CartItem = { id: string; name: string; price: number };
 
 // ── Booking payment gateway picker ──────────────────────────────────────────
-// Mirrors the PayMethod pattern in app/checkout/page.tsx, minus google_pay
-// (not part of lib/payments/gateways.ts's pause system, and not wired up
-// for bookings — see BookingDrawer below).
-type BookingPayMethod = "payfast" | "ozow" | "happypay";
+// Mirrors the PayMethod pattern in app/checkout/page.tsx.
+type BookingPayMethod = "tradesafe" | "ozow";
 const BOOKING_GATEWAY_LABEL: Record<BookingPayMethod, string> = {
-  payfast: "PayFast", ozow: "Ozow", happypay: "HappyPay",
+  tradesafe: "TradeSafe", ozow: "Ozow",
 };
 
 // ── Pending "add to wishlist" intent ────────────────────────────────────────
@@ -820,11 +818,11 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState("");
   const [reviews, setReviews]     = useState<ArtistReview[]>([]);
-  const [payMethod, setPayMethod] = useState<BookingPayMethod>("payfast");
+  const [payMethod, setPayMethod] = useState<BookingPayMethod>("tradesafe");
   // Defaults to "everything on" so there's no flash of a shorter list while
   // /api/payments/gateways is loading — mirrors app/checkout/page.tsx.
   const [availableGateways, setAvailableGateways] = useState<Set<BookingPayMethod>>(
-    new Set<BookingPayMethod>(["payfast", "ozow", "happypay"])
+    new Set<BookingPayMethod>(["tradesafe", "ozow"])
   );
   const geo = useGeolocation();
 
@@ -975,7 +973,9 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
   }, [artist.id, artist.review_count]);
 
   useEffect(() => {
-    fetch("/api/payments/gateways")
+    if (!selected) return; // price isn't known until a service is picked
+    const params = new URLSearchParams({ type: "booking", amountCents: String(selected.price) });
+    fetch(`/api/payments/gateways?${params}`)
       .then((res) => res.json())
       .then((data: { gateways: string[] }) => {
         setAvailableGateways(new Set<BookingPayMethod>(data.gateways as BookingPayMethod[]));
@@ -984,34 +984,41 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
         // If this fails, keep showing every method rather than hiding all
         // payment options over a transient network error.
       });
-  }, []);
+  }, [selected]);
 
   // If the pre-selected default (or a previous selection) turns out to be
-  // paused, fall back to whatever's actually available.
+  // unavailable, fall back to whatever's actually available.
   useEffect(() => {
     if (availableGateways.has(payMethod)) return;
-    const fallback = (["payfast", "ozow", "happypay"] as BookingPayMethod[]).find((m) => availableGateways.has(m));
+    const fallback = (["tradesafe", "ozow"] as BookingPayMethod[]).find((m) => availableGateways.has(m));
     if (fallback) setPayMethod(fallback);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [availableGateways]);
 
-  const handlePayFast = async () => {
+  const handleTradeSafe = async () => {
     if (!selected || !address.trim() || !pocName.trim() || !pocPhone.trim()) return;
     setLoading(true); setError("");
     try {
-      const res = await fetch("/api/payfast/initiate", {
+      const res = await fetch("/api/tradesafe/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "booking", serviceId: selected.id, artistId: artist.id, bookingDate: date, bookingTime: time, meetingAddress: address, clientPocName: pocName, clientPocPhone: pocPhone }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Payment initiation failed");
-      const form = document.createElement("form");
-      form.method = "POST"; form.action = data.payfastUrl;
-      Object.entries(data.params as Record<string, string>).forEach(([k, v]) => {
-        const inp = document.createElement("input"); inp.type = "hidden"; inp.name = k; inp.value = v; form.appendChild(inp);
-      });
-      document.body.appendChild(form); form.submit();
+      if (!res.ok) {
+        // Same reasoning as app/checkout/page.tsx's handleTradeSafe — the
+        // service price can be under TradeSafe's R50 minimum, and the
+        // picker should already have hidden this option in that case, but
+        // fall back rather than dead-end if it's picked anyway.
+        if (data.code === "GATEWAY_INELIGIBLE" && data.fallback === "ozow") {
+          setPayMethod("ozow");
+          setLoading(false);
+          setError(data.error ?? "Please pay via Ozow instead.");
+          return;
+        }
+        throw new Error(data.error ?? "Payment initiation failed");
+      }
+      window.location.href = data.redirectUrl;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setLoading(false);
@@ -1036,25 +1043,7 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
     }
   };
 
-  const handleHappyPay = async () => {
-    if (!selected || !address.trim() || !pocName.trim() || !pocPhone.trim()) return;
-    setLoading(true); setError("");
-    try {
-      const res = await fetch("/api/happypay/initiate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "booking", serviceId: selected.id, artistId: artist.id, bookingDate: date, bookingTime: time, meetingAddress: address, clientPocName: pocName, clientPocPhone: pocPhone }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "HappyPay payment failed");
-      window.location.href = data.redirectUrl;
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-      setLoading(false);
-    }
-  };
-
-  const handleBookingPay = payMethod === "payfast" ? handlePayFast : payMethod === "ozow" ? handleOzow : handleHappyPay;
+  const handleBookingPay = payMethod === "tradesafe" ? handleTradeSafe : handleOzow;
 
   const inputStyle: React.CSSProperties = { padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", width: "100%", boxSizing: "border-box" };
 
@@ -1261,9 +1250,8 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
             <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.5rem" }}>Payment method</p>
             <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", marginBottom: "1.25rem" }}>
               {([
-                { id: "payfast" as BookingPayMethod, label: "PayFast", sub: "Card, EFT, Instant EFT, SnapScan & more" },
+                { id: "tradesafe" as BookingPayMethod, label: "TradeSafe", sub: "Card, EFT, SnapScan, PayJustNow & more" },
                 { id: "ozow" as BookingPayMethod, label: "Ozow", sub: "Instant EFT — pay straight from your bank app" },
-                { id: "happypay" as BookingPayMethod, label: "HappyPay", sub: "Buy now, pay later — split into instalments" },
               ]).filter((opt) => availableGateways.has(opt.id)).map((opt) => (
                 <button key={opt.id} onClick={() => setPayMethod(opt.id)}
                   style={{ display: "flex", alignItems: "center", gap: "0.85rem", padding: "0.85rem 1rem", borderRadius: 12, border: `1.5px solid ${payMethod === opt.id ? "var(--plum)" : "rgba(155,127,184,0.2)"}`, background: payMethod === opt.id ? "var(--plum-t)" : "#fff", textAlign: "left", cursor: "pointer" }}>
@@ -1283,11 +1271,7 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
               You will be redirected to {BOOKING_GATEWAY_LABEL[payMethod]} to complete payment securely. Once paid, you will receive a WhatsApp confirmation.
             </p>
             <button className="btn-plum" style={{ width: "100%", padding: "0.875rem" }} onClick={handleBookingPay} disabled={loading}>
-              {loading
-                ? "Redirecting…"
-                : payMethod === "happypay"
-                  ? "Pay later with HappyPay"
-                  : `Pay ${fmt(selected.price)} with ${BOOKING_GATEWAY_LABEL[payMethod]}`}
+              {loading ? "Redirecting…" : `Pay ${fmt(selected.price)} with ${BOOKING_GATEWAY_LABEL[payMethod]}`}
             </button>
           </>
         )}

@@ -211,6 +211,11 @@ export interface Product {
   starts_at?: string | null;
   expires_at?: string | null;
   payfast_payment_id?: string | null;
+  // Drives lib/payments/eligibility.ts: an order where every line item has
+  // this set to true is 100% Umuhle profit (no partner payout), so it's
+  // forced onto Ozow instead of TradeSafe's escrow — see lib/payouts.ts
+  // for the payout-side logic that already reads this same column.
+  is_umuhle_product?: boolean | null;
   // ── Gallery + variation fields ──
   // Not yet columns on `products` (checked July 2026) — kept optional so the
   // product page's gallery rail and Colour/Size pickers render once these
@@ -228,7 +233,12 @@ export interface CartItem {
   quantity: number;
 }
 
-export type PaymentMethod = "payfast" | "happypay" | "google_pay" | "ozow";
+// "tradesafe" and "ozow" are the only two gateways new payments can use
+// (see lib/payments/gateways.ts). "payfast" | "happypay" | "google_pay"
+// are kept here only so existing rows created before this change — and
+// any admin screen still displaying them — keep typechecking; nothing
+// should ever write those values again.
+export type PaymentMethod = "tradesafe" | "ozow" | "payfast" | "happypay" | "google_pay";
 
 export interface Order {
   id: string;
@@ -240,7 +250,7 @@ export interface Order {
   contact_whatsapp: string | null;
   payment_method: PaymentMethod | null;
   payfast_payment_id: string | null;
-  gateway_order_id: string | null; // HappyPay order id / Google Pay token reference
+  gateway_order_id: string | null; // TradeSafe transaction id / Ozow TransactionId
   created_at: string;
   order_items?: OrderItem[];
 }
@@ -410,7 +420,7 @@ export const ACCOUNT_TYPES: { id: AccountType; label: string; blurb: string }[] 
 // These four tiers are the ONE pricing model behind every paid listing on
 // Umuhle — whether that listing is a product or a general ad. "ads" here
 // means "listing slots" (kept as `ads` rather than renamed, so every
-// existing call site that reads pkg.ads — payfast/initiate, payfast/notify,
+// existing call site that reads pkg.ads — ozow/initiate, fulfillment.ts,
 // emails — keeps working unchanged).
 export const AD_PACKAGES = [
   { id: "starter",  name: "Starter",  price: 2000,  ads: 1,  weeks: 6,  label: "6 weeks" },

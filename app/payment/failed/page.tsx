@@ -14,7 +14,7 @@ function FailedContent() {
   const params = useSearchParams();
   const ref    = params.get("ref");
   const type   = params.get("type");
-  const method = params.get("method") ?? "payfast";
+  const method = params.get("method") ?? "tradesafe";
 
   // Safety net alongside the real webhook — see
   // app/api/payments/finalize/route.ts for why this exists and why it's

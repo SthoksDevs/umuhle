@@ -1,11 +1,13 @@
 // lib/payments/types.ts
 //
 // The normalized shape every gateway's webhook gets translated into before
-// any business decision is made. Whatever PayFast/HappyPay/Ozow-specific
-// parsing and signature checking happens stays in that gateway's own route
+// any business decision is made. Whatever TradeSafe/Ozow-specific parsing
+// and signature/secret checking happens stays in that gateway's own route
 // file; by the time fulfillPayment() (./fulfillment.ts) is called, gateway
-// identity only matters for logging and for which "gateway reference"
-// column gets written — never for what decision gets made.
+// identity only matters for logging, for which "gateway reference" column
+// gets written, and for TradeSafe's own escrow-release calls (see
+// fulfillOrder/fulfillBooking/fulfillStoreBookingDeposit) — never for what
+// business decision gets made.
 
 import type { PaymentGateway } from "./gateways";
 
@@ -15,7 +17,7 @@ export type PaymentType = "booking" | "order" | "ad" | "salon" | "product_listin
 export type PaymentOutcome = "paid" | "cancelled" | "failed";
 
 export interface PaymentEvent {
-  /** Which gateway produced this notification — for logging and the audit-trail column only. */
+  /** Which gateway produced this notification — for logging, the audit-trail column, and TradeSafe's escrow-release branch in fulfillment.ts. */
   gateway: PaymentGateway;
   type: PaymentType;
   outcome: PaymentOutcome;
@@ -29,9 +31,7 @@ export interface PaymentEvent {
   referenceId: string;
   /**
    * The gateway's own transaction/order reference, if it supplied one at
-   * notification time (PayFast's pf_payment_id, Ozow's TransactionId).
-   * HappyPay doesn't send one to its webhook URLs, so this is routinely
-   * undefined for HappyPay events — that's expected, not an error.
+   * notification time (TradeSafe's transaction id, Ozow's TransactionId).
    */
   gatewayPaymentId?: string;
 }

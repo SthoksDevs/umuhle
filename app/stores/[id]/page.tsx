@@ -173,6 +173,9 @@ function Gallery({ urls }: { urls: string[] }) {
 }
 
 // ── Booking form ──────────────────────────────────────────────────────────────
+type StoreDepositPayMethod = "tradesafe" | "ozow";
+const DEPOSIT_GATEWAY_LABEL: Record<StoreDepositPayMethod, string> = { tradesafe: "TradeSafe", ozow: "Ozow" };
+
 function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
   const supabase = createClient();
   const router = useRouter();
@@ -189,6 +192,13 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
   const [staff, setStaff] = useState<BranchStaffOption[]>([]);
   const [structuredServices, setStructuredServices] = useState<SalonServiceOption[]>([]);
   const [structuredLoading, setStructuredLoading] = useState(true);
+  // Deposits are TradeSafe-eligible whenever they clear the R50 minimum
+  // (see lib/payments/eligibility.ts) — mirrors the picker pattern in
+  // app/checkout/page.tsx and the BookingDrawer above, just more compact.
+  const [depositPayMethod, setDepositPayMethod] = useState<StoreDepositPayMethod>("tradesafe");
+  const [availableDepositGateways, setAvailableDepositGateways] = useState<Set<StoreDepositPayMethod>>(
+    new Set<StoreDepositPayMethod>(["tradesafe", "ozow"])
+  );
 
   useEffect(() => {
     (async () => {
@@ -312,17 +322,22 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
     setDone(true);
   };
 
-  // Pays a deposit through PayFast instead of the free/no-deposit insert
-  // above — see app/api/payfast/initiate/route.ts (initiateStoreBookingDeposit)
+  // Pays a deposit through TradeSafe or Ozow instead of the free/no-deposit
+  // insert above — see app/api/tradesafe/initiate/route.ts and
+  // app/api/ozow/initiate/route.ts (both handle "store_booking_deposit"),
   // and lib/payments/fulfillment.ts (fulfillStoreBookingDeposit). The
   // store_bookings row is created server-side once payment is confirmed,
-  // not here — this only ever kicks off the redirect.
+  // not here — this only ever kicks off the redirect. Deposits belong to
+  // the salon (see lib/payments/eligibility.ts), so both gateways are
+  // genuinely in play here, unlike ads/listings/salon subscriptions which
+  // are Ozow-only.
   const payDeposit = async () => {
     setError("");
     if (!fieldsOk()) return;
     setDepositSaving(true);
     try {
-      const res = await fetch("/api/payfast/initiate", {
+      const endpoint = depositPayMethod === "tradesafe" ? "/api/tradesafe/initiate" : "/api/ozow/initiate";
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -339,17 +354,19 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Couldn't start payment.");
+      if (!res.ok) {
+        // Same fallback reasoning as app/checkout/page.tsx's handleTradeSafe.
+        if (data.code === "GATEWAY_INELIGIBLE" && data.fallback === "ozow" && depositPayMethod !== "ozow") {
+          setDepositPayMethod("ozow");
+          setDepositSaving(false);
+          setError(data.error ?? "Please pay via Ozow instead.");
+          return;
+        }
+        throw new Error(data.error ?? "Couldn't start payment.");
+      }
 
       gTag("form_submit", { form_name: "store_booking_deposit", store_id: salon.id, service: selectedService?.name });
-
-      const f = document.createElement("form");
-      f.method = "POST"; f.action = data.payfastUrl;
-      Object.entries(data.params as Record<string, string>).forEach(([k, v]) => {
-        const inp = document.createElement("input"); inp.type = "hidden"; inp.name = k; inp.value = v; f.appendChild(inp);
-      });
-      document.body.appendChild(f);
-      f.submit();
+      window.location.href = data.redirectUrl;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Couldn't start payment. Please try again.");
       setDepositSaving(false);
@@ -368,6 +385,27 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
   );
 
   const depositRand = hasStructuredServices && selectedService?.deposit_amount ? (selectedService.deposit_amount / 100).toFixed(2) : null;
+
+  useEffect(() => {
+    if (!selectedService?.deposit_amount) return;
+    const params = new URLSearchParams({ type: "store_booking_deposit", amountCents: String(selectedService.deposit_amount) });
+    fetch(`/api/payments/gateways?${params}`)
+      .then((res) => res.json())
+      .then((data: { gateways: string[] }) => {
+        setAvailableDepositGateways(new Set<StoreDepositPayMethod>(data.gateways as StoreDepositPayMethod[]));
+      })
+      .catch(() => {
+        // If this fails, keep showing every method rather than hiding all
+        // payment options over a transient network error.
+      });
+  }, [selectedService?.deposit_amount]);
+
+  useEffect(() => {
+    if (availableDepositGateways.has(depositPayMethod)) return;
+    const fallback = (["tradesafe", "ozow"] as StoreDepositPayMethod[]).find((m) => availableDepositGateways.has(m));
+    if (fallback) setDepositPayMethod(fallback);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableDepositGateways]);
 
   return (
     <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.5rem" }}>
@@ -439,9 +477,24 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
             Pay a R{depositRand} deposit now and your slot is confirmed instantly — no waiting on a callback.
           </p>
           {user ? (
-            <button onClick={payDeposit} disabled={depositSaving || saving} className="btn-plum" style={{ width: "100%", padding: "0.8rem", borderRadius: 100, fontSize: "0.92rem", fontWeight: 600, cursor: depositSaving?"not-allowed":"pointer", opacity: depositSaving?0.7:1 }}>
-              {depositSaving ? "Redirecting to payment…" : `Pay R${depositRand} deposit & confirm`}
-            </button>
+            <>
+              {availableDepositGateways.size > 1 && (
+                <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.7rem" }}>
+                  {(["tradesafe", "ozow"] as StoreDepositPayMethod[]).filter((m) => availableDepositGateways.has(m)).map((m) => (
+                    <button key={m} type="button" onClick={() => setDepositPayMethod(m)}
+                      style={{ flex: 1, padding: "0.5rem", borderRadius: 100, fontSize: "0.8rem", fontWeight: 600, cursor: "pointer",
+                        border: `1.5px solid ${depositPayMethod === m ? "var(--plum)" : "rgba(155,127,184,0.25)"}`,
+                        background: depositPayMethod === m ? "var(--plum)" : "#fff",
+                        color: depositPayMethod === m ? "#fff" : "var(--plum-d)" }}>
+                      {DEPOSIT_GATEWAY_LABEL[m]}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <button onClick={payDeposit} disabled={depositSaving || saving} className="btn-plum" style={{ width: "100%", padding: "0.8rem", borderRadius: 100, fontSize: "0.92rem", fontWeight: 600, cursor: depositSaving?"not-allowed":"pointer", opacity: depositSaving?0.7:1 }}>
+                {depositSaving ? "Redirecting to payment…" : `Pay R${depositRand} deposit with ${DEPOSIT_GATEWAY_LABEL[depositPayMethod]}`}
+              </button>
+            </>
           ) : (
             <button onClick={() => router.push(`${pathname}?auth=login`)} className="btn-plum" style={{ width: "100%", padding: "0.8rem", borderRadius: 100, fontSize: "0.92rem", fontWeight: 600 }}>
               Log in to pay deposit & confirm

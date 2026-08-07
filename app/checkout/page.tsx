@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback, Suspense } from "react";
 import { useCart } from "@/lib/cart-context";
 import { createClient } from "@/lib/supabase/client";
-import GooglePayButton from "@/components/GooglePayButton";
 import type { User } from "@supabase/supabase-js";
 import type { Profile } from "@/types";
 import Image from "next/image";
@@ -14,7 +13,7 @@ import AuthModal from "@/components/AuthModal";
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
-type PayMethod = "payfast" | "happypay" | "google_pay" | "ozow";
+type PayMethod = "tradesafe" | "ozow";
 
 // ── Coupon types ──────────────────────────────────────────────────────────────
 interface Coupon {
@@ -248,10 +247,10 @@ interface PaymentOption {
 
 const PAYMENT_OPTIONS: PaymentOption[] = [
   {
-    id: "payfast",
-    label: "PayFast",
-    description: "Secure card, EFT and digital wallet payments",
-    tagline: "Cards & Instant EFT with PayFast",
+    id: "tradesafe",
+    label: "TradeSafe",
+    description: "Secure escrow — card, EFT, SnapScan & PayJustNow",
+    tagline: "Cards, EFT & more via TradeSafe",
     badges: ["Visa", "Mastercard", "Instant EFT", "SnapScan"],
   },
   {
@@ -261,34 +260,16 @@ const PAYMENT_OPTIONS: PaymentOption[] = [
     tagline: "Instant EFT with Ozow",
     badges: ["Instant EFT"],
   },
-  {
-    id: "happypay",
-    label: "HappyPay",
-    description: "Buy now, pay later with instalments",
-    tagline: "Buy Now, Pay Later with HappyPay",
-    badges: ["Pay in instalments"],
-  },
-  {
-    id: "google_pay",
-    label: "Google Pay",
-    description: "Pay using your saved Google payment methods",
-    tagline: "Fast, secure checkout with Google Pay",
-    badges: ["Google Pay"],
-  },
 ];
 
 // Local brand assets — drop the real files in place at these paths:
-//   /public/payment/payfast.svg
+//   /public/payment/tradesafe.svg
 //   /public/payment/ozow.svg
-//   /public/payment/happypay.svg
-//   /public/payment/google-pay.svg
 // GatewayLogo below falls back to a neutral card glyph if a file is
 // missing or fails to load, so an absent logo never breaks the layout.
 const GATEWAY_LOGOS: Record<PayMethod, string> = {
-  payfast: "/payment/payfast.svg",
+  tradesafe: "/payment/tradesafe.svg",
   ozow: "/payment/ozow.svg",
-  happypay: "/payment/happypay.svg",
-  google_pay: "/payment/google-pay.svg",
 };
 
 function GatewayLogo({ id, className = "payment-method-logo" }: { id: PayMethod; className?: string }) {
@@ -316,22 +297,21 @@ function GatewayLogo({ id, className = "payment-method-logo" }: { id: PayMethod;
 export default function CheckoutPage() {
   const router = useRouter();
   const supabase = createClient();
-  const { items, subtotal, count, clear } = useCart();
+  const { items, subtotal, count } = useCart();
 
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [payMethod, setPayMethod] = useState<PayMethod>("payfast");
+  const [payMethod, setPayMethod] = useState<PayMethod>("tradesafe");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [discount, setDiscount] = useState(0);
   const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
   // Defaults to "everything on" so there's no flash of a shorter list while
-  // /api/payments/gateways is loading — the common case is nothing paused.
-  // google_pay isn't part of the pause system (lib/payments/gateways.ts
-  // only covers PayFast/HappyPay/Ozow) so it's always included here.
+  // /api/payments/gateways is loading — the common case is nothing paused
+  // and the cart clears both eligibility rules (see lib/payments/eligibility.ts).
   const [availableGateways, setAvailableGateways] = useState<Set<PayMethod>>(
-    new Set<PayMethod>(["payfast", "ozow", "happypay", "google_pay"])
+    new Set<PayMethod>(["tradesafe", "ozow"])
   );
 
   const [form, setForm] = useState({
@@ -345,6 +325,11 @@ export default function CheckoutPage() {
   });
 
   const total = Math.max(0, subtotal - discount);
+  // Drives lib/payments/eligibility.ts's Umuhle-profit-only rule: true only
+  // when every line in the cart is Umuhle's own stock. products.
+  // is_umuhle_product comes through on every product fetch (they all
+  // select("*")) — see types/index.ts's Product interface.
+  const isUmuhleProfitOnly = items.length > 0 && items.every((line) => line.product.is_umuhle_product === true);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -367,25 +352,30 @@ export default function CheckoutPage() {
   }, [loading, count, router]);
 
   useEffect(() => {
-    fetch("/api/payments/gateways")
+    if (total <= 0) return; // nothing to price yet — first render before the cart's loaded
+    const params = new URLSearchParams({
+      type: "order",
+      amountCents: String(total),
+      profitOnly: String(isUmuhleProfitOnly),
+    });
+    fetch(`/api/payments/gateways?${params}`)
       .then((res) => res.json())
       .then((data: { gateways: string[] }) => {
-        setAvailableGateways(new Set<PayMethod>([...(data.gateways as PayMethod[]), "google_pay"]));
+        setAvailableGateways(new Set<PayMethod>(data.gateways as PayMethod[]));
       })
       .catch(() => {
         // If this fails, keep showing every method rather than hiding all
         // payment options over a transient network error.
       });
-  }, []);
+  }, [total, isUmuhleProfitOnly]);
 
   // If the pre-selected default (or a previous selection) turns out to be
-  // paused, fall back to whatever's actually available instead of leaving
-  // a disabled option selected.
+  // unavailable — paused, or the cart just became ineligible for it (see
+  // the effect above) — fall back to whatever's actually available instead
+  // of leaving a disabled option selected.
   useEffect(() => {
     if (availableGateways.has(payMethod)) return;
-    const fallback = (["payfast", "ozow", "happypay", "google_pay"] as PayMethod[]).find((m) =>
-      availableGateways.has(m)
-    );
+    const fallback = (["tradesafe", "ozow"] as PayMethod[]).find((m) => availableGateways.has(m));
     if (fallback) setPayMethod(fallback);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [availableGateways]);
@@ -403,10 +393,10 @@ export default function CheckoutPage() {
       .eq("id", appliedCoupon.id);
   }, [appliedCoupon, supabase]);
 
-  const handlePayFast = async () => {
+  const handleTradeSafe = async () => {
     setSubmitting(true); setError("");
     try {
-      const res = await fetch("/api/payfast/initiate", {
+      const res = await fetch("/api/tradesafe/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -420,50 +410,30 @@ export default function CheckoutPage() {
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Payment failed");
+      if (!res.ok) {
+        // The cart can become TradeSafe-ineligible between page load and
+        // submit (a coupon just dropped the total under R50, say) — the
+        // effect above should already have hidden this button in that
+        // case, but if the request still lands here, fall back to Ozow
+        // automatically rather than showing a dead end. See
+        // lib/payments/eligibility.ts's GATEWAY_INELIGIBLE code.
+        if (data.code === "GATEWAY_INELIGIBLE" && data.fallback === "ozow") {
+          setPayMethod("ozow");
+          setSubmitting(false);
+          setError(data.error ?? "Please pay via Ozow instead.");
+          return;
+        }
+        throw new Error(data.error ?? "Payment failed");
+      }
       await recordCouponUsage();
 
-      // Build and submit the PayFast form.
-      // ⚠️  Do NOT call clear() here — if the user cancels on PayFast they
-      //     must land on /payment/cancel with their cart still intact.
-      //     Cart is cleared only after confirmed payment (see /payment/success).
-      const form2 = document.createElement("form");
-      form2.method = "POST"; form2.action = data.payfastUrl;
-      Object.entries(data.params as Record<string, string>).forEach(([k, v]) => {
-        const inp = document.createElement("input"); inp.type = "hidden"; inp.name = k; inp.value = v; form2.appendChild(inp);
-      });
-      document.body.appendChild(form2);
-      form2.submit();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Payment failed");
-      setSubmitting(false);
-    }
-  };
-
-  const handleHappyPay = async () => {
-    setSubmitting(true); setError("");
-    try {
-      const res = await fetch("/api/happypay/initiate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          items: items.map((l) => ({ productId: l.product.id, quantity: l.quantity })),
-          shippingAddress,
-          contactName: form.name,
-          contactWhatsapp: form.whatsapp,
-          discountCents: discount,
-          couponCode: appliedCoupon?.code ?? null,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "HappyPay failed");
-      await recordCouponUsage();
-
-      // ⚠️  Same as PayFast — do NOT clear cart here. Cart is cleared on
-      //     /payment/success after confirmed payment.
+      // ⚠️  Do NOT call clear() here — if the user cancels on TradeSafe's
+      //     checkout page they must land on /payment/cancelled with their
+      //     cart still intact. Cart is cleared only after confirmed
+      //     payment (see /payment/success).
       window.location.href = data.redirectUrl;
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "HappyPay payment failed");
+      setError(err instanceof Error ? err.message : "Payment failed");
       setSubmitting(false);
     }
   };
@@ -475,6 +445,7 @@ export default function CheckoutPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          type: "order",
           items: items.map((l) => ({ productId: l.product.id, quantity: l.quantity })),
           shippingAddress,
           contactName: form.name,
@@ -487,39 +458,11 @@ export default function CheckoutPage() {
       if (!res.ok) throw new Error(data.error ?? "Ozow failed");
       await recordCouponUsage();
 
-      // ⚠️  Same as PayFast/HappyPay — do NOT clear cart here. Cart is
+      // ⚠️  Same as TradeSafe — do NOT clear cart here. Cart is
       //     cleared on /payment/success after confirmed payment.
       window.location.href = data.redirectUrl;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Ozow payment failed");
-      setSubmitting(false);
-    }
-  };
-
-  const handleGooglePay = async (token: string) => {
-    setSubmitting(true); setError("");
-    try {
-      const res = await fetch("/api/orders/google-pay", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          token,
-          items: items.map((l) => ({ productId: l.product.id, quantity: l.quantity })),
-          shippingAddress,
-          contactName: form.name,
-          contactWhatsapp: form.whatsapp,
-          discountCents: discount,
-          couponCode: appliedCoupon?.code ?? null,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Google Pay failed");
-      await recordCouponUsage();
-      // Google Pay is confirmed synchronously by the server, so clear cart here.
-      clear();
-      router.push(`/payment/success?ref=${data.orderId}&method=google_pay`);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Google Pay failed");
       setSubmitting(false);
     }
   };
@@ -696,18 +639,9 @@ export default function CheckoutPage() {
                 </div>
               )}
 
-              {/* Consolidated methods — PayFast fans out to many networks,
-                  so show the full logo collage; other gateways show their
-                  one badge in the same panel shape. */}
-              {selectedPaymentOption?.id === "payfast" ? (
-                <div className="payment-methods-panel">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src="/payment/payfast-payment-methods-collage.webp"
-                    alt="Payment methods supported by PayFast: Visa, Mastercard, Instant EFT, SnapScan and more"
-                  />
-                </div>
-              ) : selectedPaymentOption ? (
+              {/* Badge panel — TradeSafe fans out to several networks, shown
+                  as badges (see PAYMENT_OPTIONS above); Ozow shows its one. */}
+              {selectedPaymentOption ? (
                 <div className="payment-methods-panel">
                   <div className="payment-method-badges">
                     {selectedPaymentOption.badges.map((badge) => (
@@ -726,10 +660,10 @@ export default function CheckoutPage() {
             )}
 
             {/* Pay buttons */}
-            {payMethod === "payfast" && (
+            {payMethod === "tradesafe" && (
               <button className="btn-plum" style={{ width: "100%", padding: "1rem", fontSize: "1rem" }}
-                onClick={handlePayFast} disabled={submitting || !isFormValid}>
-                {submitting ? "Redirecting…" : `Pay ${fmt(total)} with PayFast`}
+                onClick={handleTradeSafe} disabled={submitting || !isFormValid}>
+                {submitting ? "Redirecting…" : `Pay ${fmt(total)} with TradeSafe`}
               </button>
             )}
 
@@ -740,26 +674,12 @@ export default function CheckoutPage() {
               </button>
             )}
 
-            {payMethod === "happypay" && (
-              <div>
-                <button className="btn-plum" style={{ width: "100%", padding: "1rem", fontSize: "1rem" }}
-                  onClick={handleHappyPay} disabled={submitting || !isFormValid}>
-                  {submitting ? "Loading HappyPay…" : `Pay later with HappyPay`}
-                </button>
-                <p style={{ fontSize: "0.75rem", color: "var(--light)", textAlign: "center", marginTop: "0.5rem" }}>
-                  Split {fmt(total)} into manageable payments
-                </p>
-              </div>
-            )}
-
-            {payMethod === "google_pay" && (
-              <div style={{ opacity: isFormValid ? 1 : 0.5, pointerEvents: isFormValid ? "auto" : "none" }}>
-                <GooglePayButton
-                  amountCents={total}
-                  disabled={submitting || !isFormValid}
-                  onPaymentAuthorized={handleGooglePay}
-                />
-              </div>
+            {!availableGateways.has("tradesafe") && (
+              <p style={{ fontSize: "0.72rem", color: "var(--light)", textAlign: "center", marginTop: "0.5rem" }}>
+                {isUmuhleProfitOnly
+                  ? "This order is Umuhle stock only, so it's paid via Ozow."
+                  : "Orders under R50 are paid via Ozow."}
+              </p>
             )}
 
             {!isFormValid && (

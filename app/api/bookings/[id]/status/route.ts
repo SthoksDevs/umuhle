@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { createClient as createSessionClient, createServiceClient } from "@/lib/supabase/server";
 import { creditBookingPayout } from "@/lib/payouts";
+import { acceptAllocationDelivery } from "@/lib/tradesafe";
 import { createReviewInvite, buildReviewUrl } from "@/lib/review-invites";
 import { sendReviewInviteEmail } from "@/lib/email";
 import { notifyReviewInvite } from "@/lib/whatsapp";
@@ -100,11 +101,35 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       ...(status === "completed" ? { completed_at: new Date().toISOString() } : {}),
     })
     .eq("id", bookingId)
-    .select("id, status")
+    .select("id, status, payment_method, tradesafe_allocation_id, tradesafe_released_at")
     .single();
 
   if (error || !updated) {
     return NextResponse.json({ error: error?.message ?? "Booking not found" }, { status: 404 });
+  }
+
+  // TradeSafe holds this booking's payment in escrow rather than paying
+  // Umuhle directly — "completed" (the same moment creditBookingPayout()
+  // below credits the artist's own wallet from Umuhle's side) is also the
+  // right moment to release TradeSafe's hold, since the service has
+  // actually been rendered. Best-effort and independent of the payout
+  // logic below — a failure here shouldn't block marking the booking
+  // completed, and can be retried by re-POSTing the same status.
+  if (
+    status === "completed" &&
+    updated.payment_method === "tradesafe" &&
+    updated.tradesafe_allocation_id &&
+    !updated.tradesafe_released_at
+  ) {
+    try {
+      await acceptAllocationDelivery(updated.tradesafe_allocation_id);
+      await service
+        .from("bookings")
+        .update({ tradesafe_released_at: new Date().toISOString() })
+        .eq("id", bookingId);
+    } catch (e) {
+      console.error("[bookings/status] TradeSafe allocationAcceptDelivery failed:", e);
+    }
   }
 
   let payout: { credited: boolean; reason?: string } | null = null;

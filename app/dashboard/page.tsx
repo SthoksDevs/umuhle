@@ -817,8 +817,11 @@ function SalonForm({
       const { data: { publicUrl } } = supabase.storage.from("salon-gallery").getPublicUrl(path);
       urls.push(publicUrl);
  
-      // Record R5 charge (status = pending until PayFast confirms)
-      // In practice you'd initiate PayFast here; for now just log the intent
+      // Record R5 charge (status = pending until a gateway confirms it —
+      // this was never actually wired up to PayFast or anything else; it
+      // just logs the intent). Same shape as the R35 salon registration
+      // fee if this ever gets built out — see lib/payments/eligibility.ts,
+      // Ozow-only, since it'd be 100% Umuhle revenue.
       await supabase.from("photo_upload_charges").insert({
         owner_id: userId,
         salon_id: form.id ?? null,

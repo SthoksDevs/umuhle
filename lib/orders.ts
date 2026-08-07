@@ -1,5 +1,5 @@
 // lib/orders.ts
-// Shared helper used by both PayFast and HappyPay initiate routes
+// Shared helper used by both the TradeSafe and Ozow initiate routes
 // to create a pending order with validated products.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -21,7 +21,21 @@ interface PendingOrderOptions {
 }
 
 type CreateOrderResult =
-  | { result: { orderId: string; totalAmount: number; lines: OrderLine[] } }
+  | {
+      result: {
+        orderId: string;
+        totalAmount: number;
+        lines: OrderLine[];
+        /**
+         * True only when every line in the cart is Umuhle's own stock
+         * (products.is_umuhle_product) — used by
+         * lib/payments/eligibility.ts to force this order onto Ozow
+         * instead of TradeSafe, since there's no partner payout to
+         * protect with escrow when the money is 100% Umuhle's already.
+         */
+        isUmuhleProfitOnly: boolean;
+      };
+    }
   | { error: string };
 
 export async function createPendingOrder(
@@ -38,7 +52,7 @@ export async function createPendingOrder(
 
   const { data: products, error: productErr } = await supabase
     .from("products")
-    .select("id, name, price, stock_count, is_active, moderation_status, expires_at")
+    .select("id, name, price, stock_count, is_active, moderation_status, expires_at, is_umuhle_product")
     .in("id", productIds);
 
   if (productErr || !products) {
@@ -46,6 +60,7 @@ export async function createPendingOrder(
   }
 
   let totalAmount = 0;
+  let isUmuhleProfitOnly = true;
   const lines: OrderLine[] = [];
 
   for (const item of items) {
@@ -61,6 +76,7 @@ export async function createPendingOrder(
     }
     if (product.stock_count < item.quantity) return { error: `Insufficient stock for ${product.name}` };
     totalAmount += product.price * item.quantity;
+    if (!product.is_umuhle_product) isUmuhleProfitOnly = false;
     lines.push({ product_id: product.id, quantity: item.quantity, unit_price: product.price, name: product.name });
   }
 
@@ -93,5 +109,5 @@ export async function createPendingOrder(
     return { error: itemsErr.message };
   }
 
-  return { result: { orderId, totalAmount, lines } };
+  return { result: { orderId, totalAmount, lines, isUmuhleProfitOnly } };
 }

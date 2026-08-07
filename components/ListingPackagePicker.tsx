@@ -82,7 +82,10 @@ export default function ListingPackagePicker({ productId, productName, mode = "n
     setSubmitting(true);
     setError("");
     try {
-      const res = await fetch("/api/payfast/initiate", {
+      // Product listing fees are always 100% Umuhle revenue — no partner
+      // payout, ever — so Ozow is the only gateway, same as the R35 salon
+      // registration fee. See lib/payments/eligibility.ts.
+      const res = await fetch("/api/ozow/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "product_listing", productId, packageId: selected }),
@@ -90,15 +93,7 @@ export default function ListingPackagePicker({ productId, productName, mode = "n
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Payment initiation failed");
 
-      const form = document.createElement("form");
-      form.method = "POST"; form.action = data.payfastUrl;
-      Object.entries(data.params as Record<string, string>).forEach(([k, v]) => {
-        const inp = document.createElement("input");
-        inp.type = "hidden"; inp.name = k; inp.value = v;
-        form.appendChild(inp);
-      });
-      document.body.appendChild(form);
-      form.submit();
+      window.location.href = data.redirectUrl;
       // Intentionally leave submitting=true — page is navigating away.
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
@@ -208,7 +203,7 @@ export default function ListingPackagePicker({ productId, productName, mode = "n
         <button type="button" onClick={handlePay} disabled={submitting}
           className="btn-plum"
           style={{ flex: 2, padding: "0.75rem", borderRadius: 100, fontSize: "0.9rem", fontWeight: 600, cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.7 : 1 }}>
-          {submitting ? "Redirecting to payment…" : `Pay R${(LISTING_PACKAGES.find(p => p.id === selected)!.price / 100).toFixed(0)} with PayFast`}
+          {submitting ? "Redirecting to payment…" : `Pay R${(LISTING_PACKAGES.find(p => p.id === selected)!.price / 100).toFixed(0)} with Ozow`}
         </button>
       </div>
     </div>

@@ -1,28 +1,36 @@
 // lib/payments/webhook-secret.ts
 //
-// HappyPay and Ozow don't sign their webhook payloads the way PayFast's ITN
-// does (PayFast: MD5 signature, checked twice — see generateItnSignature()
-// and validateITN() in lib/payfast.ts). Instead, both gateways are handed a
-// one-time random secret embedded in the webhook/notify URL itself when the
-// order or booking is created, and simply echo it back via a `?secret=`
-// query param. Both routes verified this identically against the `orders`
-// table alone; this generalizes that lookup to whichever table the
-// payment's `type` actually lives in, so the same check now also covers
-// bookings.
+// Ozow doesn't sign its webhook payloads the way PayFast's ITN did
+// (PayFast: MD5 signature, checked twice — see generateItnSignature() and
+// validateITN(), both since removed along with lib/payfast.ts). Instead
+// Ozow is handed a one-time random secret embedded in the webhook/notify
+// URL itself when the order/booking/ad/etc. is created, and simply echoes
+// it back via a `?secret=` query param. This generalizes that lookup to
+// whichever table the payment's `type` actually lives in.
+//
+// TradeSafe uses a different model entirely — one static secret for the
+// whole callback URL, configured once in TradeSafe's own dashboard rather
+// than per-transaction — see isValidCallbackSecret() in lib/tradesafe.ts.
+// This file is Ozow-only.
 //
 // Deliberately kept OUT of fulfillment.ts — see the note at the top of that
 // file: nothing in there should need to know what a webhook secret is.
-// This is purely a transport-layer concern shared by two gateways.
+// This is purely a transport-layer concern.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PaymentType } from "./types";
 
-// Only the types HappyPay/Ozow can actually initiate today (see
-// app/api/happypay/initiate/route.ts and app/api/ozow/initiate/route.ts)
-// have a gateway_webhook_secret column at all.
+// Every type Ozow can initiate today (see app/api/ozow/initiate/route.ts)
+// has a gateway_webhook_secret column — ad/product_listing/salon/
+// store_booking_deposit picked theirs up in the same migration that moved
+// them off PayFast onto Ozow exclusively (see lib/payments/eligibility.ts).
 const SECRET_TABLE: Partial<Record<PaymentType, string>> = {
   order: "orders",
   booking: "booking_intents",
+  ad: "ads",
+  product_listing: "products",
+  salon: "salon_subscription_payments",
+  store_booking_deposit: "store_bookings",
 };
 
 /**

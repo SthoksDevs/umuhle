@@ -291,7 +291,7 @@ export async function notifyOrderPaid(opts: {
   orderId: string;
   itemCount: number;
   totalAmount: number; // cents
-  paymentMethod: "payfast" | "happypay" | "ozow" | "google_pay";
+  paymentMethod: "tradesafe" | "ozow";
 }) {
   // Uses the approved WABA template "umuhle_order" (header/button are static
   // in the template — "View order" -> https://umuhle.co.za/dashboard?tab=my-orders).

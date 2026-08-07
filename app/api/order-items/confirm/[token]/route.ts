@@ -20,6 +20,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { creditOrderItemPayout } from "@/lib/payouts";
+import { acceptAllocationDelivery } from "@/lib/tradesafe";
 
 function serviceClient() {
   return createClient(
@@ -63,7 +64,7 @@ export async function POST(_req: NextRequest, props: { params: Promise<{ token: 
   const service = serviceClient();
   const { data: item, error } = await service
     .from("order_items")
-    .select("id, shipped_at, delivered_at")
+    .select("id, order_id, shipped_at, delivered_at")
     .eq("confirm_token", params.token)
     .single();
 
@@ -97,6 +98,39 @@ export async function POST(_req: NextRequest, props: { params: Promise<{ token: 
   } catch (e) {
     console.error(`[order-items/confirm/${params.token}] crediting error:`, e);
     creditReason = e instanceof Error ? e.message : "Unknown error";
+  }
+
+  // TradeSafe holds the whole order's payment in one escrow allocation
+  // (see lib/tradesafe.ts) — it can only be released once, for the order
+  // as a whole, so this waits until every item on the order has its own
+  // delivered_at set before calling acceptAllocationDelivery. A partial
+  // shipment confirming one item does NOT release funds early. Best-effort
+  // and independent of the payout crediting above — a release failure
+  // here doesn't affect this customer's "delivered" confirmation, and can
+  // be retried by re-confirming (the /is("delivered_at", null) guard above
+  // means a repeat POST is a no-op for delivered_at, but this check below
+  // still re-runs, so it's safe to retry).
+  try {
+    const { data: order } = await service
+      .from("orders")
+      .select("id, payment_method, tradesafe_allocation_id, tradesafe_released_at")
+      .eq("id", item.order_id)
+      .single();
+
+    if (order?.payment_method === "tradesafe" && order.tradesafe_allocation_id && !order.tradesafe_released_at) {
+      const { data: siblingItems } = await service
+        .from("order_items")
+        .select("delivered_at")
+        .eq("order_id", item.order_id);
+
+      const allDelivered = (siblingItems ?? []).every((i) => i.delivered_at);
+      if (allDelivered) {
+        await acceptAllocationDelivery(order.tradesafe_allocation_id);
+        await service.from("orders").update({ tradesafe_released_at: new Date().toISOString() }).eq("id", order.id);
+      }
+    }
+  } catch (e) {
+    console.error(`[order-items/confirm/${params.token}] TradeSafe allocationAcceptDelivery failed:`, e);
   }
 
   // Product review invite is sent 5 days after delivery, not here — see

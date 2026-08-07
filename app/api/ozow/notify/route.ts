@@ -18,8 +18,9 @@
 // `type` defaults to "order" so an in-flight checkout session started
 // before this file's URL format changed still resolves correctly. `id`
 // falls back to the legacy `order_id` param name, same rationale as the
-// HappyPay webhook routes. Ozow now initiates both "order" and "booking"
-// (see app/api/ozow/initiate/route.ts).
+// old HappyPay webhook routes (removed — see the 2026-08 TradeSafe
+// migration). Ozow now initiates every payment type Umuhle sells (see
+// app/api/ozow/initiate/route.ts) — it's the universal fallback gateway.
 
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
@@ -50,9 +51,8 @@ export async function POST(req: NextRequest) {
     console.error("[Ozow Notify] Missing id/secret on NotifyUrl");
     return new NextResponse("Missing params", { status: 200 });
   }
-  if (type !== "order" && type !== "booking") {
-    // The only two payment types Ozow initiates today — see
-    // app/api/ozow/initiate/route.ts.
+  const SUPPORTED_TYPES: PaymentType[] = ["order", "booking", "ad", "product_listing", "salon", "store_booking_deposit"];
+  if (!SUPPORTED_TYPES.includes(type)) {
     console.error("[Ozow Notify] Unsupported payment type:", type);
     return new NextResponse("Unsupported payment type", { status: 200 });
   }

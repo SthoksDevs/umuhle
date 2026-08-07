@@ -3,9 +3,11 @@
 // Server-side status transitions for salon/store bookings. Mirrors
 // app/api/bookings/[id]/status/route.ts for artist bookings — direct
 // client-side writes to `store_bookings.status` should go through here
-// instead, the same reasoning as that route: otherwise side effects (here,
-// the salon review invite below) never get triggered. There's no payout
-// step for store bookings, so this is the simpler of the two.
+// instead, the same reasoning as that route: otherwise side effects (the
+// salon review invite, the deposit payout, and TradeSafe's escrow release
+// below) never get triggered. Deposits belong to the salon, not Umuhle
+// (confirmed 2026-08-06) — see recordStoreBookingDepositSplit /
+// creditStoreBookingDepositPayout in lib/payouts.ts.
 //
 // Callable by the salon's own owner (partner_salons.partner_id), via a
 // Bearer token — same auth pattern as
@@ -16,6 +18,8 @@ import { createClient } from "@supabase/supabase-js";
 import { createReviewInvite, buildReviewUrl } from "@/lib/review-invites";
 import { sendReviewInviteEmail } from "@/lib/email";
 import { notifyReviewInvite } from "@/lib/whatsapp";
+import { creditStoreBookingDepositPayout } from "@/lib/payouts";
+import { acceptAllocationDelivery } from "@/lib/tradesafe";
 
 const STORE_BOOKING_STATUSES = ["pending", "confirmed", "completed", "cancelled"] as const;
 type StoreBookingStatusValue = typeof STORE_BOOKING_STATUSES[number];
@@ -63,11 +67,42 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     .from("store_bookings")
     .update({ status })
     .eq("id", bookingId)
-    .select("id, status")
+    .select("id, status, payment_method, tradesafe_allocation_id, tradesafe_released_at")
     .single();
 
   if (error || !updated) {
     return NextResponse.json({ error: error?.message ?? "Booking not found" }, { status: 404 });
+  }
+
+  if (status === "completed") {
+    // Credits the salon owner's wallet with their 94.5% of the deposit —
+    // own try/catch, independent of everything else here. Safe to call
+    // repeatedly (creditStoreBookingDepositPayout no-ops once already
+    // credited).
+    try {
+      const result = await creditStoreBookingDepositPayout(service, bookingId);
+      if (!result.credited) {
+        console.log(`[store-bookings/status] deposit payout not credited: ${result.reason}`);
+      }
+    } catch (e) {
+      console.error("[store-bookings/status] deposit payout error:", e);
+    }
+
+    // TradeSafe holds this deposit in escrow rather than paying Umuhle
+    // directly — "completed" is also the right moment to release it, since
+    // the service has actually been rendered. Best-effort, independent of
+    // the payout above.
+    if (updated.payment_method === "tradesafe" && updated.tradesafe_allocation_id && !updated.tradesafe_released_at) {
+      try {
+        await acceptAllocationDelivery(updated.tradesafe_allocation_id);
+        await service
+          .from("store_bookings")
+          .update({ tradesafe_released_at: new Date().toISOString() })
+          .eq("id", bookingId);
+      } catch (e) {
+        console.error("[store-bookings/status] TradeSafe allocationAcceptDelivery failed:", e);
+      }
+    }
   }
 
   // Salon review invite (client_to_salon) — only when the booking is tied

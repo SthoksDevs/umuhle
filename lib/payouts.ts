@@ -1,15 +1,16 @@
 // lib/payouts.ts
 //
-// Marketplace payouts for bookings and product sales.
+// Marketplace payouts for bookings, store booking deposits, and product sales.
 //
 // Rules:
-//   - Umuhle takes a 5.5% commission on every booking and every product
-//     sale. The remaining 94.5% belongs to the artist / store partner.
+//   - Umuhle takes a 5.5% commission on every booking, every store booking
+//     deposit, and every product sale. The remaining 94.5% belongs to the
+//     artist / salon / store partner.
 //   - Ads and salon subscriptions never go through this module — that
 //     revenue is 100% Umuhle's, always.
 //   - The split is computed and stored as soon as payment clears (called
-//     from the PayFast/HappyPay/Ozow webhook handlers), so it's visible
-//     and auditable immediately. But it only turns into real money in the
+//     from fulfillment.ts, shared by every gateway's webhook handler), so
+//     it's visible and auditable immediately. But it only turns into real money in the
 //     artist/partner's wallet once the booking is marked "completed" or the
 //     order is marked "delivered" — see creditBookingPayout /
 //     creditOrderPayouts below.
@@ -76,7 +77,8 @@ export function formatPayoutDate(d: Date): string {
 /**
  * Records the commission/payout split on a booking as soon as it's paid for.
  * Call this right after a booking is created from a paid booking_intent
- * (PayFast ITN is currently the only gateway that sells bookings).
+ * (TradeSafe and Ozow both sell bookings — see fulfillment.ts's
+ * fulfillBooking).
  * Does not touch the wallet — that only happens on completion.
  */
 export async function recordBookingSplit(supabase: SupabaseClient, bookingId: string, totalAmountCents: number) {
@@ -158,13 +160,106 @@ export async function creditBookingPayout(
   return { credited: true };
 }
 
+// ── Store booking deposits ───────────────────────────────────────────────────
+// Deposits secure a customer's slot at a salon — they belong to the salon,
+// not Umuhle (confirmed 2026-08-06; ads/salon subscriptions above are the
+// only two things that are ever 100% Umuhle's). Same commission rate, same
+// pending -> completed -> credited lifecycle as recordBookingSplit /
+// creditBookingPayout above, just against store_bookings /
+// partner_salons.partner_id instead of bookings / artists.profile_id. Only
+// the deposit itself passes through Umuhle — the balance of the service
+// price is settled directly between salon and client — so the split is
+// computed on deposit_amount, not service_price.
+
+export async function recordStoreBookingDepositSplit(
+  supabase: SupabaseClient,
+  storeBookingId: string,
+  depositAmountCents: number
+) {
+  const { commissionCents, payoutCents } = splitCommission(depositAmountCents);
+  await supabase
+    .from("store_bookings")
+    .update({ commission_cents: commissionCents, payout_cents: payoutCents })
+    .eq("id", storeBookingId)
+    .is("commission_cents", null); // don't clobber if already set
+}
+
+/**
+ * Credits the salon owner's wallet for a completed store booking. Only
+ * fires once — safe to call every time a store booking's status is set to
+ * "completed". Mirrors creditBookingPayout(); see that function's comments
+ * for the idempotency reasoning, identical here.
+ */
+export async function creditStoreBookingDepositPayout(
+  supabase: SupabaseClient,
+  storeBookingId: string
+): Promise<{ credited: boolean; reason?: string }> {
+  const { data: booking, error } = await supabase
+    .from("store_bookings")
+    .select(`
+      id, status, deposit_amount, deposit_status, commission_cents, payout_cents, payout_credited_at,
+      salon:partner_salons(id, name, partner_id)
+    `)
+    .eq("id", storeBookingId)
+    .single();
+
+  if (error || !booking) return { credited: false, reason: "Booking not found" };
+  if (booking.status !== "completed") return { credited: false, reason: "Booking is not completed" };
+  if (booking.deposit_status !== "paid") return { credited: false, reason: "No deposit was paid on this booking" };
+  if (booking.payout_credited_at) return { credited: false, reason: "Already credited" };
+
+  const salonRow = Array.isArray(booking.salon) ? booking.salon[0] : booking.salon;
+  if (!salonRow?.partner_id) return { credited: false, reason: "Booking has no linked salon owner" };
+  if (!booking.deposit_amount) return { credited: false, reason: "No deposit amount on this booking" };
+
+  const { commissionCents, payoutCents } =
+    booking.payout_cents != null && booking.commission_cents != null
+      ? { commissionCents: booking.commission_cents, payoutCents: booking.payout_cents }
+      : splitCommission(booking.deposit_amount);
+
+  const { data: creditedFlag, error: rpcError } = await supabase.rpc("credit_wallet_earning", {
+    p_profile_id: salonRow.partner_id,
+    p_amount_cents: payoutCents,
+    p_description: `Booking deposit payout${salonRow.name ? ` — ${salonRow.name}` : ""} (${fmtR(booking.deposit_amount)} less 5.5% Umuhle commission)`,
+    p_source_type: "store_booking_deposit",
+    p_source_id: storeBookingId,
+    p_hold_days: PAYOUT_HOLD_DAYS,
+  });
+
+  if (rpcError) return { credited: false, reason: rpcError.message };
+
+  if (!creditedFlag) {
+    // Same resync as creditBookingPayout: the wallet already has this
+    // credited (per the database's own idempotency guard) but this row's
+    // own payout_credited_at never got stamped — an earlier attempt likely
+    // crashed between the two steps.
+    await supabase
+      .from("store_bookings")
+      .update({ commission_cents: commissionCents, payout_cents: payoutCents, payout_credited_at: new Date().toISOString() })
+      .eq("id", storeBookingId)
+      .is("payout_credited_at", null);
+    return { credited: false, reason: "Already credited" };
+  }
+
+  await supabase
+    .from("store_bookings")
+    .update({
+      commission_cents: commissionCents,
+      payout_cents: payoutCents,
+      payout_credited_at: new Date().toISOString(),
+    })
+    .eq("id", storeBookingId);
+
+  return { credited: true };
+}
+
 // ── Product orders ──────────────────────────────────────────────────────────
 
 /**
  * Records the per-item commission/payout split on every item in an order,
  * prorating any order-wide coupon discount across items by their share of
- * the subtotal. Call this right after an order is marked "paid" — from all
- * three payment webhooks (PayFast, HappyPay, Ozow).
+ * the subtotal. Call this right after an order is marked "paid" — from
+ * both payment webhooks (TradeSafe, Ozow).
  * Does not touch any wallet — that only happens once the order is delivered.
  */
 export async function recordOrderItemSplits(supabase: SupabaseClient, orderId: string) {

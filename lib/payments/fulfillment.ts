@@ -1,26 +1,33 @@
 // lib/payments/fulfillment.ts
 //
 // The "what happens after a payment" decisions for every payment type on
-// Umuhle — booking, shop order, ad, salon subscription, product listing.
+// Umuhle — booking, shop order, ad, salon subscription, product listing,
+// store booking deposit.
 //
 // This used to live entirely inside app/api/payfast/notify/route.ts,
 // because PayFast was the only gateway that handled anything beyond plain
 // shop orders. HappyPay and Ozow each grew their own smaller, slightly
-// diverging copy of just the order logic (HappyPay's copy was missing
-// stock decrement and the order-paid email — see fulfillOrder() below).
+// diverging copy of just the order logic. PayFast and HappyPay are gone
+// now (see the 2026-08 TradeSafe migration) — TradeSafe and Ozow are the
+// only two gateways left, and every payment type routes through one or the
+// other (see lib/payments/eligibility.ts for which).
 //
 // This file is the single version of the truth now. Every gateway's
 // webhook route does ONLY gateway-specific transport — verify a signature
 // or secret, translate that gateway's field names into a PaymentEvent (see
 // ./types) — and then calls fulfillPayment() below. Nothing in this file
-// imports lib/payfast, lib/happypay, or lib/ozow, and nothing in here knows
-// what an ITN, a HashCheck, or a webhook secret is. That's what makes a
-// gateway safe to pause (lib/payments/gateways.ts) or eventually remove
-// entirely without touching a single decision made in here.
+// imports lib/tradesafe or lib/ozow for signature/secret checking, and
+// nothing in here knows what a HashCheck or a webhook secret is. That's
+// what makes a gateway safe to pause (lib/payments/gateways.ts) or
+// eventually remove entirely without touching a single decision made in
+// here. TradeSafe's escrow-release calls (startAllocationDelivery/
+// acceptAllocationDelivery) are the one exception — those aren't transport,
+// they're a real fulfillment decision ("we've started/finished delivering
+// this order"), so they live here rather than in the callback route.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PaymentEvent, FulfillmentResult } from "./types";
-import { recordBookingSplit, recordOrderItemSplits } from "@/lib/payouts";
+import { recordBookingSplit, recordOrderItemSplits, recordStoreBookingDepositSplit } from "@/lib/payouts";
 import { notifyBookingCreated, notifyOrderPaid } from "@/lib/whatsapp";
 import {
   sendBookingConfirmedEmail,
@@ -32,6 +39,7 @@ import {
   sendProductListingPaidEmail,
 } from "@/lib/email";
 import { LISTING_PACKAGES } from "@/types";
+import { startAllocationDelivery } from "@/lib/tradesafe";
 
 const WEEKS: Record<string, number> = { starter: 6, growth: 12, business: 16, premium: 24 };
 const AD_COUNTS: Record<string, number> = { starter: 1, growth: 3, business: 6, premium: 10 };
@@ -40,18 +48,16 @@ const DURATION_LABELS: Record<string, string> = {
 };
 
 /**
- * `bookings.payfast_payment_id` predates multi-gateway support and is still
- * named after PayFast specifically — kept (PayFast-only) for backward
- * compatibility with anything already querying it, and supplemented below
- * by the gateway-neutral `payment_method` / `gateway_order_id` columns that
- * every gateway now writes to, the same pattern `orders` already used.
- *
- * `ads`, `product_listing` (products), and `salon` (salon_subscription_payments)
- * still only ever come from PayFast — HappyPay/Ozow don't sell those (see
- * the initiate routes) — so this stays PayFast-only for those three types.
+ * `bookings.payfast_payment_id` (and the equivalent on ads/products/
+ * listing_packages/salon_subscription_payments) predates multi-gateway
+ * support and is still named after PayFast specifically — kept around,
+ * frozen, for historical rows already using it. Every gateway from here on
+ * (TradeSafe, Ozow) writes to the gateway-neutral `gateway_order_id`
+ * column instead, the pattern `orders` already used before this file
+ * existed.
  */
-function legacyPayfastColumn(event: PaymentEvent): { payfast_payment_id: string | null } | Record<string, never> {
-  return event.gateway === "payfast" ? { payfast_payment_id: event.gatewayPaymentId ?? null } : {};
+function gatewayReferenceColumns(event: PaymentEvent): { gateway_order_id: string | null } {
+  return { gateway_order_id: event.gatewayPaymentId ?? null };
 }
 
 /**
@@ -132,11 +138,11 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
         artist_poc_name: intent.artist_poc_name,
         artist_poc_phone: intent.artist_poc_phone,
         payment_method: event.gateway,
-        gateway_order_id: event.gatewayPaymentId ?? null,
-        ...legacyPayfastColumn(event),
+        tradesafe_allocation_id: intent.tradesafe_allocation_id ?? null,
+        ...gatewayReferenceColumns(event),
       })
       .select(`
-        id, booking_date, booking_time, meeting_address, notes, total_amount,
+        id, booking_date, booking_time, meeting_address, notes, total_amount, tradesafe_allocation_id,
         client:profiles!bookings_client_id_fkey(full_name, phone, email),
         artist:artists!bookings_artist_id_fkey(
           display_name, point_of_contact_name, point_of_contact_phone,
@@ -159,6 +165,22 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
       await recordBookingSplit(supabase, booking.id, booking.total_amount);
     } catch (e) {
       console.error(`${tag} failed to record booking commission split`, e);
+    }
+
+    // Same escrow-lifecycle reasoning as fulfillOrder() below: TradeSafe
+    // holds this in escrow until acceptAllocationDelivery is called from
+    // app/api/bookings/[id]/status/route.ts when the artist marks the
+    // booking "completed" (the same moment creditBookingPayout() runs).
+    if (event.gateway === "tradesafe" && booking.tradesafe_allocation_id) {
+      try {
+        await startAllocationDelivery(booking.tradesafe_allocation_id);
+        await supabase
+          .from("bookings")
+          .update({ tradesafe_delivery_started_at: new Date().toISOString() })
+          .eq("id", booking.id);
+      } catch (e) {
+        console.error(`${tag} TradeSafe allocationStartDelivery failed`, e);
+      }
     }
 
     const clientRow = Array.isArray(booking.client) ? booking.client[0] : booking.client;
@@ -258,7 +280,7 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
   const { data: order } = await supabase
     .from("orders")
     .select(`
-      id, status, total_amount, shipping_address, created_at,
+      id, status, total_amount, shipping_address, created_at, tradesafe_allocation_id,
       client:profiles!orders_client_id_fkey(full_name, email, phone)
     `)
     .eq("id", event.referenceId)
@@ -290,7 +312,7 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
         status: "paid",
         paid_at: paidAt,
         ...(event.gatewayPaymentId ? { gateway_order_id: event.gatewayPaymentId } : {}),
-        ...legacyPayfastColumn(event),
+        ...gatewayReferenceColumns(event),
       })
       .eq("id", event.referenceId)
       .eq("status", "pending_payment");
@@ -298,6 +320,26 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
     if (orderItems) {
       for (const item of orderItems) {
         await supabase.rpc("decrement_stock", { p_product_id: item.product_id, p_qty: item.quantity });
+      }
+    }
+
+    // TradeSafe holds this payment in escrow rather than paying Umuhle
+    // directly (unlike Ozow) — moving the allocation to INITIATED here is
+    // what lets it later be released once delivery is confirmed (see
+    // acceptAllocationDelivery, called from
+    // app/api/order-items/confirm/[token]/route.ts once every item on the
+    // order is delivered). Best-effort: a failure here shouldn't block the
+    // order being marked paid — worst case, allocationAcceptDelivery later
+    // fails too and that gets surfaced/retried there instead.
+    if (event.gateway === "tradesafe" && order.tradesafe_allocation_id) {
+      try {
+        await startAllocationDelivery(order.tradesafe_allocation_id);
+        await supabase
+          .from("orders")
+          .update({ tradesafe_delivery_started_at: paidAt })
+          .eq("id", event.referenceId);
+      } catch (e) {
+        console.error(`${tag} TradeSafe allocationStartDelivery failed`, e);
       }
     }
 
@@ -420,7 +462,7 @@ async function fulfillAd(supabase: SupabaseClient, event: PaymentEvent, tag: str
       starts_at: now.toISOString(),
       expires_at: expiresAt.toISOString(),
       moderation_status: "scanning",
-      ...legacyPayfastColumn(event),
+      ...gatewayReferenceColumns(event),
     })
     .eq("id", event.referenceId)
     .eq("status", "pending_payment");
@@ -481,7 +523,7 @@ async function fulfillProductListing(supabase: SupabaseClient, event: PaymentEve
       slots_used: 1, // this payment's product consumes the first slot immediately
       status: "active",
       purchased_at: now.toISOString(),
-      ...legacyPayfastColumn(event),
+      ...gatewayReferenceColumns(event),
     })
     .select("id")
     .single();
@@ -494,7 +536,7 @@ async function fulfillProductListing(supabase: SupabaseClient, event: PaymentEve
       starts_at: now.toISOString(),
       expires_at: expiresAt.toISOString(),
       is_active: product.moderation_status === "approved",
-      ...legacyPayfastColumn(event),
+      ...gatewayReferenceColumns(event),
     })
     .eq("id", event.referenceId)
     .eq("listing_status", "pending_payment");
@@ -534,7 +576,7 @@ async function fulfillSalon(supabase: SupabaseClient, event: PaymentEvent, tag: 
     .from("salon_subscription_payments")
     .update({
       status: "paid",
-      ...legacyPayfastColumn(event),
+      ...gatewayReferenceColumns(event),
     })
     .eq("id", event.referenceId)
     .eq("status", "pending")
@@ -593,17 +635,44 @@ async function fulfillStoreBookingDeposit(supabase: SupabaseClient, event: Payme
       .update({
         deposit_status: "paid",
         status: "confirmed",
-        gateway_order_id: event.gatewayPaymentId ?? null,
+        ...gatewayReferenceColumns(event),
         deposit_paid_at: new Date().toISOString(),
       })
       .eq("id", event.referenceId)
-      .eq("deposit_status", "pending") // guards a duplicate ITN from re-applying this
-      .select("id")
+      .eq("deposit_status", "pending") // guards a duplicate notification from re-applying this
+      .select("id, deposit_amount, tradesafe_allocation_id")
       .single();
 
     if (error || !booking) {
       console.warn(`${tag} store booking not found or already processed`, event.referenceId);
       return { ok: true, message: "Already processed or unknown booking" };
+    }
+
+    // The deposit belongs to the salon, not Umuhle (confirmed 2026-08-06)
+    // — record the split now, same as recordBookingSplit for artist
+    // bookings. Doesn't touch the wallet yet — that's
+    // creditStoreBookingDepositPayout(), called once the salon marks the
+    // booking "completed" (app/api/store-bookings/[id]/status/route.ts).
+    try {
+      await recordStoreBookingDepositSplit(supabase, booking.id, booking.deposit_amount);
+    } catch (e) {
+      console.error(`${tag} failed to record store booking deposit split`, e);
+    }
+
+    // Same escrow-lifecycle reasoning as fulfillOrder/fulfillBooking:
+    // TradeSafe holds this in escrow until acceptAllocationDelivery is
+    // called from app/api/store-bookings/[id]/status/route.ts when the
+    // salon marks the booking "completed".
+    if (event.gateway === "tradesafe" && booking.tradesafe_allocation_id) {
+      try {
+        await startAllocationDelivery(booking.tradesafe_allocation_id);
+        await supabase
+          .from("store_bookings")
+          .update({ tradesafe_delivery_started_at: new Date().toISOString() })
+          .eq("id", booking.id);
+      } catch (e) {
+        console.error(`${tag} TradeSafe allocationStartDelivery failed`, e);
+      }
     }
 
     return { ok: true, message: "Store booking deposit confirmed" };

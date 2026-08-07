@@ -14,19 +14,20 @@ function CancelledContent() {
   const params = useSearchParams();
   const ref    = params.get("ref");
   const type   = params.get("type");
-  const method = params.get("method") ?? "payfast";
+  const method = params.get("method") ?? "tradesafe";
 
   // Most gateways don't send a server-to-server notification for a plain
-  // "shopper backed out before paying" cancellation — PayFast in
-  // particular never does (see app/api/payments/finalize/route.ts for the
-  // full explanation). This closes out the booking/order and sends the
-  // cancellation email if the real webhook hasn't already done so. Safe to
-  // call even when it has: finalize only ever acts on a still-pending
-  // record, so a webhook that already landed makes this a no-op.
+  // "shopper backed out before paying" cancellation — TradeSafe/PayFast's
+  // hosted checkout pages in particular never do (see
+  // app/api/payments/finalize/route.ts for the full explanation). This
+  // closes out the booking/order and sends the cancellation email if the
+  // real webhook hasn't already done so. Safe to call even when it has:
+  // finalize only ever acts on a still-pending record, so a webhook that
+  // already landed makes this a no-op.
   //
   // `type` is only present on checkouts started after this fix shipped —
-  // older in-flight PayFast redirects land here without it, in which case
-  // this silently no-ops, same as before this fix (no regression either way).
+  // older in-flight redirects land here without it, in which case this
+  // silently no-ops, same as before this fix (no regression either way).
   useEffect(() => {
     if (!ref || !type) return;
     fetch("/api/payments/finalize", {

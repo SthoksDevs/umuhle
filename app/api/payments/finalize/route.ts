@@ -1,13 +1,13 @@
 // app/api/payments/finalize/route.ts
 //
-// Why this exists: PayFast does not send an ITN at all when a shopper
-// simply backs out of its hosted page before submitting a payment method —
-// there's no transaction on PayFast's side to report, so no notification
-// ever arrives (see app/api/payfast/notify/route.ts and lib/payfast.ts —
-// that route only ever hears about COMPLETE or a genuinely attempted-and-
-// declined FAILED charge). Nothing was ever calling fulfillPayment() with
-// outcome "cancelled" for that case, which is why cancelling a payment
-// wasn't sending an email even though a real decline did.
+// Why this exists: a shopper can back out of a hosted checkout page
+// (TradeSafe or, previously, PayFast) before ever submitting a payment
+// method — there's no transaction on the gateway's side to report, so no
+// webhook notification ever arrives (see app/api/tradesafe/callback/route.ts
+// — that route only ever hears about a real state change). Nothing was
+// ever calling fulfillPayment() with outcome "cancelled" for that case,
+// which is why cancelling a payment wasn't sending an email even though a
+// real decline did.
 //
 // This route is the /payment/cancelled and /payment/failed pages calling
 // home once they mount, so a plain abandoned checkout still gets closed
@@ -21,12 +21,12 @@
 //   - It goes through the exact same fulfillPayment() every gateway's real
 //     webhook uses, including its `status = 'pending'/'pending_payment'`
 //     guard. So if the real webhook already landed — paid, or cancelled/
-//     failed via a gateway that DOES report it reliably (Ozow, HappyPay,
-//     or a genuine PayFast decline) — this call finds nothing left in
+//     failed via a gateway that DOES report it reliably (Ozow, or a
+//     genuine TradeSafe decline) — this call finds nothing left in
 //     "pending" and is a harmless no-op. No double emails.
 //   - The reference id is already exposed to the browser the moment
-//     checkout starts (it's embedded in the redirect URLs sent to PayFast/
-//     HappyPay/Ozow), so accepting it here from the client doesn't expose
+//     checkout starts (it's embedded in the redirect URLs sent to
+//     TradeSafe/Ozow), so accepting it here from the client doesn't expose
 //     anything that wasn't already client-visible. Worst case of a
 //     mismatched ref is closing out someone else's still-in-flight attempt
 //     early — no money moves and nothing sensitive is returned.
@@ -37,15 +37,15 @@ import { fulfillPayment } from "@/lib/payments/fulfillment";
 import type { PaymentEvent, PaymentType } from "@/lib/payments/types";
 import type { PaymentGateway } from "@/lib/payments/gateways";
 
-const VALID_TYPES: PaymentType[] = ["booking", "order", "ad", "salon", "product_listing"];
-const VALID_GATEWAYS: PaymentGateway[] = ["payfast", "happypay", "ozow"];
+const VALID_TYPES: PaymentType[] = ["booking", "order", "ad", "salon", "product_listing", "store_booking_deposit"];
+const VALID_GATEWAYS: PaymentGateway[] = ["tradesafe", "ozow"];
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
 
   const ref = body?.ref as string | undefined;
   const type = body?.type as PaymentType | undefined;
-  const gateway = (body?.gateway as PaymentGateway | undefined) ?? "payfast";
+  const gateway = (body?.gateway as PaymentGateway | undefined) ?? "tradesafe";
   const outcome = body?.outcome as string | undefined;
 
   if (!ref || !type) {
