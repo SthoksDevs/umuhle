@@ -126,6 +126,11 @@ async function getSellerToken(): Promise<string> {
 /** Creates (or reuses) a buyer party token for this checkout. Buyers never need banking details — TradeSafe only asks for those on refund, and only then. */
 async function createBuyerToken(buyer: { firstName: string; lastName: string; email: string; mobile: string }): Promise<string> {
   const data = await graphql<{ tokenCreate: { id: string } }>(
+    // TradeSafe uses a custom `Email` scalar for this field, not plain
+    // String — confirmed against their published schema
+    // (developer.tradesafe.co.za/api-spec/) after a live "expecting type
+    // Email" error. `mobile` IS plain String there, so that one's correct
+    // as-is.
     `mutation tokenCreate($givenName: String!, $familyName: String!, $email: Email!, $mobile: String!) {
       tokenCreate(input: { user: { givenName: $givenName, familyName: $familyName, email: $email, mobile: $mobile } }) {
         id
@@ -183,6 +188,14 @@ export async function initiateTradeSafeTransaction(
   const created = await graphql<{
     transactionCreate: { id: string; allocations: { id: string }[] };
   }>(
+    // Deliberately omits `workflow` — TradeSafe's own docs example for a
+    // single allocation (docs.tradesafe.co.za/api/transactions/#one-allocation)
+    // never sets it; only their Milestone/Drawdown multi-allocation examples
+    // do. "Standard (One payment)" in their prose describes the *default*
+    // behavior when omitted, not a confirmed `STANDARD` enum literal —
+    // guessing that literal risks the same "expecting type X" failure the
+    // $email/String-vs-Email mismatch caused, so this matches their exact
+    // confirmed-working shape instead.
     `mutation transactionCreate(
       $reference: String!, $title: String!, $description: String!, $industry: Industry!,
       $value: Float!, $daysToDeliver: Float!, $daysToInspect: Float!,
@@ -194,7 +207,6 @@ export async function initiateTradeSafeTransaction(
         description: $description
         industry: $industry
         currency: ZAR
-        workflow: STANDARD
         feeAllocation: $feeAllocation
         allocations: { create: [{ title: $title, description: $description, value: $value, daysToDeliver: $daysToDeliver, daysToInspect: $daysToInspect }] }
         parties: { create: [{ token: $buyerToken, role: BUYER }, { token: $sellerToken, role: SELLER }] }
