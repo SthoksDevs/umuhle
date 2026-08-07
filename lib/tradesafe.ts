@@ -126,7 +126,7 @@ async function getSellerToken(): Promise<string> {
 /** Creates (or reuses) a buyer party token for this checkout. Buyers never need banking details — TradeSafe only asks for those on refund, and only then. */
 async function createBuyerToken(buyer: { firstName: string; lastName: string; email: string; mobile: string }): Promise<string> {
   const data = await graphql<{ tokenCreate: { id: string } }>(
-    `mutation tokenCreate($givenName: String!, $familyName: String!, $email: String!, $mobile: String!) {
+    `mutation tokenCreate($givenName: String!, $familyName: String!, $email: Email!, $mobile: String!) {
       tokenCreate(input: { user: { givenName: $givenName, familyName: $familyName, email: $email, mobile: $mobile } }) {
         id
       }

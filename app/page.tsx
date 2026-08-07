@@ -41,13 +41,6 @@ const CAT_ICONS: Record<string, string> = { hair: "✂", nails: "◈", makeup: "
 
 type CartItem = { id: string; name: string; price: number };
 
-// ── Booking payment gateway picker ──────────────────────────────────────────
-// Mirrors the PayMethod pattern in app/checkout/page.tsx.
-type BookingPayMethod = "tradesafe" | "ozow";
-const BOOKING_GATEWAY_LABEL: Record<BookingPayMethod, string> = {
-  tradesafe: "TradeSafe", ozow: "Ozow",
-};
-
 // ── Pending "add to wishlist" intent ────────────────────────────────────────
 // Same idea as the cart's pending-add: if a logged-out visitor taps the heart
 // on an artist card, we remember which artist they meant, send them through
@@ -64,6 +57,26 @@ function getPendingWishlistAdd(): string | null {
 function clearPendingWishlistAdd() {
   if (typeof window === "undefined") return;
   try { window.sessionStorage.removeItem(PENDING_WISHLIST_KEY); } catch { /* ignore */ }
+}
+
+// ── Pending "book this artist" intent ───────────────────────────────────────
+// Same idea as pending-wishlist above: if a logged-out visitor taps "Book"
+// on an artist card, we remember which artist they meant, send them through
+// auth, and reopen the BookingDrawer for that artist once they're signed in
+// — instead of dropping them back on the homepage with the drawer closed
+// and no memory of what they were doing.
+const PENDING_BOOKING_KEY = "umuhle_pending_booking_artist";
+function setPendingBookingArtist(artistId: string) {
+  if (typeof window === "undefined") return;
+  try { window.sessionStorage.setItem(PENDING_BOOKING_KEY, artistId); } catch { /* ignore */ }
+}
+function getPendingBookingArtist(): string | null {
+  if (typeof window === "undefined") return null;
+  try { return window.sessionStorage.getItem(PENDING_BOOKING_KEY); } catch { return null; }
+}
+function clearPendingBookingArtist() {
+  if (typeof window === "undefined") return;
+  try { window.sessionStorage.removeItem(PENDING_BOOKING_KEY); } catch { /* ignore */ }
 }
 
 // ─── Category pill nav with scroll arrow ──────────────────────────────────────
@@ -366,6 +379,26 @@ export default function Home() {
     })();
   }, [user]);
 
+  // Replay a pending "book this artist" click that happened while logged
+  // out. Fetched directly by id rather than pulled from `artists`/
+  // `provinceFallback` — those lists are geo/filter-dependent and may not
+  // contain this artist by the time the page reloads post-login.
+  useEffect(() => {
+    if (!user) return;
+    const pendingId = getPendingBookingArtist();
+    if (!pendingId) return;
+    clearPendingBookingArtist();
+    supabase
+      .from("artists")
+      .select("*, services(id, name, price, duration_minutes, is_active)")
+      .eq("id", pendingId)
+      .eq("is_active", true)
+      .eq("moderation_status", "approved")
+      .maybeSingle()
+      .then(({ data }) => { if (data) setSelectedArtist(data as Artist); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
   const toggleWishlist = useCallback(async (artistId: string) => {
     if (!user) {
       // Remember the intent, keep them on the homepage after they sign in
@@ -627,7 +660,7 @@ export default function Home() {
                       isWishlisted={wishlistIds.has(artist.id)}
                       onToggleWishlist={() => toggleWishlist(artist.id)}
                       onBook={() => {
-                        if (!user) { router.push("/?auth=login"); return; }
+                        if (!user) { setPendingBookingArtist(artist.id); router.push("/?auth=login"); return; }
                         setSelectedArtist(artist);
                         ttq("ViewContent", { contents: [{ content_id: artist.id, content_name: artist.display_name }] });
                         fbq("ViewContent", { content_ids: [artist.id], content_name: artist.display_name });
@@ -818,12 +851,6 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState("");
   const [reviews, setReviews]     = useState<ArtistReview[]>([]);
-  const [payMethod, setPayMethod] = useState<BookingPayMethod>("tradesafe");
-  // Defaults to "everything on" so there's no flash of a shorter list while
-  // /api/payments/gateways is loading — mirrors app/checkout/page.tsx.
-  const [availableGateways, setAvailableGateways] = useState<Set<BookingPayMethod>>(
-    new Set<BookingPayMethod>(["tradesafe", "ozow"])
-  );
   const geo = useGeolocation();
 
   // Local calendar date as YYYY-MM-DD, matching what <input type="date">
@@ -972,29 +999,6 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
       .catch(() => setReviews([]));
   }, [artist.id, artist.review_count]);
 
-  useEffect(() => {
-    if (!selected) return; // price isn't known until a service is picked
-    const params = new URLSearchParams({ type: "booking", amountCents: String(selected.price) });
-    fetch(`/api/payments/gateways?${params}`)
-      .then((res) => res.json())
-      .then((data: { gateways: string[] }) => {
-        setAvailableGateways(new Set<BookingPayMethod>(data.gateways as BookingPayMethod[]));
-      })
-      .catch(() => {
-        // If this fails, keep showing every method rather than hiding all
-        // payment options over a transient network error.
-      });
-  }, [selected]);
-
-  // If the pre-selected default (or a previous selection) turns out to be
-  // unavailable, fall back to whatever's actually available.
-  useEffect(() => {
-    if (availableGateways.has(payMethod)) return;
-    const fallback = (["tradesafe", "ozow"] as BookingPayMethod[]).find((m) => availableGateways.has(m));
-    if (fallback) setPayMethod(fallback);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [availableGateways]);
-
   const handleTradeSafe = async () => {
     if (!selected || !address.trim() || !pocName.trim() || !pocPhone.trim()) return;
     setLoading(true); setError("");
@@ -1006,16 +1010,6 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
       });
       const data = await res.json();
       if (!res.ok) {
-        // Same reasoning as app/checkout/page.tsx's handleTradeSafe — the
-        // service price can be under TradeSafe's R50 minimum, and the
-        // picker should already have hidden this option in that case, but
-        // fall back rather than dead-end if it's picked anyway.
-        if (data.code === "GATEWAY_INELIGIBLE" && data.fallback === "ozow") {
-          setPayMethod("ozow");
-          setLoading(false);
-          setError(data.error ?? "Please pay via Ozow instead.");
-          return;
-        }
         throw new Error(data.error ?? "Payment initiation failed");
       }
       window.location.href = data.redirectUrl;
@@ -1024,26 +1018,6 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
       setLoading(false);
     }
   };
-
-  const handleOzow = async () => {
-    if (!selected || !address.trim() || !pocName.trim() || !pocPhone.trim()) return;
-    setLoading(true); setError("");
-    try {
-      const res = await fetch("/api/ozow/initiate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "booking", serviceId: selected.id, artistId: artist.id, bookingDate: date, bookingTime: time, meetingAddress: address, clientPocName: pocName, clientPocPhone: pocPhone }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Ozow payment failed");
-      window.location.href = data.redirectUrl;
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-      setLoading(false);
-    }
-  };
-
-  const handleBookingPay = payMethod === "tradesafe" ? handleTradeSafe : handleOzow;
 
   const inputStyle: React.CSSProperties = { padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", width: "100%", boxSizing: "border-box" };
 
@@ -1247,31 +1221,12 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
               </div>
             )}
 
-            <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.5rem" }}>Payment method</p>
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", marginBottom: "1.25rem" }}>
-              {([
-                { id: "tradesafe" as BookingPayMethod, label: "TradeSafe", sub: "Card, EFT, SnapScan, PayJustNow & more" },
-                { id: "ozow" as BookingPayMethod, label: "Ozow", sub: "Instant EFT — pay straight from your bank app" },
-              ]).filter((opt) => availableGateways.has(opt.id)).map((opt) => (
-                <button key={opt.id} onClick={() => setPayMethod(opt.id)}
-                  style={{ display: "flex", alignItems: "center", gap: "0.85rem", padding: "0.85rem 1rem", borderRadius: 12, border: `1.5px solid ${payMethod === opt.id ? "var(--plum)" : "rgba(155,127,184,0.2)"}`, background: payMethod === opt.id ? "var(--plum-t)" : "#fff", textAlign: "left", cursor: "pointer" }}>
-                  <div style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${payMethod === opt.id ? "var(--plum)" : "#E0E0E0"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                    {payMethod === opt.id && <div style={{ width: 9, height: 9, borderRadius: "50%", background: "var(--plum)" }} />}
-                  </div>
-                  <div>
-                    <p style={{ fontWeight: 500, fontSize: "0.9rem", margin: 0 }}>{opt.label}</p>
-                    <p style={{ fontSize: "0.75rem", color: "var(--grey)", margin: 0 }}>{opt.sub}</p>
-                  </div>
-                </button>
-              ))}
-            </div>
-
             {error && <p style={{ color: "#E53935", fontSize: "0.85rem", marginBottom: "1rem" }}>{error}</p>}
             <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginBottom: "1.25rem" }}>
-              You will be redirected to {BOOKING_GATEWAY_LABEL[payMethod]} to complete payment securely. Once paid, you will receive a WhatsApp confirmation.
+              You will be redirected to TradeSafe to complete payment securely — your money stays in escrow until the appointment is done. Once paid, you will receive a WhatsApp confirmation.
             </p>
-            <button className="btn-plum" style={{ width: "100%", padding: "0.875rem" }} onClick={handleBookingPay} disabled={loading}>
-              {loading ? "Redirecting…" : `Pay ${fmt(selected.price)} with ${BOOKING_GATEWAY_LABEL[payMethod]}`}
+            <button className="btn-plum" style={{ width: "100%", padding: "0.875rem" }} onClick={handleTradeSafe} disabled={loading}>
+              {loading ? "Redirecting…" : `Pay ${fmt(selected.price)} now to Book`}
             </button>
           </>
         )}

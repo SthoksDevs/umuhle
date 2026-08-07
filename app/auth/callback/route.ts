@@ -8,7 +8,7 @@ export async function GET(request: Request) {
   const code = searchParams.get("code");
   console.log("CODE EXISTS:", !!code);
 
-  const next = searchParams.get("next") ?? "/";
+  const nextParam = searchParams.get("next");
 
   if (code) {
     const supabase = await createClient();
@@ -16,8 +16,15 @@ export async function GET(request: Request) {
     console.log("EXCHANGE ERROR:", error);
     if (!error) {
       console.log("SESSION CREATED");
-      // Always redirect to dashboard after email confirmation or OAuth
-      const redirectTo = next === "/" ? "/dashboard" : next;
+      // Only fall back to /dashboard when no next was sent at all (e.g. an
+      // email-confirmation link, which never includes one). When a next IS
+      // present, respect it even if it's literally "/" — AuthModal's
+      // handleOAuth always sends the page the modal was opened from as
+      // next, and for a login triggered from the homepage that page IS
+      // "/". Treating that as "no intent" (the old `next === "/"` check)
+      // is what was bouncing homepage logins to /dashboard instead of
+      // back to the artist they were trying to book.
+      const redirectTo = nextParam && nextParam.startsWith("/") ? nextParam : "/dashboard";
 
       // Behind a proxy (e.g. Vercel), `origin` derived from the request URL can
       // resolve to an internal host. Prefer the public host the browser
