@@ -99,7 +99,19 @@ async function graphql<T>(query: string, variables: Record<string, unknown>): Pr
     body: JSON.stringify({ query, variables }),
   });
 
-  const json = (await res.json()) as GraphQLResponse<T>;
+  // Read as text first — TradeSafe's API occasionally returns a plain-text
+  // error page (e.g. "Internal Server Error") instead of JSON on their own
+  // 5xx failures. Blindly calling res.json() on that produces an opaque
+  // "Unexpected token" SyntaxError with no status code or context, so parse
+  // manually and surface something actionable instead.
+  const text = await res.text();
+  let json: GraphQLResponse<T>;
+  try {
+    json = JSON.parse(text) as GraphQLResponse<T>;
+  } catch {
+    throw new Error(`TradeSafe API returned non-JSON response (${res.status}): ${text.slice(0, 200)}`);
+  }
+
   if (json.errors?.length) {
     throw new Error(`TradeSafe API error: ${json.errors.map((e) => e.message).join("; ")}`);
   }
