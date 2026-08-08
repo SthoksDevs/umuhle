@@ -46,12 +46,21 @@ export function useGeolocation() {
   const [status, setStatus] = useState<GeoStatus>("idle");
   const [coords, setCoords] = useState<Coords | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // True once we know whether a location is coming automatically — i.e.
+  // the silent mount-time permission check below has either found
+  // permission already granted *and* the resulting position fetch has
+  // settled, or found there's nothing automatic coming. Lets callers hold
+  // their first fetch until this is known, instead of fetching once
+  // "blind" and again moments later once a previously-granted permission
+  // resolves — see app/page.tsx and app/stores/page.tsx.
+  const [autoCheckDone, setAutoCheckDone] = useState(false);
   const requestingRef = useRef(false);
   const autoRetriedRef = useRef(false);
 
   const request = useCallback(() => {
     if (typeof window === "undefined" || !("geolocation" in navigator)) {
       setStatus("unsupported");
+      setAutoCheckDone(true);
       return;
     }
     if (requestingRef.current) return;
@@ -63,6 +72,7 @@ export function useGeolocation() {
         autoRetriedRef.current = false;
         setCoords({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
         setStatus("granted");
+        setAutoCheckDone(true);
       },
       (err) => {
         requestingRef.current = false;
@@ -74,6 +84,7 @@ export function useGeolocation() {
         // a fix yet, which is usually transient.
         if (err.code === err.PERMISSION_DENIED) {
           setStatus("denied");
+          setAutoCheckDone(true);
           return;
         }
 
@@ -81,6 +92,8 @@ export function useGeolocation() {
         if (!autoRetriedRef.current) {
           autoRetriedRef.current = true;
           setTimeout(request, AUTO_RETRY_DELAY_MS);
+        } else {
+          setAutoCheckDone(true); // stop waiting after the one retry
         }
       },
       { enableHighAccuracy: false, timeout: 10_000, maximumAge: 5 * 60_000 }
@@ -94,20 +107,24 @@ export function useGeolocation() {
   useEffect(() => {
     if (typeof window === "undefined" || !("geolocation" in navigator)) {
       setStatus("unsupported");
+      setAutoCheckDone(true);
       return;
     }
-    if (!("permissions" in navigator)) return; // Safari has no Permissions API — wait for explicit request()
+    if (!("permissions" in navigator)) { setAutoCheckDone(true); return; } // Safari has no Permissions API — wait for explicit request()
     let cancelled = false;
     navigator.permissions
       .query({ name: "geolocation" as PermissionName })
       .then((result) => {
         if (cancelled) return;
-        if (result.state === "granted") request();
-        else if (result.state === "denied") setStatus("denied");
+        if (result.state === "granted") request(); // autoCheckDone flips once request() settles, above
+        else {
+          if (result.state === "denied") setStatus("denied");
+          setAutoCheckDone(true);
+        }
       })
-      .catch(() => {});
+      .catch(() => setAutoCheckDone(true));
     return () => { cancelled = true; };
   }, [request]);
 
-  return { status, coords, error, request };
+  return { status, coords, error, request, autoCheckDone };
 }

@@ -234,6 +234,18 @@ export default function StoresPage() {
   const [radiusKm, setRadiusKm] = useState(NEARBY_RADIUS_KM);
   const [distanceById, setDistanceById] = useState<Record<string, number> | null>(null);
 
+  // Wait for the initial silent geolocation check (lib/geolocation.ts) to
+  // settle before the very first fetch — same reasoning as app/page.tsx:
+  // without this, a returning visitor with location already granted sees
+  // an unfiltered list render, then get replaced moments later by their
+  // real nearby list. Capped at 4s so a slow/unavailable GPS fix doesn't
+  // block the page indefinitely.
+  const [geoSettleTimedOut, setGeoSettleTimedOut] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setGeoSettleTimedOut(true), 4000);
+    return () => clearTimeout(t);
+  }, []);
+
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       setUser(user ?? null);
@@ -242,6 +254,7 @@ export default function StoresPage() {
   }, []);
 
   useEffect(() => {
+    if (!geo.autoCheckDone && !geoSettleTimedOut) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -281,7 +294,7 @@ export default function StoresPage() {
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [geo.status, geo.coords, radiusKm]);
+  }, [geo.status, geo.coords, radiusKm, geo.autoCheckDone, geoSettleTimedOut]);
 
   const matchesFilters = useCallback((s: Salon) => {
     const q = search.toLowerCase();

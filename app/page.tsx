@@ -588,10 +588,23 @@ export default function Home() {
     setLoading(false);
   }, [activeCategories, searchQuery, user, geo.status, geo.coords, radiusKm]);
 
+  // Wait for the initial silent geolocation check (lib/geolocation.ts) to
+  // settle before the very first fetch. Without this, a returning visitor
+  // whose location permission is already granted sees a nationally
+  // rating-sorted list render, then watches it get replaced moments later
+  // by their real nearby list — the "quick reload" flash. Capped at 4s so
+  // a slow/unavailable GPS fix doesn't block the page indefinitely.
+  const [geoSettleTimedOut, setGeoSettleTimedOut] = useState(false);
   useEffect(() => {
+    const t = setTimeout(() => setGeoSettleTimedOut(true), 4000);
+    return () => clearTimeout(t);
+  }, []);
+
+  useEffect(() => {
+    if (!geo.autoCheckDone && !geoSettleTimedOut) return;
     const t = setTimeout(fetchArtists, 300);
     return () => clearTimeout(t);
-  }, [fetchArtists]);
+  }, [fetchArtists, geo.autoCheckDone, geoSettleTimedOut]);
 
   // ── Province fallback (see lib/provinces.ts) ────────────────────────────
   // Only kicks in once the customer has already widened the proximity
