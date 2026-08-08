@@ -78,9 +78,13 @@ export default function SiteHeader({
     if (onSignInClick) {
       onSignInClick();
     } else {
-      // Add ?auth=login to wherever we already are — AuthModal (rendered
-      // below) reacts to this immediately, no navigation to "/" needed.
-      router.push(`${pathname || "/"}?auth=login`);
+      // This is the one deliberate "take me to log in" entry point (the nav
+      // menu), as opposed to a login prompted by trying to book/add to
+      // cart/etc — so it's the one case that explicitly asks to land on
+      // /dashboard afterwards instead of the default "stay where you were"
+      // behaviour. Every other ?auth=login trigger in the app omits `next`
+      // on purpose, so AuthModal's goNext() falls back to the current page.
+      router.push(`${pathname || "/"}?auth=login&next=${encodeURIComponent("/dashboard")}`);
     }
   };
 
