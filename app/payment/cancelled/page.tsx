@@ -3,18 +3,32 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { useEffect, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { useEffect, useState, Suspense } from "react";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
+import { createClient } from "@/lib/supabase/client";
+import { resolveTryAgainHref } from "@/lib/payments/resume";
 
 const ICON = "/umuhle-icon.png";
 
 function CancelledContent() {
   const params = useSearchParams();
+  const router = useRouter();
   const ref    = params.get("ref");
   const type   = params.get("type");
   const method = params.get("method") ?? "tradesafe";
+
+  // Same "send them back to what they were actually doing" fix as
+  // /payment/failed — see lib/payments/resume.ts.
+  const [tryAgainHref, setTryAgainHref] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    resolveTryAgainHref(createClient(), type, ref).then(href => {
+      if (!cancelled) setTryAgainHref(href);
+    });
+    return () => { cancelled = true; };
+  }, [type, ref]);
 
   // Most gateways don't send a server-to-server notification for a plain
   // "shopper backed out before paying" cancellation — TradeSafe/PayFast's
@@ -53,16 +67,28 @@ function CancelledContent() {
           Payment cancelled
         </h1>
         <p style={{ color: "var(--grey)", marginBottom: "2rem", fontSize: "0.95rem" }}>
-          No payment was taken and nothing was booked. Your cart is still saved — you can try again whenever you&apos;re ready.
+          {type === "order"
+            ? "No payment was taken and nothing was booked. Your cart is still saved — you can try again whenever you're ready."
+            : "No payment was taken and nothing was booked. You can try again whenever you're ready."}
         </p>
 
         <div style={{ display: "flex", gap: "0.75rem", justifyContent: "center", flexWrap: "wrap" }}>
-          <Link href="/checkout">
-            <button className="btn-plum">Try again</button>
-          </Link>
-          <Link href="/cart">
-            <button className="btn-outline">Back to cart</button>
-          </Link>
+          <button
+            className="btn-plum"
+            disabled={!tryAgainHref}
+            onClick={() => tryAgainHref && router.push(tryAgainHref)}
+          >
+            Try again
+          </button>
+          {type === "order" ? (
+            <Link href="/cart">
+              <button className="btn-outline">Back to cart</button>
+            </Link>
+          ) : (
+            <Link href="/">
+              <button className="btn-outline">Go home</button>
+            </Link>
+          )}
         </div>
       </div>
     </div>

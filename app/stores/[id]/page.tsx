@@ -1,8 +1,8 @@
 "use client";
 // app/stores/[id]/page.tsx — Store detail page
 
-import { useState, useEffect } from "react";
-import { useParams, useRouter, usePathname } from "next/navigation";
+import { useState, useEffect, useRef, Suspense } from "react";
+import { useParams, useRouter, usePathname, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
 import SiteHeader from "@/components/SiteHeader";
@@ -172,6 +172,62 @@ function Gallery({ urls }: { urls: string[] }) {
   );
 }
 
+// ── Resume an interrupted booking ──────────────────────────────────────────────
+// Prefill data pulled off a store_bookings row after a failed/cancelled
+// deposit payment, so a shopper doesn't have to re-find this salon and
+// re-enter everything just because their card was declined. See
+// lib/payments/resume.ts (redirects here with ?resumeBooking=<bookingId>).
+type ResumeStoreBookingData = {
+  serviceId: string | null;
+  name: string;
+  phone: string;
+  email: string;
+  date: string;
+  time: string;
+  notes: string;
+  employeeId: string;
+};
+
+// Isolated into its own component (rather than calling useSearchParams
+// directly in BookingForm) because useSearchParams requires a Suspense
+// boundary — same reasoning as app/payment/failed/page.tsx. Renders
+// nothing.
+function ResumeStoreBookingWatcher({ salonId, onResume }: { salonId: string; onResume: (data: ResumeStoreBookingData) => void }) {
+  const params = useSearchParams();
+  const bookingId = params.get("resumeBooking");
+
+  useEffect(() => {
+    if (!bookingId) return;
+    const supabase = createClient();
+    let cancelled = false;
+    supabase
+      .from("store_bookings")
+      .select("salon_id, service_id, client_name, client_phone, client_email, booking_date, booking_time, notes, branch_employee_id, status")
+      .eq("id", bookingId)
+      .maybeSingle()
+      .then(({ data }) => {
+        // Only resume a still-open attempt for *this* salon — one that's
+        // already gone through, belongs elsewhere, or wasn't this client's
+        // (RLS already scopes reads to their own rows) just no-ops here.
+        if (cancelled || !data || data.salon_id !== salonId || data.status !== "pending") return;
+        onResume({
+          serviceId: data.service_id,
+          name: data.client_name ?? "",
+          phone: data.client_phone ?? "",
+          email: data.client_email ?? "",
+          date: data.booking_date,
+          time: (data.booking_time as string)?.slice(0, 5) ?? "",
+          notes: data.notes ?? "",
+          employeeId: data.branch_employee_id ?? "",
+        });
+      });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookingId, salonId]);
+
+  return null;
+}
+
 // ── Booking form ──────────────────────────────────────────────────────────────
 function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
   const supabase = createClient();
@@ -189,6 +245,32 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
   const [staff, setStaff] = useState<BranchStaffOption[]>([]);
   const [structuredServices, setStructuredServices] = useState<SalonServiceOption[]>([]);
   const [structuredLoading, setStructuredLoading] = useState(true);
+  const [resumeBanner, setResumeBanner] = useState(false);
+  const formRef = useRef<HTMLDivElement>(null);
+
+  // Local calendar date as YYYY-MM-DD — deliberately not toISOString()
+  // (that's UTC and can roll back to "yesterday" between midnight and
+  // 02:00 SAST), same helper as the homepage's artist booking drawer.
+  const todayStr = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  })();
+
+  const handleResume = (data: ResumeStoreBookingData) => {
+    setForm(f => ({
+      ...f,
+      name: data.name || f.name,
+      phone: data.phone || f.phone,
+      email: data.email || f.email,
+      serviceId: data.serviceId ?? f.serviceId,
+      notes: data.notes || f.notes,
+      employeeId: data.employeeId || f.employeeId,
+      date: data.date >= todayStr ? data.date : f.date,
+      time: data.date >= todayStr ? data.time : f.time,
+    }));
+    setResumeBanner(true);
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   useEffect(() => {
     (async () => {
@@ -371,8 +453,17 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
   const depositRand = hasStructuredServices && selectedService?.deposit_amount ? (selectedService.deposit_amount / 100).toFixed(2) : null;
 
   return (
-    <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.5rem" }}>
+    <div ref={formRef} style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.5rem" }}>
+      <Suspense fallback={null}>
+        <ResumeStoreBookingWatcher salonId={salon.id} onResume={handleResume} />
+      </Suspense>
       <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.2rem", marginBottom: "1.25rem" }}>Book an appointment</h3>
+
+      {resumeBanner && (
+        <p style={{ fontSize: "0.8rem", color: "var(--grey)", background: "var(--plum-t)", borderRadius: 10, padding: "0.6rem 0.85rem", marginBottom: "1.25rem" }}>
+          We've restored your details from before — just double check and confirm below.
+        </p>
+      )}
 
       <div className="store-form-field-row" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: "0 1rem" }}>
         <div><label style={lbl}>Your name *</label><input value={form.name} onChange={e => setForm(f=>({...f,name:e.target.value}))} placeholder="Full name" style={inp} /></div>

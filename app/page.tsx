@@ -1,8 +1,8 @@
 // Homepage
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useCallback, useRef, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Artist, Profile } from "@/types";
@@ -291,6 +291,65 @@ function SearchWithFilter<T extends string>({
   );
 }
 
+// ─── Resume an interrupted booking ────────────────────────────────────────────
+// Prefill data pulled off a booking_intents row after a failed/cancelled
+// payment, handed to BookingDrawer so a shopper doesn't have to re-pick
+// everything just because their card was declined. See lib/payments/
+// resume.ts (redirects here with ?resumeBooking=<intentId>) and the
+// "Prefill from an interrupted attempt" effect inside BookingDrawer below.
+type ResumeBookingData = {
+  serviceId: string;
+  bookingDate: string;
+  bookingTime: string;
+  meetingAddress: string;
+  pocName: string;
+  pocPhone: string;
+};
+
+// Isolated into its own component (rather than calling useSearchParams
+// directly in Home) because useSearchParams requires a Suspense boundary —
+// same reasoning as app/payment/failed/page.tsx. Renders nothing.
+function ResumeBookingWatcher({ onResume }: { onResume: (artist: Artist, resume: ResumeBookingData) => void }) {
+  const params = useSearchParams();
+  const intentId = params.get("resumeBooking");
+
+  useEffect(() => {
+    if (!intentId) return;
+    const supabase = createClient();
+    let cancelled = false;
+    (async () => {
+      const { data: intent } = await supabase
+        .from("booking_intents")
+        .select("artist_id, service_id, booking_date, booking_time, meeting_address, client_poc_name, client_poc_phone, status")
+        .eq("id", intentId)
+        .maybeSingle();
+      // Only resume a still-open attempt — one that's already gone through
+      // (or was never this client's) just silently does nothing here.
+      if (cancelled || !intent || intent.status !== "pending") return;
+
+      const { data: artist } = await supabase
+        .from("artists")
+        .select("*, services(id, name, price, duration_minutes, is_active)")
+        .eq("id", intent.artist_id)
+        .single();
+      if (cancelled || !artist) return;
+
+      onResume(artist as Artist, {
+        serviceId: intent.service_id,
+        bookingDate: intent.booking_date,
+        bookingTime: (intent.booking_time as string)?.slice(0, 5) ?? "",
+        meetingAddress: intent.meeting_address ?? "",
+        pocName: intent.client_poc_name ?? "",
+        pocPhone: intent.client_poc_phone ?? "",
+      });
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intentId]);
+
+  return null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 export default function Home() {
   const supabase = createClient();
@@ -314,6 +373,11 @@ export default function Home() {
 
   // Booking
   const [selectedArtist, setSelectedArtist] = useState<Artist | null>(null);
+  const [resumeBookingData, setResumeBookingData] = useState<ResumeBookingData | null>(null);
+  const handleResumeBooking = useCallback((artist: Artist, resume: ResumeBookingData) => {
+    setSelectedArtist(artist);
+    setResumeBookingData(resume);
+  }, []);
 
   // Proximity — see lib/geolocation.ts and components/ProximityFilter.tsx.
   // `radiusKm` is customer-controlled via the "Filter by proximity" slider
@@ -749,10 +813,15 @@ export default function Home() {
       {selectedArtist && (
         <BookingDrawer
           artist={selectedArtist}
-          onClose={() => setSelectedArtist(null)}
+          resume={resumeBookingData}
+          onClose={() => { setSelectedArtist(null); setResumeBookingData(null); }}
           user={user!}
         />
       )}
+
+      <Suspense fallback={null}>
+        <ResumeBookingWatcher onResume={handleResumeBooking} />
+      </Suspense>
     </div>
   );
 }
@@ -820,7 +889,7 @@ function ArtistCard({ artist, onBook, isWishlisted, onToggleWishlist, farDistanc
 // ─── Booking drawer ───────────────────────────────────────────────────────────
 type ArtistReview = { id: string; rating: number; comment: string | null; created_at: string; reviewer?: { full_name: string; avatar_url: string | null } };
 
-function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () => void; user: User }) {
+function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onClose: () => void; user: User; resume?: ResumeBookingData | null }) {
   const supabase = createClient();
   const { addItem } = useCart();
   type Service = { id: string; name: string; price: number; duration_minutes: number; tags: string[] };
@@ -929,6 +998,30 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
       .then(({ data }) => setServices((data ?? []) as Service[]));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artist.id]);
+
+  // Prefill from an interrupted attempt (failed/cancelled payment) once the
+  // service list has loaded, so the previously-picked service can actually
+  // be matched by id. Skips straight to the confirm step rather than making
+  // someone re-pick everything they'd already filled in. If the stored date
+  // has since passed, the date/time are left blank instead of silently
+  // carrying over a now-invalid slot — takenTimes below still re-validates
+  // the time regardless in case someone else booked it in the meantime.
+  useEffect(() => {
+    if (!resume || services.length === 0) return;
+    const svc = services.find(s => s.id === resume.serviceId) ?? null;
+    setSelected(svc);
+    setAddress(resume.meetingAddress);
+    setPocName(resume.pocName);
+    setPocPhone(resume.pocPhone);
+    if (resume.bookingDate >= todayStr) {
+      setDate(resume.bookingDate);
+      setTime(resume.bookingTime);
+      setStep(svc ? "confirm" : "services");
+    } else {
+      setStep(svc ? "datetime" : "services");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resume, services]);
 
   // Look up this artist's existing bookings for the chosen date so already-
   // taken slots can be shown greyed-out in the time grid below. Cancelled
@@ -1179,6 +1272,11 @@ function BookingDrawer({ artist, onClose, user }: { artist: Artist; onClose: () 
           <>
             <button onClick={() => setStep("datetime")} style={{ background: "none", border: "none", color: "var(--plum)", fontSize: "0.85rem", cursor: "pointer", marginBottom: "1rem" }}>Back</button>
             <h4 style={{ fontWeight: 500, marginBottom: "1.25rem" }}>Confirm booking</h4>
+            {resume && (
+              <p style={{ fontSize: "0.8rem", color: "var(--grey)", background: "var(--plum-t)", borderRadius: 10, padding: "0.6rem 0.85rem", marginBottom: "1.25rem" }}>
+                We've restored your details from before — just double check and confirm.
+              </p>
+            )}
             <div style={{ background: "var(--surface)", borderRadius: 14, padding: "1.25rem", marginBottom: "1.5rem" }}>
               {([["Artist", artist.display_name], ["Service", selected.name], ["Date", date], ["Time", time], ...(address ? [["Address", address]] : [])] as [string, string][]).map(([l, v]) => (
                 <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "0.3rem 0", fontSize: "0.9rem" }}>

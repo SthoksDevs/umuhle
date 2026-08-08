@@ -3,18 +3,35 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { useEffect, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { useEffect, useState, Suspense } from "react";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
+import { createClient } from "@/lib/supabase/client";
+import { resolveTryAgainHref } from "@/lib/payments/resume";
 
 const ICON = "/umuhle-icon.png";
 
 function FailedContent() {
   const params = useSearchParams();
+  const router = useRouter();
   const ref    = params.get("ref");
   const type   = params.get("type");
   const method = params.get("method") ?? "tradesafe";
+
+  // Where "Try again" sends them back to — /checkout only makes sense for
+  // a shop order. An artist or store booking needs to go back to that
+  // artist/salon, ideally with their previous selections restored, rather
+  // than dumping them on a generic page with no memory of what they were
+  // doing. See lib/payments/resume.ts.
+  const [tryAgainHref, setTryAgainHref] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    resolveTryAgainHref(createClient(), type, ref).then(href => {
+      if (!cancelled) setTryAgainHref(href);
+    });
+    return () => { cancelled = true; };
+  }, [type, ref]);
 
   // Safety net alongside the real webhook — see
   // app/api/payments/finalize/route.ts for why this exists and why it's
@@ -60,9 +77,13 @@ function FailedContent() {
         </p>
 
         <div style={{ display: "flex", gap: "0.75rem", justifyContent: "center", flexWrap: "wrap" }}>
-          <Link href="/checkout">
-            <button className="btn-plum">Try again</button>
-          </Link>
+          <button
+            className="btn-plum"
+            disabled={!tryAgainHref}
+            onClick={() => tryAgainHref && router.push(tryAgainHref)}
+          >
+            Try again
+          </button>
           <Link href="/">
             <button className="btn-outline">Go home</button>
           </Link>
