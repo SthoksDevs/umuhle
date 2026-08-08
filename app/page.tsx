@@ -551,6 +551,16 @@ export default function Home() {
   // (still need the services join, which the RPC doesn't return) via
   // `.in("id", …)` and re-sort client-side by the distance map, since `.in`
   // doesn't preserve order.
+  // Stable primitive to key off instead of the `user` object itself — every
+  // onAuthStateChange firing (TOKEN_REFRESHED on tab refocus, background
+  // token refresh, etc.) hands back a brand-new User object even when it's
+  // the same signed-in person, so depending on `user` directly below was
+  // giving fetchArtists/fetchProvinceFallback a new identity on every one of
+  // those events and re-running the fetch effects that key off them —
+  // reloading the whole list for reasons that have nothing to do with the
+  // actual search results changing.
+  const userId = user?.id ?? null;
+
   const fetchArtists = useCallback(async () => {
     setLoading(true);
 
@@ -593,7 +603,7 @@ export default function Home() {
       query = query.order("rating", { ascending: false }).limit(24);
     }
 
-    if (user) query = query.neq("profile_id", user.id);
+    if (userId) query = query.neq("profile_id", userId);
     if (activeCategories.length > 0) query = query.in("category", activeCategories.map(c => c.toLowerCase()));
     if (searchQuery.trim()) query = query.ilike("display_name", `%${searchQuery.trim()}%`);
 
@@ -605,7 +615,7 @@ export default function Home() {
     }
     setArtists(rows);
     setLoading(false);
-  }, [activeCategories, searchQuery, user, geo.status, geo.coords, radiusKm]);
+  }, [activeCategories, searchQuery, userId, geo.status, geo.coords, radiusKm]);
 
   // Wait for the initial silent geolocation check (lib/geolocation.ts) to
   // settle before the very first fetch. Without this, a returning visitor
@@ -615,9 +625,16 @@ export default function Home() {
   // a slow/unavailable GPS fix doesn't block the page indefinitely.
   const [geoSettleTimedOut, setGeoSettleTimedOut] = useState(false);
   useEffect(() => {
+    // Once autoCheckDone has already resolved, this fallback timer has
+    // nothing left to do — without this guard it kept firing 4s after
+    // EVERY mount regardless, flipping geoSettleTimedOut false->true and
+    // (since it's a dep of the fetch effect below) triggering a second,
+    // totally spurious re-fetch of the whole list a few seconds after the
+    // first one, on every visit, independent of auth state.
+    if (geo.autoCheckDone) return;
     const t = setTimeout(() => setGeoSettleTimedOut(true), 4000);
     return () => clearTimeout(t);
-  }, []);
+  }, [geo.autoCheckDone]);
 
   useEffect(() => {
     if (!authChecked) return;
@@ -658,7 +675,7 @@ export default function Home() {
       .eq("is_active", true)
       .eq("moderation_status", "approved")
       .in("id", rows.map(r => r.id));
-    if (user) query = query.neq("profile_id", user.id);
+    if (userId) query = query.neq("profile_id", userId);
     if (activeCategories.length > 0) query = query.in("category", activeCategories.map(c => c.toLowerCase()));
     if (searchQuery.trim()) query = query.ilike("display_name", `%${searchQuery.trim()}%`);
 
@@ -672,7 +689,7 @@ export default function Home() {
     setProvinceName(myProvince);
     setProvinceFallback(inProvince.map(a => ({ artist: a, distanceKm: distanceByArtistId[a.id] })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [artists.length, geo.status, geo.coords, radiusKm, activeCategories, searchQuery, user]);
+  }, [artists.length, geo.status, geo.coords, radiusKm, activeCategories, searchQuery, userId]);
 
   useEffect(() => {
     fetchProvinceFallback();

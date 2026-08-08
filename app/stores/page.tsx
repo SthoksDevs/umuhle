@@ -242,9 +242,16 @@ export default function StoresPage() {
   // block the page indefinitely.
   const [geoSettleTimedOut, setGeoSettleTimedOut] = useState(false);
   useEffect(() => {
+    // Once autoCheckDone has already resolved, this fallback timer has
+    // nothing left to do — without this guard it kept firing 4s after
+    // EVERY mount regardless, flipping geoSettleTimedOut false->true and
+    // (since it's a dep of the fetch effect below) triggering a second,
+    // totally spurious re-fetch of the whole list a few seconds after the
+    // first one, on every visit, independent of auth state.
+    if (geo.autoCheckDone) return;
     const t = setTimeout(() => setGeoSettleTimedOut(true), 4000);
     return () => clearTimeout(t);
-  }, []);
+  }, [geo.autoCheckDone]);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
