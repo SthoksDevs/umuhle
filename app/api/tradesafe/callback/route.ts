@@ -28,15 +28,14 @@ import { isValidCallbackSecret, parseReference, TRADESAFE_CALLBACK_IPS } from "@
 import type { PaymentEvent, PaymentOutcome, PaymentType } from "@/lib/payments/types";
 
 interface TradeSafeCallbackPayload {
-  url: string;
-  data: {
-    id: string;
-    reference: string;
-    state: string;
-    balance: string;
-    updated_at: string;
-    allocations: { id: string; state: string; updated_at: string }[];
-  };
+  id: string;
+  reference: string;
+  state: string;
+  balance: number;
+  updated_at: string;
+  type: string;
+  allocations: { id: string; state: string; updated_at: string }[];
+  signature: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -67,9 +66,9 @@ export async function POST(req: NextRequest) {
   }
   console.log("[TradeSafe Callback] Parsed payload:", JSON.stringify(payload, null, 2));
 
-  const parsed = parseReference(payload.data?.reference ?? "");
+  const parsed = parseReference(payload.reference ?? "");
   if (!parsed) {
-    console.error("[TradeSafe Callback] Couldn't parse reference:", payload.data?.reference);
+    console.error("[TradeSafe Callback] Couldn't parse reference:", payload.reference);
     return new NextResponse("Unrecognised reference", { status: 200 });
   }
 
@@ -81,7 +80,7 @@ export async function POST(req: NextRequest) {
     return new NextResponse("Unsupported payment type", { status: 200 });
   }
 
-  const state = payload.data?.state;
+  const state = payload.state;
   console.log("[TradeSafe Callback] Reference:", parsed.id, "| Type:", type, "| State:", state);
 
   // FUNDS_RECEIVED is the "paid" trigger — same point PayFast's COMPLETE /
@@ -108,7 +107,7 @@ export async function POST(req: NextRequest) {
     type,
     outcome,
     referenceId: parsed.id,
-    gatewayPaymentId: payload.data.id,
+    gatewayPaymentId: payload.id,
   };
 
   try {
