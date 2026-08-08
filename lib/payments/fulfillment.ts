@@ -28,7 +28,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PaymentEvent, FulfillmentResult } from "./types";
 import { recordBookingSplit, recordOrderItemSplits, recordStoreBookingDepositSplit } from "@/lib/payouts";
-import { notifyBookingCreated, notifyOrderPaid } from "@/lib/whatsapp";
+import { notifyBookingCreated, notifyOrderPaid, notifyPocBookingUpdate } from "@/lib/whatsapp";
 import {
   sendBookingConfirmedEmail,
   sendBookingFailedEmail,
@@ -143,6 +143,7 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
       })
       .select(`
         id, booking_date, booking_time, meeting_address, notes, total_amount, tradesafe_allocation_id,
+        client_poc_name, client_poc_phone,
         client:profiles!bookings_client_id_fkey(full_name, phone, email),
         artist:artists!bookings_artist_id_fkey(
           display_name, point_of_contact_name, point_of_contact_phone,
@@ -206,6 +207,24 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
         });
       } catch (e) {
         console.error(`${tag} WhatsApp notify error`, e);
+      }
+    }
+
+    if (booking.client_poc_phone) {
+      try {
+        await notifyPocBookingUpdate({
+          clientName: clientRow.full_name as string,
+          clientPhone: clientPhone ?? "",
+          artistName: artistRow.display_name as string,
+          artistPhone: artistPhone ?? "",
+          date: booking.booking_date,
+          time: booking.booking_time,
+          serviceName: serviceRow?.name as string,
+          clientPocName: booking.client_poc_name ?? undefined,
+          clientPocPhone: booking.client_poc_phone,
+        });
+      } catch (e) {
+        console.error(`${tag} WhatsApp POC notify error`, e);
       }
     }
 
