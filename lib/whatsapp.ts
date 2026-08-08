@@ -216,6 +216,37 @@ export async function notifyBookingReminder(
   await Promise.allSettled(promises);
 }
 
+export async function notifyPocBookingUpdate(
+  opts: BookingNotifyOpts
+) {
+  if (!opts.clientPocPhone) return;
+
+  // Approved WABA template "umuhle_poc_booking_update" — fires when a
+  // booking is confirmed and the client listed a point of contact.
+  const formattedDate = new Date(`${opts.date}T00:00:00`).toLocaleDateString("en-ZA", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+
+  try {
+    await sendTemplateMessage(opts.clientPocPhone, "umuhle_poc_booking_update", [
+      {
+        type: "body",
+        parameters: [
+          { type: "text", text: opts.clientPocName ?? "there" },
+          { type: "text", text: opts.clientName },
+          { type: "text", text: opts.artistName },
+          { type: "text", text: formattedDate },
+          { type: "text", text: opts.time },
+        ],
+      },
+    ]);
+  } catch (e) {
+    console.error("[whatsapp] notifyPocBookingUpdate failed:", e);
+  }
+}
+
 export async function notifyAppointmentStarted(
   opts: BookingNotifyOpts
 ) {
