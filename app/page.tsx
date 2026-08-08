@@ -17,6 +17,7 @@ import { useGeolocation, distanceKm, type GeoStatus } from "@/lib/geolocation";
 import { getProvince } from "@/lib/provinces";
 import { TIMES } from "@/lib/booking-times";
 import ProximityFilter from "@/components/ProximityFilter";
+import AddressMapPicker from "@/components/AddressMapPicker";
 
 // Default/max reach of the "Filter by proximity" slider (5km steps, see
 // components/ProximityFilter.tsx). Matches nearby_artists()'s own
@@ -329,9 +330,19 @@ function ResumeBookingWatcher({ onResume }: { onResume: (artist: Artist, resume:
         .select("artist_id, service_id, booking_date, booking_time, meeting_address, client_poc_name, client_poc_phone, status")
         .eq("id", intentId)
         .maybeSingle();
-      // Only resume a still-open attempt — one that's already gone through
-      // (or was never this client's) just silently does nothing here.
-      if (cancelled || !intent || intent.status !== "pending") return;
+      // Resumable states: "pending" (rare — got here before the finalize
+      // call below settled) plus "failed"/"cancelled", which is what this
+      // row will actually be in almost every real case — /payment/failed
+      // and /payment/cancelled both call /api/payments/finalize on mount,
+      // which flips a still-pending intent to failed/cancelled (see
+      // fulfillBooking() in lib/payments/fulfillment.ts). That finalize
+      // call is what THIS very page's "Try again" button exists to recover
+      // from, so excluding those two statuses here made resume silently
+      // no-op almost every time. Only "completed" (a real booking already
+      // exists for it) is excluded — retrying always creates a fresh
+      // booking_intents row via createBookingIntent, so there's no risk of
+      // double-submitting this one.
+      if (cancelled || !intent || !["pending", "failed", "cancelled"].includes(intent.status)) return;
 
       const { data: artist } = await supabase
         .from("artists")
@@ -1026,6 +1037,16 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
     }
   };
 
+  // Called when the client confirms a pin dropped on AddressMapPicker
+  // (shown below as a fallback once browser geolocation has failed).
+  // Hands control back to the normal, editable address field — now
+  // pre-filled with the reverse-geocoded address — the same way picking a
+  // salon suggestion does.
+  const handleMapPickerConfirm = (resolvedAddress: string) => {
+    setAddress(resolvedAddress);
+    setUseCurrentLocation(false);
+  };
+
   useEffect(() => {
     supabase.from("services").select("id, name, price, duration_minutes, tags").eq("artist_id", artist.id).eq("is_active", true)
       .then(({ data }) => setServices((data ?? []) as Service[]));
@@ -1305,7 +1326,12 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
                   Use my current location instead
                 </label>
                 {useCurrentLocation && geo.status === "checking" && <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: "0.35rem 0 0" }}>Getting your location…</p>}
-                {useCurrentLocation && (geo.status === "denied" || geo.status === "unavailable") && <p style={{ fontSize: "0.78rem", color: "#E53935", margin: "0.35rem 0 0" }}>Couldn&apos;t get your location — untick this and type your address instead.</p>}
+                {useCurrentLocation && (geo.status === "denied" || geo.status === "unavailable") && (
+                  <>
+                    <p style={{ fontSize: "0.78rem", color: "#E53935", margin: "0.35rem 0 0" }}>Couldn&apos;t get your location — pick your spot on the map below, or untick this and type your address instead.</p>
+                    <AddressMapPicker onConfirm={handleMapPickerConfirm} />
+                  </>
+                )}
               </div>
 
               <div>
