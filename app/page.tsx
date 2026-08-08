@@ -1130,6 +1130,10 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
         pocName,
         pocPhone,
       });
+      // The draft above is what actually survives the trip — this drawer
+      // instance is about to unmount either way, so close it explicitly
+      // rather than leaving it mounted on top of/behind AuthModal.
+      onClose();
       router.push("/?auth=login");
       return;
     }
