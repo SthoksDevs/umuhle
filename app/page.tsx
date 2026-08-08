@@ -60,21 +60,27 @@ function clearPendingWishlistAdd() {
 }
 
 // ── Pending "book this artist" intent ───────────────────────────────────────
-// Same idea as pending-wishlist above: if a logged-out visitor taps "Book"
-// on an artist card, we remember which artist they meant, send them through
-// auth, and reopen the BookingDrawer for that artist once they're signed in
-// — instead of dropping them back on the homepage with the drawer closed
-// and no memory of what they were doing.
-const PENDING_BOOKING_KEY = "umuhle_pending_booking_artist";
-function setPendingBookingArtist(artistId: string) {
+// Logged-out visitors can now browse an artist's services and pick a date/
+// time freely — see BookingDrawer below, which no longer requires `user`.
+// Login is only forced at the final "pay now" step, so this remembers the
+// FULL in-progress selection (not just which artist), letting the drawer
+// reopen straight on the confirm step post-login instead of making them
+// re-pick everything they'd already filled in. Session-scoped deliberately:
+// a stale draft from days ago shouldn't silently resurface.
+const PENDING_BOOKING_KEY = "umuhle_pending_booking_draft";
+type PendingBookingDraft = ResumeBookingData & { artistId: string };
+function setPendingBookingDraft(draft: PendingBookingDraft) {
   if (typeof window === "undefined") return;
-  try { window.sessionStorage.setItem(PENDING_BOOKING_KEY, artistId); } catch { /* ignore */ }
+  try { window.sessionStorage.setItem(PENDING_BOOKING_KEY, JSON.stringify(draft)); } catch { /* ignore */ }
 }
-function getPendingBookingArtist(): string | null {
+function getPendingBookingDraft(): PendingBookingDraft | null {
   if (typeof window === "undefined") return null;
-  try { return window.sessionStorage.getItem(PENDING_BOOKING_KEY); } catch { return null; }
+  try {
+    const raw = window.sessionStorage.getItem(PENDING_BOOKING_KEY);
+    return raw ? (JSON.parse(raw) as PendingBookingDraft) : null;
+  } catch { return null; }
 }
-function clearPendingBookingArtist() {
+function clearPendingBookingDraft() {
   if (typeof window === "undefined") return;
   try { window.sessionStorage.removeItem(PENDING_BOOKING_KEY); } catch { /* ignore */ }
 }
@@ -443,23 +449,38 @@ export default function Home() {
     })();
   }, [user]);
 
-  // Replay a pending "book this artist" click that happened while logged
-  // out. Fetched directly by id rather than pulled from `artists`/
-  // `provinceFallback` — those lists are geo/filter-dependent and may not
-  // contain this artist by the time the page reloads post-login.
+  // Replay a pending booking that was interrupted by the login wall at the
+  // final "pay now" step (see BookingDrawer's handleTradeSafe) — reopens
+  // the drawer for the right artist AND feeds the saved selections through
+  // the same `resume` prop the payment-retry flow uses, so it lands
+  // straight back on the confirm step instead of starting over. Fetched
+  // directly by id rather than pulled from `artists`/`provinceFallback` —
+  // those lists are geo/filter-dependent and may not contain this artist
+  // by the time the page reloads post-login.
   useEffect(() => {
     if (!user) return;
-    const pendingId = getPendingBookingArtist();
-    if (!pendingId) return;
-    clearPendingBookingArtist();
+    const draft = getPendingBookingDraft();
+    if (!draft) return;
+    clearPendingBookingDraft();
     supabase
       .from("artists")
       .select("*, services(id, name, price, duration_minutes, is_active)")
-      .eq("id", pendingId)
+      .eq("id", draft.artistId)
       .eq("is_active", true)
       .eq("moderation_status", "approved")
       .maybeSingle()
-      .then(({ data }) => { if (data) setSelectedArtist(data as Artist); });
+      .then(({ data }) => {
+        if (!data) return;
+        setSelectedArtist(data as Artist);
+        setResumeBookingData({
+          serviceId: draft.serviceId,
+          bookingDate: draft.bookingDate,
+          bookingTime: draft.bookingTime,
+          meetingAddress: draft.meetingAddress,
+          pocName: draft.pocName,
+          pocPhone: draft.pocPhone,
+        });
+      });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
@@ -724,7 +745,6 @@ export default function Home() {
                       isWishlisted={wishlistIds.has(artist.id)}
                       onToggleWishlist={() => toggleWishlist(artist.id)}
                       onBook={() => {
-                        if (!user) { setPendingBookingArtist(artist.id); router.push("/?auth=login"); return; }
                         setSelectedArtist(artist);
                         ttq("ViewContent", { contents: [{ content_id: artist.id, content_name: artist.display_name }] });
                         fbq("ViewContent", { content_ids: [artist.id], content_name: artist.display_name });
@@ -744,7 +764,6 @@ export default function Home() {
                     isWishlisted={wishlistIds.has(artist.id)}
                     onToggleWishlist={() => toggleWishlist(artist.id)}
                     onBook={() => {
-                      if (!user) { router.push("/?auth=login"); return; }
                       setSelectedArtist(artist);
                       ttq("ViewContent", { contents: [{ content_id: artist.id, content_name: artist.display_name }] });
                       fbq("ViewContent", { content_ids: [artist.id], content_name: artist.display_name });
@@ -815,7 +834,7 @@ export default function Home() {
           artist={selectedArtist}
           resume={resumeBookingData}
           onClose={() => { setSelectedArtist(null); setResumeBookingData(null); }}
-          user={user!}
+          user={user}
         />
       )}
 
@@ -889,8 +908,9 @@ function ArtistCard({ artist, onBook, isWishlisted, onToggleWishlist, farDistanc
 // ─── Booking drawer ───────────────────────────────────────────────────────────
 type ArtistReview = { id: string; rating: number; comment: string | null; created_at: string; reviewer?: { full_name: string; avatar_url: string | null } };
 
-function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onClose: () => void; user: User; resume?: ResumeBookingData | null }) {
+function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onClose: () => void; user: User | null; resume?: ResumeBookingData | null }) {
   const supabase = createClient();
+  const router = useRouter();
   const { addItem } = useCart();
   type Service = { id: string; name: string; price: number; duration_minutes: number; tags: string[] };
   type UpsellProduct = { id: string; partner_id: string; name: string; price: number; image_url: string | null; category: string | null; tags: string[]; stock_count: number };
@@ -1094,6 +1114,25 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
 
   const handleTradeSafe = async () => {
     if (!selected || !address.trim() || !pocName.trim() || !pocPhone.trim()) return;
+    // Browsing services and picking a date/time never required an account —
+    // this is the one point that does, so a lead who was just looking isn't
+    // walled off before they've seen anything worth signing up for. Save
+    // the whole selection so it's waiting for them on the other side of
+    // login instead of making them redo it (see getPendingBookingDraft in
+    // the Home component above).
+    if (!user) {
+      setPendingBookingDraft({
+        artistId: artist.id,
+        serviceId: selected.id,
+        bookingDate: date,
+        bookingTime: time,
+        meetingAddress: address,
+        pocName,
+        pocPhone,
+      });
+      router.push("/?auth=login");
+      return;
+    }
     setLoading(true); setError("");
     try {
       const res = await fetch("/api/tradesafe/initiate", {
@@ -1324,7 +1363,7 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
               You will be redirected to TradeSafe to complete payment securely — your money stays in escrow until the appointment is done. Once paid, you will receive a WhatsApp confirmation.
             </p>
             <button className="btn-plum" style={{ width: "100%", padding: "0.875rem" }} onClick={handleTradeSafe} disabled={loading}>
-              {loading ? "Redirecting…" : `Pay ${fmt(selected.price)} now to Book`}
+              {loading ? "Redirecting…" : user ? `Pay ${fmt(selected.price)} now to Book` : `Log in to pay ${fmt(selected.price)} & book`}
             </button>
           </>
         )}
