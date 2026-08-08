@@ -405,10 +405,18 @@ export default function Home() {
   const [radiusKm, setRadiusKm] = useState(NEARBY_RADIUS_KM);
 
   // ── Auth listener ────────────────────────────────────────────────────────
+  // authChecked flips true once we know the initial signed-in state — see
+  // the fetch-trigger effect below, which was still firing twice for any
+  // logged-in visitor even after the geolocation gate: fetchArtists depends
+  // on `user` (it excludes the caller's own listing), and getUser() is a
+  // network round-trip that resolves after the gated first fetch already
+  // ran, triggering a second one purely from `user` going null -> real.
+  const [authChecked, setAuthChecked] = useState(false);
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       setUser(user ?? null);
       if (user) fetchProfile(user.id);
+      setAuthChecked(true);
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
@@ -612,10 +620,11 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!authChecked) return;
     if (!geo.autoCheckDone && !geoSettleTimedOut) return;
     const t = setTimeout(fetchArtists, 300);
     return () => clearTimeout(t);
-  }, [fetchArtists, geo.autoCheckDone, geoSettleTimedOut]);
+  }, [fetchArtists, authChecked, geo.autoCheckDone, geoSettleTimedOut]);
 
   // ── Province fallback (see lib/provinces.ts) ────────────────────────────
   // Only kicks in once the customer has already widened the proximity
