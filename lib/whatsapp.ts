@@ -62,7 +62,8 @@ export async function sendTextMessage(
 export async function sendTemplateMessage(
   phone: string,
   templateName: string,
-  components: object[]
+  components: object[],
+  languageCode: string = "en_US"
 ): Promise<boolean> {
   return sendMessage({
     messaging_product: "whatsapp",
@@ -71,7 +72,7 @@ export async function sendTemplateMessage(
     template: {
       name: templateName,
       language: {
-        code: "en_US",
+        code: languageCode,
       },
       components,
     },
@@ -223,6 +224,9 @@ export async function notifyPocBookingUpdate(
 
   // Approved WABA template "umuhle_poc_booking_update" — fires when a
   // booking is confirmed and the client listed a point of contact.
+  // Note: registered on Meta as plain "English" (en), not "English (US)"
+  // (en_US) like the other umuhle_* templates — hence the explicit
+  // language override below.
   const formattedDate = new Date(`${opts.date}T00:00:00`).toLocaleDateString("en-ZA", {
     weekday: "long",
     day: "numeric",
@@ -241,7 +245,7 @@ export async function notifyPocBookingUpdate(
           { type: "text", text: opts.time },
         ],
       },
-    ]);
+    ], "en");
   } catch (e) {
     console.error("[whatsapp] notifyPocBookingUpdate failed:", e);
   }
