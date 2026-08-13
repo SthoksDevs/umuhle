@@ -25,7 +25,11 @@ export default function ReturnsPage() {
 
         <div className="space-y-6">
           <Section title="Where This Policy Applies">
-            <p>This returns policy applies to orders placed on umuhle.co.za and delivered within South Africa.</p>
+            <p>This returns policy applies to orders placed on umuhle.co.za and delivered within South Africa, as well as to service bookings made with artists and stores on the platform.</p>
+          </Section>
+
+          <Section title="Booking Cancellations (Artists & Stores)">
+            <p>Bookings with artists and stores can be cancelled and refunded only if the cancellation is made at least 3 hours before the scheduled appointment time. Cancellations made within 3 hours of the appointment are not eligible for a refund.</p>
           </Section>
 
           <Section title="What Can Be Returned">
