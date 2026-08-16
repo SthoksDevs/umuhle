@@ -166,41 +166,49 @@ export async function notifyBookingCreated(
 
 export async function notifyBookingReminder(
   opts: BookingNotifyOpts
-) {
+): Promise<{ clientSent: boolean }> {
   // Client-facing reminder uses the approved WABA template
   // "umuhle_booking_reminder" (button is static — "View details" ->
   // https://umuhle.co.za/dashboard?tab=bookings). Artist/POC reminders
   // below stay as free-text session messages — no template for those yet.
+  //
+  // Fires within 2h of the appointment now (see app/api/notifications/
+  // route.ts), not necessarily "tomorrow" — copy below uses the actual
+  // date instead of assuming.
   const formattedDate = new Date(`${opts.date}T00:00:00`).toLocaleDateString("en-ZA", {
     weekday: "long",
     day: "numeric",
     month: "long",
   });
 
-  const artistMsg =
-    `*Tomorrow's Appointment*\n\n` +
-    `Reminder: ${opts.clientName} has booked *${opts.serviceName}* tomorrow at ${opts.time}.`;
+  const clientSent = await sendTemplateMessage(opts.clientPhone, "umuhle_booking_reminder", [
+    {
+      type: "body",
+      parameters: [
+        { type: "text", text: opts.clientName },
+        { type: "text", text: opts.artistName },
+        { type: "text", text: formattedDate },
+        { type: "text", text: opts.time },
+      ],
+    },
+  ]);
 
-  const promises: Promise<boolean>[] = [
-    sendTemplateMessage(opts.clientPhone, "umuhle_booking_reminder", [
-      {
-        type: "body",
-        parameters: [
-          { type: "text", text: opts.clientName },
-          { type: "text", text: opts.artistName },
-          { type: "text", text: formattedDate },
-          { type: "text", text: opts.time },
-        ],
-      },
-    ]),
-    sendTextMessage(opts.artistPhone, artistMsg),
-  ];
+  const promises: Promise<boolean>[] = [];
+
+  // artistPhone may be missing — don't let that block the client's
+  // WhatsApp send above, and don't fail the whole reminder if it is.
+  if (opts.artistPhone) {
+    const artistMsg =
+      `*Upcoming Appointment*\n\n` +
+      `Reminder: ${opts.clientName} has booked *${opts.serviceName}* on ${formattedDate} at ${opts.time}.`;
+    promises.push(sendTextMessage(opts.artistPhone, artistMsg));
+  }
 
   if (opts.clientPocPhone) {
     promises.push(
       sendTextMessage(
         opts.clientPocPhone,
-        `Reminder: ${opts.clientName} has an appointment with ${opts.artistName} tomorrow at ${opts.time}.`
+        `Reminder: ${opts.clientName} has an appointment with ${opts.artistName} on ${formattedDate} at ${opts.time}.`
       )
     );
   }
@@ -209,12 +217,56 @@ export async function notifyBookingReminder(
     promises.push(
       sendTextMessage(
         opts.artistPocPhone,
-        `Reminder: ${opts.clientName} has an appointment with ${opts.artistName} tomorrow at ${opts.time}.`
+        `Reminder: ${opts.clientName} has an appointment with ${opts.artistName} on ${formattedDate} at ${opts.time}.`
       )
     );
   }
 
   await Promise.allSettled(promises);
+
+  return { clientSent };
+}
+
+// Store/salon booking reminder. Reuses the same approved
+// "umuhle_booking_reminder" template (it's just {name, provider, date,
+// time} params — no schema tie to "artist" specifically), with the salon
+// name in the provider slot. If you'd rather have a distinct template on
+// Meta's side for salons, this is the one call site to swap it in.
+export async function notifyStoreBookingReminder(opts: {
+  clientName: string;
+  clientPhone: string;
+  salonName: string;
+  salonPhone?: string;
+  date: string;
+  time: string;
+  serviceName: string;
+}): Promise<{ clientSent: boolean }> {
+  const formattedDate = new Date(`${opts.date}T00:00:00`).toLocaleDateString("en-ZA", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+
+  const clientSent = await sendTemplateMessage(opts.clientPhone, "umuhle_booking_reminder", [
+    {
+      type: "body",
+      parameters: [
+        { type: "text", text: opts.clientName },
+        { type: "text", text: opts.salonName },
+        { type: "text", text: formattedDate },
+        { type: "text", text: opts.time },
+      ],
+    },
+  ]);
+
+  if (opts.salonPhone) {
+    const salonMsg =
+      `*Upcoming Booking*\n\n` +
+      `Reminder: ${opts.clientName} has booked *${opts.serviceName}* on ${formattedDate} at ${opts.time}.`;
+    await sendTextMessage(opts.salonPhone, salonMsg).catch(() => false);
+  }
+
+  return { clientSent };
 }
 
 export async function notifyPocBookingUpdate(
