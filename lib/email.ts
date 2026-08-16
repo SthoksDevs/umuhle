@@ -470,6 +470,43 @@ export async function sendBookingFailedEmail(opts: {
   }
 }
 
+// ── Booking reminder (WhatsApp fallback) ─────────────────────────────────────
+// Only sent when the client-facing WhatsApp reminder template fails to send
+// (see app/api/notifications/route.ts). WhatsApp is the primary channel —
+// umuhle_booking_reminder is an approved template, so it isn't gated by the
+// 24h session window — this is the safety net for delivery failures (bad
+// number, opted-out, Graph API error).
+export async function sendBookingReminderEmail(opts: {
+  bookingId:    string;
+  clientName:   string;
+  clientEmail:  string;
+  providerName: string; // artist display_name or salon name
+  serviceName:  string;
+  date:         string;
+  time:         string;
+  meetingAddress?: string;
+  viewUrl:      string;
+}) {
+  if (!opts.clientEmail) return;
+
+  await sendToAll([opts.clientEmail], {
+    subject:     `Reminder: your appointment today at ${opts.time}`,
+    template:    "booking_reminder_customer",
+    referenceId: opts.bookingId,
+    text:        `Hi ${opts.clientName},\n\nThis is a reminder of your upcoming appointment.\n\nWith: ${opts.providerName}\nService: ${opts.serviceName}\nDate & time: ${opts.date} at ${opts.time}${opts.meetingAddress ? `\nLocation: ${opts.meetingAddress}` : ""}\n\nView your booking: ${opts.viewUrl}\n\nUmuhle`,
+    html:        emailWrapper(`Reminder: appointment today at ${opts.time}`, `
+      <p style="margin:0 0 1.25rem">Hi ${opts.clientName},</p>
+      <p style="margin:0 0 1.25rem">This is a reminder of your upcoming appointment.</p>
+      ${detailTable([
+        ["With",        opts.providerName],
+        ["Service",     opts.serviceName],
+        ["Date & time", `${opts.date} at ${opts.time}`],
+        ...(opts.meetingAddress ? [["Location", opts.meetingAddress] as [string, string]] : []),
+      ])}
+      <p style="margin:1rem 0 0"><a href="${opts.viewUrl}" style="color:#9B7FB8;font-weight:600;text-decoration:none">View your booking →</a></p>`),
+  });
+}
+
 // ── Order paid ────────────────────────────────────────────────────────────────
 
 export async function sendOrderPaidEmail(opts: {
