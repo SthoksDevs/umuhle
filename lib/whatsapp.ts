@@ -236,7 +236,6 @@ export async function notifyStoreBookingReminder(opts: {
   clientName: string;
   clientPhone: string;
   salonName: string;
-  salonPhone?: string;
   date: string;
   time: string;
   serviceName: string;
@@ -258,13 +257,6 @@ export async function notifyStoreBookingReminder(opts: {
       ],
     },
   ]);
-
-  if (opts.salonPhone) {
-    const salonMsg =
-      `*Upcoming Booking*\n\n` +
-      `Reminder: ${opts.clientName} has booked *${opts.serviceName}* on ${formattedDate} at ${opts.time}.`;
-    await sendTextMessage(opts.salonPhone, salonMsg).catch(() => false);
-  }
 
   return { clientSent };
 }

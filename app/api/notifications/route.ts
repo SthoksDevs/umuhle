@@ -146,7 +146,7 @@ export async function GET(request: NextRequest) {
       service,
       booking_date,
       booking_time,
-      salon:partner_salons(name, phone)
+      salon:partner_salons(name)
     `)
     .eq("status", "confirmed")
     .eq("reminder_sent", false)
@@ -166,7 +166,6 @@ export async function GET(request: NextRequest) {
           clientName: booking.client_name,
           clientPhone: booking.client_phone,
           salonName: salonRow?.name ?? "your salon",
-          salonPhone: salonRow?.phone ?? undefined,
           date: booking.booking_date,
           time: booking.booking_time,
           serviceName: booking.service,
