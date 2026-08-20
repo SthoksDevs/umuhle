@@ -21,7 +21,6 @@ type AdminTab =
   | "analytics"
   | "salons"
   | "users"
-  | "ads"
   | "products"
   | "orders"
   | "bookings"
@@ -60,19 +59,6 @@ interface UserRow {
   is_partner: boolean;
   is_artist: boolean;
   created_at: string;
-}
-
-interface AdRow {
-  id: string;
-  title: string;
-  description: string | null;
-  image_url: string | null;
-  package: string;
-  status: string;
-  moderation_status: string;
-  created_at: string;
-  partner_id: string;
-  partner?: { full_name: string; email: string };
 }
 
 interface ProductRow {
@@ -136,8 +122,6 @@ interface Analytics {
   pendingSalons: number;
   totalProducts: number;
   pendingProducts: number;
-  totalAds: number;
-  pendingAds: number;
   pendingWithdrawals: number;
   pendingWithdrawalAmount: number;
 }
@@ -775,136 +759,6 @@ function UsersTab({ supabase }: { supabase: ReturnType<typeof createClient> }) {
   );
 }
 
-// ── Ads Tab ───────────────────────────────────────────────────────────────────
-
-function AdsReviewTab({ supabase }: { supabase: ReturnType<typeof createClient> }) {
-  const [ads, setAds] = useState<AdRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<"pending" | "active" | "all">("pending");
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    let q = supabase
-      .from("ads")
-      .select("*, partner:profiles!partner_id(full_name, email)")
-      .order("created_at", { ascending: false });
-    if (filter === "pending") q = q.eq("moderation_status", "draft").neq("status", "expired");
-    else if (filter === "active") q = q.eq("status", "active");
-    const { data } = await q;
-    setAds((data ?? []) as unknown as AdRow[]);
-    setLoading(false);
-  }, [filter, supabase]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const approve = async (id: string) => {
-    setActionLoading(id);
-    await supabase
-      .from("ads")
-      .update({ moderation_status: "approved", status: "active", starts_at: new Date().toISOString() })
-      .eq("id", id);
-    setAds((prev) => prev.filter((a) => a.id !== id));
-    setActionLoading(null);
-  };
-
-  const reject = async (id: string) => {
-    setActionLoading(id);
-    await supabase.from("ads").update({ moderation_status: "rejected", status: "cancelled" }).eq("id", id);
-    setAds((prev) => prev.filter((a) => a.id !== id));
-    setActionLoading(null);
-  };
-
-  return (
-    <div>
-      <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>
-        Ad Moderation
-      </h2>
-      <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-        Review ad submissions before they go live.
-      </p>
-      <div style={{ display: "flex", gap: "0.35rem", marginBottom: "1.25rem" }}>
-        {(["pending", "active", "all"] as const).map((f) => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            style={{
-              borderRadius: 100,
-              border: `1.5px solid ${filter === f ? "var(--plum)" : "rgba(155,127,184,0.25)"}`,
-              padding: "0.35rem 0.9rem",
-              fontSize: "0.8rem",
-              fontWeight: filter === f ? 500 : 400,
-              background: filter === f ? "var(--plum-t)" : "#fff",
-              color: filter === f ? "var(--plum)" : "var(--grey)",
-              cursor: "pointer",
-              textTransform: "capitalize",
-            }}
-          >
-            {f}
-          </button>
-        ))}
-      </div>
-      {loading ? (
-        <p style={{ color: "var(--grey)" }}>Loading ads…</p>
-      ) : ads.length === 0 ? (
-        <div style={{ textAlign: "center", padding: "3rem", background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.12)" }}>
-          <p style={{ color: "var(--grey)" }}>No ads in this category.</p>
-        </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-          {ads.map((ad) => (
-            <div
-              key={ad.id}
-              style={{ background: "#fff", borderRadius: 16, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.25rem" }}
-            >
-              <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start" }}>
-                {ad.image_url && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={ad.image_url}
-                    alt=""
-                    style={{ width: 72, height: 72, borderRadius: 10, objectFit: "cover", flexShrink: 0 }}
-                  />
-                )}
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem" }}>
-                    <p style={{ fontWeight: 600, fontSize: "0.95rem", margin: 0 }}>{ad.title}</p>
-                    <StatusBadge status={ad.moderation_status} />
-                  </div>
-                  <p style={{ fontSize: "0.82rem", color: "var(--grey)", margin: "0 0 0.25rem" }}>{ad.description}</p>
-                  <p style={{ fontSize: "0.75rem", color: "var(--light)", margin: 0 }}>
-                    Partner: {(ad.partner as { full_name: string; email: string } | undefined)?.full_name ?? "Unknown"} · Package:{" "}
-                    <span style={{ textTransform: "capitalize" }}>{ad.package}</span>
-                  </p>
-                </div>
-              </div>
-              {filter === "pending" && (
-                <div style={{ display: "flex", gap: "0.5rem", marginTop: "1rem" }}>
-                  <button
-                    onClick={() => approve(ad.id)}
-                    disabled={actionLoading === ad.id}
-                    style={{ padding: "0.5rem 1.25rem", borderRadius: 100, border: "none", background: "#E8F5E9", color: "#2E7D32", fontWeight: 600, fontSize: "0.82rem", cursor: "pointer" }}
-                  >
-                    ✓ Approve & Go Live
-                  </button>
-                  <button
-                    onClick={() => reject(ad.id)}
-                    disabled={actionLoading === ad.id}
-                    style={{ padding: "0.5rem 1.25rem", borderRadius: 100, border: "none", background: "#FFEBEE", color: "#C62828", fontWeight: 600, fontSize: "0.82rem", cursor: "pointer" }}
-                  >
-                    ✗ Reject
-                  </button>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── Products Tab ──────────────────────────────────────────────────────────────
 
@@ -932,15 +786,11 @@ function ProductsReviewTab({ supabase }: { supabase: ReturnType<typeof createCli
 
   const updateMod = async (id: string, status: string) => {
     setActionLoading(id);
-    // Content approval alone isn't enough to go live anymore — a product
-    // also needs its listing fee paid (listing_status "active"). Legacy
-    // rows and Umuhle's own products have no listing_status set, so they're
-    // ungated exactly as before.
-    const product = products.find((p) => p.id === id);
-    const feePaid = !product?.listing_status || product.listing_status === "active";
+    // Listing is free now (see 2026-08 removal of paid listing packages) —
+    // content approval alone is enough to go live.
     await supabase.from("products").update({
       moderation_status: status,
-      is_active: status === "approved" && feePaid,
+      is_active: status === "approved",
     }).eq("id", id);
     setProducts((prev) => prev.filter((p) => p.id !== id));
     setActionLoading(null);
@@ -1148,6 +998,9 @@ function PaymentsTab({ supabase }: { supabase: ReturnType<typeof createClient> }
       <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
         Manage user withdrawal requests and mark payments as processed. Payouts run Mondays, Wednesdays and Fridays — this isn&apos;t enforced here, so hold non-run-day payments until the next scheduled run.
       </p>
+
+      <PayFastApprovalsSection supabase={supabase} />
+
       <div style={{ display: "flex", gap: "0.35rem", marginBottom: "1.25rem", flexWrap: "wrap" }}>
         {(["pending", "approved", "paid", "all"] as const).map((f) => (
           <button
@@ -1244,6 +1097,112 @@ function PaymentsTab({ supabase }: { supabase: ReturnType<typeof createClient> }
                   </div>
                 </div>
               )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── PayFast instant-payout approvals ─────────────────────────────────────────
+// A partner saving a merchant ID in their dashboard Wallet tab (see
+// PayFastMerchantSection in app/dashboard/page.tsx) does NOT turn on
+// instant payouts by itself — it just puts them in this queue.
+//
+// Before approving here, go add their merchant ID to Umuhle's own
+// "Allowed merchants" list in the PayFast dashboard first — approving
+// without doing that means their very next split payment fails at
+// PayFast's end (the WHOLE transaction fails, not just the split), which
+// is a broken checkout for a real customer. This queue only tracks intent
+// to enable, not confirmation it's been done — that step still has to
+// happen in PayFast's own dashboard for now (see the note in
+// lib/payments/split.ts about confirming whether that can ever be
+// automated via API).
+
+interface MerchantApprovalRow {
+  id: string;
+  full_name: string;
+  email: string;
+  payfast_merchant_id: string;
+}
+
+function PayFastApprovalsSection({ supabase }: { supabase: ReturnType<typeof createClient> }) {
+  const [rows, setRows] = useState<MerchantApprovalRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, payfast_merchant_id")
+      .not("payfast_merchant_id", "is", null)
+      .eq("payfast_split_approved", false)
+      .order("updated_at", { ascending: true });
+    setRows((data ?? []) as MerchantApprovalRow[]);
+    setLoading(false);
+  }, [supabase]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const decide = async (id: string, approve: boolean) => {
+    setActionLoading(id);
+    if (approve) {
+      await supabase.from("profiles").update({ payfast_split_approved: true }).eq("id", id);
+    } else {
+      // Rejecting clears the ID entirely rather than leaving it sitting
+      // unapproved — the partner sees an empty field in their dashboard
+      // and can re-check/re-submit rather than wondering why nothing's
+      // happening.
+      await supabase.from("profiles").update({ payfast_merchant_id: null, payfast_split_approved: false }).eq("id", id);
+    }
+    setRows((prev) => prev.filter((r) => r.id !== id));
+    setActionLoading(null);
+  };
+
+  if (loading || rows.length === 0) return null;
+
+  return (
+    <div style={{ background: "#FFF9E6", border: "1.5px solid rgba(212,167,44,0.35)", borderRadius: 16, padding: "1.1rem 1.25rem", marginBottom: "1.5rem" }}>
+      <button
+        onClick={() => setExpanded((e) => !e)}
+        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", textAlign: "left" }}
+      >
+        <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>
+          PayFast instant-payout approvals ({rows.length} pending)
+        </span>
+        <span style={{ fontSize: "0.8rem", color: "var(--plum)" }}>{expanded ? "Hide" : "Review"}</span>
+      </button>
+
+      {expanded && (
+        <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+          {rows.map((r) => (
+            <div key={r.id} style={{ background: "#fff", borderRadius: 12, padding: "0.75rem 1rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
+              <div>
+                <p style={{ fontSize: "0.85rem", fontWeight: 600 }}>{r.full_name}</p>
+                <p style={{ fontSize: "0.78rem", color: "var(--grey)" }}>{r.email}</p>
+                <p style={{ fontSize: "0.8rem", marginTop: "0.2rem" }}>
+                  Merchant ID: <code style={{ background: "var(--plum-t)", padding: "0.1rem 0.4rem", borderRadius: 6 }}>{r.payfast_merchant_id}</code>
+                </p>
+              </div>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  disabled={actionLoading === r.id}
+                  onClick={() => decide(r.id, true)}
+                  style={{ padding: "0.4rem 1rem", borderRadius: 100, border: "none", background: "#E6F4EA", color: "#1E7B34", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer" }}
+                >
+                  ✓ Approve
+                </button>
+                <button
+                  disabled={actionLoading === r.id}
+                  onClick={() => decide(r.id, false)}
+                  style={{ padding: "0.4rem 1rem", borderRadius: 100, border: "none", background: "#FFEBEE", color: "#C62828", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer" }}
+                >
+                  ✗ Reject
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -2273,7 +2232,7 @@ export default function AdminDashboard() {
   // /admin?tab=payments instead of just the dashboard's default tab.
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("tab") as AdminTab | null;
-    const validTabs: AdminTab[] = ["analytics", "salons", "users", "ads", "products", "orders", "bookings", "payments", "umuhle-products", "add-salon", "email-log"];
+    const validTabs: AdminTab[] = ["analytics", "salons", "users", "products", "orders", "bookings", "payments", "umuhle-products", "add-salon", "email-log"];
     if (requested && validTabs.includes(requested)) setTab(requested);
   }, []);
 
@@ -2300,8 +2259,6 @@ export default function AdminDashboard() {
       { count: pendingSalons },
       { count: totalProducts },
       { count: pendingProducts },
-      { count: totalAds },
-      { count: pendingAds },
       { count: pendingWithdrawals },
       { data: pendingWdAmount },
     ] = await Promise.all([
@@ -2313,8 +2270,6 @@ export default function AdminDashboard() {
       supabase.from("partner_salons").select("*", { count: "exact", head: true }).eq("status", "pending"),
       supabase.from("products").select("*", { count: "exact", head: true }),
       supabase.from("products").select("*", { count: "exact", head: true }).in("moderation_status", ["scanning", "draft", "needs_review"]),
-      supabase.from("ads").select("*", { count: "exact", head: true }),
-      supabase.from("ads").select("*", { count: "exact", head: true }).eq("moderation_status", "draft"),
       supabase.from("withdrawals").select("*", { count: "exact", head: true }).eq("status", "pending"),
       supabase.from("withdrawals").select("amount").eq("status", "pending"),
     ]);
@@ -2339,8 +2294,6 @@ export default function AdminDashboard() {
       pendingSalons: pendingSalons ?? 0,
       totalProducts: totalProducts ?? 0,
       pendingProducts: pendingProducts ?? 0,
-      totalAds: totalAds ?? 0,
-      pendingAds: pendingAds ?? 0,
       pendingWithdrawals: pendingWithdrawals ?? 0,
       pendingWithdrawalAmount: pendingWdTotal,
     });
@@ -2364,7 +2317,6 @@ export default function AdminDashboard() {
     { id: "analytics", label: "Analytics", icon: "📊" },
     { id: "salons", label: "Stores", icon: "✂️", badge: analytics?.pendingSalons },
     { id: "users", label: "Users", icon: "👥" },
-    { id: "ads", label: "Ads", icon: "📣", badge: analytics?.pendingAds },
     { id: "products", label: "Products", icon: "🛍️", badge: analytics?.pendingProducts },
     { id: "orders", label: "Orders", icon: "📦", badge: analytics?.pendingOrders },
     { id: "bookings", label: "Bookings", icon: "📅" },
@@ -2425,7 +2377,6 @@ export default function AdminDashboard() {
         {tab === "analytics" && <AnalyticsTab analytics={analytics} />}
         {tab === "salons" && <SalonsTab supabase={supabase} />}
         {tab === "users" && <UsersTab supabase={supabase} />}
-        {tab === "ads" && <AdsReviewTab supabase={supabase} />}
         {tab === "products" && <ProductsReviewTab supabase={supabase} />}
         {tab === "orders" && <OrdersTab supabase={supabase} />}
         {tab === "bookings" && <BookingsTab supabase={supabase} />}

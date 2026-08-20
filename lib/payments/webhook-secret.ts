@@ -8,9 +8,9 @@
 // it back via a `?secret=` query param. This generalizes that lookup to
 // whichever table the payment's `type` actually lives in.
 //
-// TradeSafe uses a different model entirely — one static secret for the
-// whole callback URL, configured once in TradeSafe's own dashboard rather
-// than per-transaction — see isValidCallbackSecret() in lib/tradesafe.ts.
+// PayFast uses a different model entirely — one static secret for the
+// whole callback URL, configured once in PayFast's own dashboard rather
+// than per-transaction — see isValidCallbackSecret() in lib/payfast.ts.
 // This file is Ozow-only.
 //
 // Deliberately kept OUT of fulfillment.ts — see the note at the top of that
@@ -21,14 +21,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PaymentType } from "./types";
 
 // Every type Ozow can initiate today (see app/api/ozow/initiate/route.ts)
-// has a gateway_webhook_secret column — ad/product_listing/salon/
-// store_booking_deposit picked theirs up in the same migration that moved
-// them off PayFast onto Ozow exclusively (see lib/payments/eligibility.ts).
+// has a gateway_webhook_secret column. Ads and paid product listings used
+// to be in this map too — both removed in 2026-08 (see
+// lib/payments/split.ts's file header).
 const SECRET_TABLE: Partial<Record<PaymentType, string>> = {
   order: "orders",
   booking: "booking_intents",
-  ad: "ads",
-  product_listing: "products",
   salon: "salon_subscription_payments",
   store_booking_deposit: "store_bookings",
 };

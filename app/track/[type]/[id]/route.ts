@@ -10,7 +10,7 @@
 // This route re-derives it: look up the order/booking/etc. by id, check its
 // CURRENT status, and 302 to whichever result page actually matches today —
 // using the exact same ?ref=&type=&method= convention those pages already
-// read (see app/api/tradesafe/redirect/route.ts and the notifyUrl/successUrl
+// read (see app/api/payfast/redirect/route.ts and the notifyUrl/successUrl
 // query params each gateway's own initiate route builds).
 //
 // Not authenticated — same as the result pages themselves, which take an id
@@ -29,8 +29,8 @@ function serviceClient() {
   );
 }
 
-type TrackType = "order" | "booking" | "ad" | "salon" | "product_listing";
-const VALID_TYPES: TrackType[] = ["order", "booking", "ad", "salon", "product_listing"];
+type TrackType = "order" | "booking" | "salon";
+const VALID_TYPES: TrackType[] = ["order", "booking", "salon"];
 
 function resultUrl(
   origin: string,
@@ -61,7 +61,7 @@ export async function GET(
     if (type === "order") {
       const { data: order } = await supabase.from("orders").select("id, status, payment_method").eq("id", id).maybeSingle();
       if (!order) return NextResponse.redirect(fallback);
-      const method = order.payment_method ?? "tradesafe";
+      const method = order.payment_method ?? "payfast";
       if (["paid", "processing", "shipped", "delivered"].includes(order.status)) {
         return NextResponse.redirect(resultUrl(origin, "success", { ref: id, type, method }));
       }
@@ -74,7 +74,7 @@ export async function GET(
     if (type === "booking") {
       const { data: booking } = await supabase.from("bookings").select("id, status, payment_method").eq("id", id).maybeSingle();
       if (booking) {
-        const method = booking.payment_method ?? "tradesafe";
+        const method = booking.payment_method ?? "payfast";
         if (["confirmed", "in_progress", "completed"].includes(booking.status)) {
           return NextResponse.redirect(resultUrl(origin, "success", { ref: id, type, method }));
         }
@@ -93,36 +93,12 @@ export async function GET(
         .eq("id", id)
         .maybeSingle();
       if (!intent) return NextResponse.redirect(fallback);
-      const method = intent.payment_method ?? "tradesafe";
+      const method = intent.payment_method ?? "payfast";
       if (intent.status === "cancelled") {
         return NextResponse.redirect(resultUrl(origin, "cancelled", { ref: id, type, method }));
       }
       if (intent.status === "failed") {
         return NextResponse.redirect(resultUrl(origin, "failed", { ref: id, type, method }));
-      }
-      return NextResponse.redirect(fallback);
-    }
-
-    if (type === "ad") {
-      const { data: ad } = await supabase.from("ads").select("id, status").eq("id", id).maybeSingle();
-      if (!ad) return NextResponse.redirect(fallback);
-      if (["active", "expired"].includes(ad.status)) {
-        return NextResponse.redirect(resultUrl(origin, "success", { ref: id, type, method: "ozow" }));
-      }
-      if (ad.status === "cancelled") {
-        return NextResponse.redirect(resultUrl(origin, "cancelled", { ref: id, type, method: "ozow" }));
-      }
-      return NextResponse.redirect(fallback);
-    }
-
-    if (type === "product_listing") {
-      const { data: product } = await supabase.from("products").select("id, listing_status").eq("id", id).maybeSingle();
-      if (!product) return NextResponse.redirect(fallback);
-      if (["active", "expired"].includes(product.listing_status)) {
-        return NextResponse.redirect(resultUrl(origin, "success", { ref: id, type, method: "ozow" }));
-      }
-      if (product.listing_status === "cancelled") {
-        return NextResponse.redirect(resultUrl(origin, "cancelled", { ref: id, type, method: "ozow" }));
       }
       return NextResponse.redirect(fallback);
     }

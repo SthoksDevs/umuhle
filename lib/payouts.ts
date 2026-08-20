@@ -77,7 +77,7 @@ export function formatPayoutDate(d: Date): string {
 /**
  * Records the commission/payout split on a booking as soon as it's paid for.
  * Call this right after a booking is created from a paid booking_intent
- * (TradeSafe and Ozow both sell bookings — see fulfillment.ts's
+ * (PayFast and Ozow both sell bookings — see fulfillment.ts's
  * fulfillBooking).
  * Does not touch the wallet — that only happens on completion.
  */
@@ -101,7 +101,7 @@ export async function creditBookingPayout(
   const { data: booking, error } = await supabase
     .from("bookings")
     .select(`
-      id, status, total_amount, commission_cents, payout_cents, payout_credited_at,
+      id, status, total_amount, commission_cents, payout_cents, payout_credited_at, payout_via,
       artist:artists(profile_id, display_name)
     `)
     .eq("id", bookingId)
@@ -120,6 +120,20 @@ export async function creditBookingPayout(
     booking.payout_cents != null && booking.commission_cents != null
       ? { commissionCents: booking.commission_cents, payoutCents: booking.payout_cents }
       : splitCommission(booking.total_amount);
+
+  // Instant-split bookings were already paid straight to the artist's own
+  // PayFast account at the moment of payment (see lib/payments/split.ts,
+  // wired in from app/api/payfast/initiate/route.ts) — there's no wallet
+  // step left to do. Just stamp payout_credited_at so the dashboard shows
+  // it as settled instead of "payout pending".
+  if (booking.payout_via === "instant_split") {
+    await supabase
+      .from("bookings")
+      .update({ commission_cents: commissionCents, payout_cents: payoutCents, payout_credited_at: new Date().toISOString() })
+      .eq("id", bookingId)
+      .is("payout_credited_at", null);
+    return { credited: true };
+  }
 
   const { data: creditedFlag, error: rpcError } = await supabase.rpc("credit_wallet_earning", {
     p_profile_id: artistRow.profile_id,
@@ -197,7 +211,7 @@ export async function creditStoreBookingDepositPayout(
   const { data: booking, error } = await supabase
     .from("store_bookings")
     .select(`
-      id, status, deposit_amount, deposit_status, commission_cents, payout_cents, payout_credited_at,
+      id, status, deposit_amount, deposit_status, commission_cents, payout_cents, payout_credited_at, payout_via,
       salon:partner_salons(id, name, partner_id)
     `)
     .eq("id", storeBookingId)
@@ -216,6 +230,17 @@ export async function creditStoreBookingDepositPayout(
     booking.payout_cents != null && booking.commission_cents != null
       ? { commissionCents: booking.commission_cents, payoutCents: booking.payout_cents }
       : splitCommission(booking.deposit_amount);
+
+  // Same instant-split short-circuit as creditBookingPayout above — the
+  // salon was already paid directly by PayFast at payment time.
+  if (booking.payout_via === "instant_split") {
+    await supabase
+      .from("store_bookings")
+      .update({ commission_cents: commissionCents, payout_cents: payoutCents, payout_credited_at: new Date().toISOString() })
+      .eq("id", storeBookingId)
+      .is("payout_credited_at", null);
+    return { credited: true };
+  }
 
   const { data: creditedFlag, error: rpcError } = await supabase.rpc("credit_wallet_earning", {
     p_profile_id: salonRow.partner_id,
@@ -259,7 +284,7 @@ export async function creditStoreBookingDepositPayout(
  * Records the per-item commission/payout split on every item in an order,
  * prorating any order-wide coupon discount across items by their share of
  * the subtotal. Call this right after an order is marked "paid" — from
- * both payment webhooks (TradeSafe, Ozow).
+ * both payment webhooks (PayFast, Ozow).
  * Does not touch any wallet — that only happens once the order is delivered.
  */
 export async function recordOrderItemSplits(supabase: SupabaseClient, orderId: string) {
@@ -357,7 +382,7 @@ export async function creditOrderItemPayout(
   const [{ data: order }, { data: siblingItems }] = await Promise.all([
     supabase
       .from("orders")
-      .select("discount_cents")
+      .select("discount_cents, payout_via")
       .eq("id", item.order_id)
       .single(),
     supabase
@@ -386,6 +411,20 @@ export async function creditOrderItemPayout(
                 Math.round((lineGross / subtotal) * discount)
             : lineGross
         );
+
+  // Instant-split orders (single seller, split-approved — see
+  // lib/payments/split.ts) were already paid straight to that seller's
+  // own PayFast account at payment time, for the WHOLE order in one lump
+  // sum. Every item in that order shares the same payout_via, so each
+  // just gets stamped as settled here — no separate wallet step per item.
+  if (order?.payout_via === "instant_split") {
+    await supabase
+      .from("order_items")
+      .update({ commission_cents: commissionCents, payout_cents: payoutCents, payout_credited_at: new Date().toISOString() })
+      .eq("id", item.id)
+      .is("payout_credited_at", null);
+    return { credited: true };
+  }
 
   const { data: creditedFlag, error: rpcError } =
     await supabase.rpc("credit_wallet_earning", {

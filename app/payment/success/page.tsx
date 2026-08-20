@@ -13,19 +13,19 @@ const ICON = "/umuhle-icon.png";
 
 function SuccessContent() {
   const params = useSearchParams();
-  const method = params.get("method") ?? "tradesafe";
+  const method = params.get("method") ?? "payfast";
   const ref    = params.get("ref");
   const { clear } = useCart();
 
   // Clear the cart as soon as the success page mounts — payment is confirmed.
   useEffect(() => { clear(); }, [clear]);
 
-  // payfast/happypay/google_pay kept for anyone landing here via an old
-  // bookmarked/cached link from before the 2026-08 TradeSafe migration.
+  // ozow/happypay/google_pay/tradesafe kept for anyone landing here via an
+  // old bookmarked/cached link from a previous gateway era.
   const methodLabel: Record<string, string> = {
-    tradesafe:  "TradeSafe",
-    ozow:       "Ozow",
     payfast:    "PayFast",
+    ozow:       "Ozow",
+    tradesafe:  "TradeSafe",
     happypay:   "HappyPay",
     google_pay: "Google Pay",
   };

@@ -1,5 +1,5 @@
 // lib/orders.ts
-// Shared helper used by both the TradeSafe and Ozow initiate routes
+// Shared helper used by both the PayFast and Ozow initiate routes
 // to create a pending order with validated products.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -30,7 +30,7 @@ type CreateOrderResult =
          * True only when every line in the cart is Umuhle's own stock
          * (products.is_umuhle_product) — used by
          * lib/payments/eligibility.ts to force this order onto Ozow
-         * instead of TradeSafe, since there's no partner payout to
+         * instead of PayFast, since there's no partner payout to
          * protect with escrow when the money is 100% Umuhle's already.
          */
         isUmuhleProfitOnly: boolean;

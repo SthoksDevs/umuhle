@@ -1,23 +1,23 @@
 // lib/payments/types.ts
 //
 // The normalized shape every gateway's webhook gets translated into before
-// any business decision is made. Whatever TradeSafe/Ozow-specific parsing
+// any business decision is made. Whatever PayFast/Ozow-specific parsing
 // and signature/secret checking happens stays in that gateway's own route
 // file; by the time fulfillPayment() (./fulfillment.ts) is called, gateway
 // identity only matters for logging, for which "gateway reference" column
-// gets written, and for TradeSafe's own escrow-release calls (see
+// gets written, and for PayFast's own escrow-release calls (see
 // fulfillOrder/fulfillBooking/fulfillStoreBookingDeposit) — never for what
 // business decision gets made.
 
 import type { PaymentGateway } from "./gateways";
 
 /** The six things a payment on Umuhle can be for. */
-export type PaymentType = "booking" | "order" | "ad" | "salon" | "product_listing" | "store_booking_deposit";
+export type PaymentType = "booking" | "order" | "salon" | "store_booking_deposit";
 
 export type PaymentOutcome = "paid" | "cancelled" | "failed";
 
 export interface PaymentEvent {
-  /** Which gateway produced this notification — for logging, the audit-trail column, and TradeSafe's escrow-release branch in fulfillment.ts. */
+  /** Which gateway produced this notification — for logging, the audit-trail column, and PayFast's escrow-release branch in fulfillment.ts. */
   gateway: PaymentGateway;
   type: PaymentType;
   outcome: PaymentOutcome;
@@ -31,7 +31,7 @@ export interface PaymentEvent {
   referenceId: string;
   /**
    * The gateway's own transaction/order reference, if it supplied one at
-   * notification time (TradeSafe's transaction id, Ozow's TransactionId).
+   * notification time (PayFast's transaction id, Ozow's TransactionId).
    */
   gatewayPaymentId?: string;
 }

@@ -1,14 +1,14 @@
 // app/api/ozow/initiate/route.ts
 //
-// Ozow is now the universal fallback gateway — every payment type Umuhle
+// Ozow is the universal fallback gateway — every payment type Umuhle
 // sells goes through here. It's the ONLY gateway for:
-//   - anything under TradeSafe's R50 minimum
-//   - anything that's 100% Umuhle profit (ad / product_listing / salon
-//     always; order only when every line is Umuhle's own stock)
-// See lib/payments/eligibility.ts for the exact rule. ad/product_listing/
-// salon/store_booking_deposit below were ported from the old
-// app/api/payfast/initiate/route.ts (PayFast is gone — see the 2026-08
-// TradeSafe migration) since Ozow now covers everything PayFast used to.
+//   - anything under PayFast's R5 minimum
+//   - anything that's 100% Umuhle profit (salon subscription always;
+//     order only when every line is Umuhle's own stock)
+// See lib/payments/eligibility.ts for the exact rule. Ads and paid
+// product listings used to route through here too — both were removed in
+// 2026-08 (see lib/payments/split.ts's file header for how products work
+// now: free to list, optionally linked to a service as an upsell).
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
@@ -17,13 +17,12 @@ import { createPendingOrder } from "@/lib/orders";
 import { createBookingIntent } from "@/lib/bookings";
 import { randomUUID } from "crypto";
 import { isGatewayEnabled, gatewayLabel } from "@/lib/payments/gateways";
-import { AD_PACKAGES, LISTING_PACKAGES } from "@/types";
 
 type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
 type OzowProfile = { email: string; full_name?: string | null };
 
 type PaymentTypeBody =
-  | "booking" | "order" | "ad" | "product_listing" | "salon" | "store_booking_deposit";
+  | "booking" | "order" | "salon" | "store_booking_deposit";
 
 export async function POST(req: NextRequest) {
   if (!isGatewayEnabled("ozow")) {
@@ -57,10 +56,6 @@ export async function POST(req: NextRequest) {
         return await initiateBooking(supabase, user.id, profile, body, baseUrl);
       case "order":
         return await initiateOrder(supabase, user.id, profile, body, baseUrl);
-      case "ad":
-        return await initiateAd(supabase, user.id, profile, body, baseUrl);
-      case "product_listing":
-        return await initiateProductListing(supabase, user.id, profile, body, baseUrl);
       case "salon":
         return await initiateSalon(supabase, user.id, profile, body, baseUrl);
       case "store_booking_deposit":
@@ -182,127 +177,6 @@ async function initiateOrder(
 
   return NextResponse.json({ redirectUrl: result.redirectUrl });
 }
-
-// ── Ad ────────────────────────────────────────────────────────────────────────
-// Ported from the old PayFast initiate route — ads are always 100% Umuhle
-// profit (see lib/payments/eligibility.ts), so they never touch TradeSafe.
-
-async function initiateAd(
-  supabase: SupabaseServerClient,
-  userId: string,
-  profile: OzowProfile,
-  body: Record<string, string>,
-  baseUrl: string
-) {
-  const { packageId, title, description, imageUrl, linkUrl, category } = body;
-
-  const pkg = AD_PACKAGES.find((p) => p.id === packageId);
-  if (!pkg) return NextResponse.json({ error: "Invalid package" }, { status: 400 });
-
-  const adId = randomUUID();
-  const webhookSecret = randomUUID();
-
-  await supabase.from("ads").insert({
-    id:                  adId,
-    partner_id:          userId,
-    title,
-    description:         description || null,
-    image_url:           imageUrl || null,
-    link_url:            linkUrl || null,
-    category:            category || "general",
-    package:             packageId,
-    ads_count:           pkg.ads,
-    price:               pkg.price,
-    status:              "pending_payment",
-    moderation_status:   "draft",
-    gateway_webhook_secret: webhookSecret,
-  });
-
-  const result = await createOzowPaymentRequest({
-    transactionReference: adId,
-    bankReference: `UMUHLEAD${adId.replace(/-/g, "").slice(0, 12)}`,
-    amountCents: pkg.price,
-    cancelUrl: `${baseUrl}/payment/cancelled?ref=${adId}&type=ad&method=ozow`,
-    errorUrl: `${baseUrl}/payment/failed?ref=${adId}&type=ad&method=ozow`,
-    successUrl: `${baseUrl}/payment/success?ref=${adId}&type=ad&method=ozow`,
-    notifyUrl: `${baseUrl}/api/ozow/notify?type=ad&id=${adId}&secret=${webhookSecret}`,
-  });
-
-  if (!result.success || !result.redirectUrl) {
-    await supabase.from("ads").delete().eq("id", adId);
-    return NextResponse.json({ error: result.errorMessage ?? "Ozow could not start this payment" }, { status: 502 });
-  }
-
-  if (result.ozowTransactionId) {
-    await supabase.from("ads").update({ gateway_order_id: result.ozowTransactionId }).eq("id", adId);
-  }
-
-  return NextResponse.json({ redirectUrl: result.redirectUrl });
-}
-
-// ── Product listing ───────────────────────────────────────────────────────────
-// The product row already exists at this point (ProductForm inserted it
-// with listing_status: "pending_payment" before handing off here) — this
-// just attaches a package + amount and starts the Ozow checkout, mirroring
-// initiateAd() above. Always Ozow — see lib/payments/eligibility.ts.
-
-async function initiateProductListing(
-  supabase: SupabaseServerClient,
-  userId: string,
-  profile: OzowProfile,
-  body: Record<string, string>,
-  baseUrl: string
-) {
-  const { productId, packageId } = body;
-
-  const pkg = LISTING_PACKAGES.find((p) => p.id === packageId);
-  if (!pkg) return NextResponse.json({ error: "Invalid package" }, { status: 400 });
-
-  const { data: product } = await supabase
-    .from("products")
-    .select("id, name, partner_id, listing_status")
-    .eq("id", productId)
-    .eq("partner_id", userId)
-    .single();
-
-  if (!product) return NextResponse.json({ error: "Product not found" }, { status: 404 });
-  if (!["pending_payment", "expired"].includes(product.listing_status ?? "")) {
-    return NextResponse.json({ error: "This product isn't awaiting payment" }, { status: 400 });
-  }
-
-  const webhookSecret = randomUUID();
-  await supabase
-    .from("products")
-    .update({ package: packageId, listing_status: "pending_payment", gateway_webhook_secret: webhookSecret })
-    .eq("id", productId);
-
-  const result = await createOzowPaymentRequest({
-    transactionReference: productId,
-    bankReference: `UMUHLELST${productId.replace(/-/g, "").slice(0, 11)}`,
-    amountCents: pkg.price,
-    cancelUrl: `${baseUrl}/payment/cancelled?ref=${productId}&type=product_listing&method=ozow`,
-    errorUrl: `${baseUrl}/payment/failed?ref=${productId}&type=product_listing&method=ozow`,
-    successUrl: `${baseUrl}/payment/success?ref=${productId}&type=product_listing&method=ozow`,
-    notifyUrl: `${baseUrl}/api/ozow/notify?type=product_listing&id=${productId}&secret=${webhookSecret}`,
-  });
-
-  if (!result.success || !result.redirectUrl) {
-    return NextResponse.json({ error: result.errorMessage ?? "Ozow could not start this payment" }, { status: 502 });
-  }
-
-  if (result.ozowTransactionId) {
-    await supabase.from("products").update({ gateway_order_id: result.ozowTransactionId }).eq("id", productId);
-  }
-
-  return NextResponse.json({ redirectUrl: result.redirectUrl });
-}
-
-// ── Store booking deposit ──────────────────────────────────────────────────────
-// Requires login (the account-active check at the top of this route already
-// enforces that). Deposits stay under TradeSafe's R50 minimum often enough
-// (and aren't confirmed as always-Umuhle-profit — see the note in
-// lib/payments/eligibility.ts) that this is kept Ozow-only for now, same as
-// ad/product_listing/salon.
 
 async function initiateStoreBookingDeposit(
   supabase: SupabaseServerClient,

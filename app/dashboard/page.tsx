@@ -11,7 +11,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
 import ProductForm, { productToForm, type ProductFormData } from "@/components/ProductForm";
-import ListingPackagePicker from "@/components/ListingPackagePicker";
+import UpsellProductPicker from "@/components/UpsellProductPicker";
+import { syncServiceUpsells, loadServiceUpsellIds } from "@/lib/upsells";
 import StarRating from "@/components/StarRating";
 import ReviewModal, { type SubmittedReview } from "@/components/ReviewModal";
 import { useCart } from "@/lib/cart-context";
@@ -1823,11 +1824,11 @@ type SalonService = {
   display_order: number;
 };
 
-function ServiceManager({ salonId, salonCategories }: { salonId: string; salonCategories: string[] }) {
+function ServiceManager({ salonId, salonCategories, ownerId }: { salonId: string; salonCategories: string[]; ownerId: string }) {
   const supabase = createClient();
   const [services, setServices] = useState<SalonService[]>([]);
   const [loading, setLoading] = useState(true);
-  const [form, setForm] = useState<{ id?: string; name: string; category: string; description: string; priceRand: string; depositRand: string } | null>(null);
+  const [form, setForm] = useState<{ id?: string; name: string; category: string; description: string; priceRand: string; depositRand: string; upsellProductIds: string[] } | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -1843,10 +1844,12 @@ function ServiceManager({ salonId, salonCategories }: { salonId: string; salonCa
 
   useEffect(() => { load(); }, [load]);
 
-  const startAdd = () => { setError(""); setForm({ name: "", category: categories[0] ?? "hair", description: "", priceRand: "", depositRand: "" }); };
-  const startEdit = (s: SalonService) => {
+  const startAdd = () => { setError(""); setForm({ name: "", category: categories[0] ?? "hair", description: "", priceRand: "", depositRand: "", upsellProductIds: [] }); };
+  const startEdit = async (s: SalonService) => {
     setError("");
-    setForm({ id: s.id, name: s.name, category: s.category, description: s.description ?? "", priceRand: String(s.price / 100), depositRand: s.deposit_amount ? String(s.deposit_amount / 100) : "" });
+    setForm({ id: s.id, name: s.name, category: s.category, description: s.description ?? "", priceRand: String(s.price / 100), depositRand: s.deposit_amount ? String(s.deposit_amount / 100) : "", upsellProductIds: [] });
+    const ids = await loadServiceUpsellIds(supabase, "salon_service_upsell_products", "salon_service_id", s.id);
+    setForm((f) => f && f.id === s.id ? { ...f, upsellProductIds: ids } : f);
   };
 
   const save = async () => {
@@ -1870,11 +1873,12 @@ function ServiceManager({ salonId, salonCategories }: { salonId: string; salonCa
       price: Math.round(priceNum * 100),
       deposit_amount: depositCents,
     };
-    const { error: err } = form.id
-      ? await supabase.from("salon_services").update(payload).eq("id", form.id)
-      : await supabase.from("salon_services").insert({ ...payload, is_active: true });
+    const { data: saved, error: err } = form.id
+      ? await supabase.from("salon_services").update(payload).eq("id", form.id).select("id").single()
+      : await supabase.from("salon_services").insert({ ...payload, is_active: true }).select("id").single();
+    if (err || !saved) { setSaving(false); setError(err?.message ?? "Failed to save"); return; }
+    await syncServiceUpsells(supabase, "salon_service_upsell_products", "salon_service_id", saved.id, form.upsellProductIds);
     setSaving(false);
-    if (err) { setError(err.message); return; }
     setForm(null);
     await load();
   };
@@ -1923,6 +1927,14 @@ function ServiceManager({ salonId, salonCategories }: { salonId: string; salonCa
         <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Description (optional)</label>
         <textarea value={form.description} onChange={e => setForm(f => f && ({ ...f, description: e.target.value }))} rows={2} style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem", resize: "vertical" }} />
       </div>
+
+      <UpsellProductPicker
+        ownerId={ownerId}
+        serviceTags={(UPSELL_TAG_GROUPS.find(g => g.category === form.category)?.tags ?? []).map(t => t.id)}
+        selectedProductIds={form.upsellProductIds}
+        onChange={(ids) => setForm(f => f && ({ ...f, upsellProductIds: ids }))}
+        supabase={supabase}
+      />
 
       {error && <p style={{ color: "#E53935", fontSize: "0.82rem", marginBottom: "0.9rem" }}>{error}</p>}
 
@@ -2151,7 +2163,7 @@ function MySalonTab({ user }: { user: { id: string } }) {
         {listing.id && (
           <div style={{ marginTop: "1.5rem" }}>
             <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "0.75rem" }}>Services</h3>
-            <ServiceManager salonId={listing.id} salonCategories={listing.services ?? []} />
+            <ServiceManager salonId={listing.id} salonCategories={listing.services ?? []} ownerId={user.id} />
           </div>
         )}
         </>
@@ -2195,9 +2207,10 @@ type ServiceFormState = {
   duration_minutes: number;
   category: ServiceTypeId | "";
   tags: string[];
+  upsellProductIds: string[]; // see components/UpsellProductPicker.tsx
 };
 
-const EMPTY_SERVICE_FORM: ServiceFormState = { id: null, name: "", description: "", priceRand: "", duration_minutes: 60, category: "", tags: [] };
+const EMPTY_SERVICE_FORM: ServiceFormState = { id: null, name: "", description: "", priceRand: "", duration_minutes: 60, category: "", tags: [], upsellProductIds: [] };
 
 // Lets an artist create the actual bookable, priced line items clients pay
 // for — distinct from the style tags above, which are just search/discovery
@@ -2237,9 +2250,11 @@ function PricedServicesManager({ user, categories, refreshSignal }: { user: User
   }, [user.id, supabase, loadServices, refreshSignal]);
 
   const startAdd = () => { setError(""); setForm({ ...EMPTY_SERVICE_FORM, category: categories[0] ?? "" }); };
-  const startEdit = (s: ArtistService) => {
+  const startEdit = async (s: ArtistService) => {
     setError("");
-    setForm({ id: s.id, name: s.name, description: s.description ?? "", priceRand: String(s.price / 100), duration_minutes: s.duration_minutes, category: s.category ?? "", tags: s.tags ?? [] });
+    setForm({ id: s.id, name: s.name, description: s.description ?? "", priceRand: String(s.price / 100), duration_minutes: s.duration_minutes, category: s.category ?? "", tags: s.tags ?? [], upsellProductIds: [] });
+    const ids = await loadServiceUpsellIds(supabase, "service_upsell_products", "service_id", s.id);
+    setForm((f) => f && f.id === s.id ? { ...f, upsellProductIds: ids } : f);
   };
 
   const handleSaveForm = async () => {
@@ -2259,11 +2274,12 @@ function PricedServicesManager({ user, categories, refreshSignal }: { user: User
       category: form.category || null,
       tags: form.tags,
     };
-    const { error: err } = form.id
-      ? await supabase.from("services").update(payload).eq("id", form.id)
-      : await supabase.from("services").insert({ ...payload, is_active: true });
+    const { data: saved, error: err } = form.id
+      ? await supabase.from("services").update(payload).eq("id", form.id).select("id").single()
+      : await supabase.from("services").insert({ ...payload, is_active: true }).select("id").single();
+    if (err || !saved) { setSaving(false); setError(err?.message ?? "Failed to save"); return; }
+    await syncServiceUpsells(supabase, "service_upsell_products", "service_id", saved.id, form.upsellProductIds);
     setSaving(false);
-    if (err) { setError(err.message); return; }
     setForm(null);
     await loadServices(artistId);
   };
@@ -2356,7 +2372,10 @@ function PricedServicesManager({ user, categories, refreshSignal }: { user: User
             <textarea value={form.description} onChange={e => setForm(f => f && ({ ...f, description: e.target.value }))} rows={2} style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem", resize: "vertical" }} />
           </div>
           <div style={{ marginBottom: "0.9rem" }}>
-            <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Suggest products for this service (optional)</label>
+            <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Style tags (optional)</label>
+            <p style={{ fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.4rem" }}>
+              Used to suggest related products from any seller at booking time — separate from the specific products you pick below.
+            </p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
               {[
                 ...(UPSELL_TAG_GROUPS.find(g => g.category === form.category)?.tags ?? []),
@@ -2373,6 +2392,13 @@ function PricedServicesManager({ user, categories, refreshSignal }: { user: User
               })}
             </div>
           </div>
+          <UpsellProductPicker
+            ownerId={user.id}
+            serviceTags={form.tags}
+            selectedProductIds={form.upsellProductIds}
+            onChange={(ids) => setForm(f => f && ({ ...f, upsellProductIds: ids }))}
+            supabase={supabase}
+          />
           {error && <p style={{ color: "#E53935", fontSize: "0.82rem", marginBottom: "0.75rem" }}>{error}</p>}
           <div style={{ display: "flex", gap: "0.6rem" }}>
             <button type="button" onClick={handleSaveForm} disabled={saving} className="btn-plum" style={{ padding: "0.55rem 1.4rem", fontSize: "0.85rem" }}>{saving ? "Saving…" : form.id ? "Save changes" : "Add service"}</button>
@@ -3000,6 +3026,9 @@ function WalletTab({ user }: { user: User }) {
         </div>
       )}
 
+      {/* Instant payouts via PayFast */}
+      <PayFastMerchantSection userId={user.id} />
+
       {/* Request form modal */}
       {showRequestForm && (
         <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setShowRequestForm(false); }}>
@@ -3057,6 +3086,142 @@ function WalletTab({ user }: { user: User }) {
               </div>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── PayFast instant payouts (split payments) ──────────────────────────────────
+// Collects the artist/store partner's own PayFast merchant ID so PayFast can
+// pay them directly at the moment of payment, instead of the wallet's
+// pending → 2-day-hold → manual withdrawal path — see lib/payments/split.ts
+// for the full mechanics and the constraints this is built around.
+//
+// ⚠️  Enabling this is TWO steps, and only the first is self-serve:
+//   1. The partner pastes their merchant ID here (this component).
+//   2. TKZ adds that merchant ID to Umuhle's own "Allowed merchants" list
+//      in the PayFast dashboard (this appears to require a manual,
+//      per-merchant step there — no public API for it was found; confirm
+//      with PayFast support before assuming this can be automated) and
+//      then flips payfast_split_approved for that profile, e.g. via the
+//      admin panel.
+// Until step 2 happens, this partner keeps earning through the wallet
+// exactly as before — nothing about their current payouts changes just by
+// saving an ID here.
+
+function PayFastMerchantSection({ userId }: { userId: string }) {
+  const supabase = createClient();
+  const [merchantId, setMerchantId] = useState("");
+  const [savedId, setSavedId] = useState<string | null>(null);
+  const [approved, setApproved] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("payfast_merchant_id, payfast_split_approved")
+        .eq("id", userId)
+        .single();
+      setSavedId(data?.payfast_merchant_id ?? null);
+      setMerchantId(data?.payfast_merchant_id ?? "");
+      setApproved(Boolean(data?.payfast_split_approved));
+      setLoading(false);
+    })();
+  }, [userId, supabase]);
+
+  const handleSave = async () => {
+    const trimmed = merchantId.trim();
+    if (!trimmed) return;
+    setSaving(true);
+    // A new/changed ID always needs re-approving — see the file header.
+    const { error } = await supabase
+      .from("profiles")
+      .update({ payfast_merchant_id: trimmed, payfast_split_approved: false })
+      .eq("id", userId);
+    setSaving(false);
+    if (error) {
+      setNotice("Couldn't save your merchant ID. Please try again.");
+      return;
+    }
+    setSavedId(trimmed);
+    setApproved(false);
+    setNotice("Saved. We'll activate instant payouts once it's confirmed on our end — usually within a few days.");
+  };
+
+  if (loading) return null;
+
+  return (
+    <div style={{ background: "#fff", border: "1.5px solid var(--plum-t)", borderRadius: 18, padding: "1.5rem", marginBottom: "2rem" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+        <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.05rem" }}>Instant payouts via PayFast</h3>
+        {savedId && (
+          <span style={{
+            fontSize: "0.7rem", fontWeight: 600, padding: "0.25rem 0.65rem", borderRadius: 999,
+            background: approved ? "#E6F4EA" : "var(--plum-t)", color: approved ? "#1E7B34" : "var(--onyx)",
+          }}>
+            {approved ? "Active" : "Pending approval"}
+          </span>
+        )}
+      </div>
+      <p style={{ color: "var(--grey)", fontSize: "0.85rem", lineHeight: 1.6, marginBottom: "1rem" }}>
+        {approved
+          ? "Your bookings and single-seller orders now pay you directly and instantly — no 2-day hold, no manual withdrawal. (Multi-seller cart orders still go through your wallet above, since a single payment can only split to one PayFast account.)"
+          : "Add your own PayFast merchant ID and, once we've confirmed it on our end, eligible bookings and orders will pay you the moment the customer pays — instead of sitting in your wallet's pending balance."}
+      </p>
+
+      <div style={{ display: "flex", gap: "0.6rem", marginBottom: "0.5rem" }}>
+        <input
+          type="text"
+          value={merchantId}
+          onChange={(e) => setMerchantId(e.target.value)}
+          placeholder="e.g. 10000100"
+          style={{ flex: 1, padding: "0.7rem 0.9rem", borderRadius: 12, border: "1.5px solid var(--plum-t)", fontSize: "0.9rem" }}
+        />
+        <button
+          className="btn-plum"
+          disabled={saving || !merchantId.trim() || merchantId.trim() === savedId}
+          onClick={handleSave}
+          style={{ padding: "0.7rem 1.4rem", opacity: saving || !merchantId.trim() || merchantId.trim() === savedId ? 0.5 : 1 }}
+        >
+          {saving ? "Saving…" : savedId ? "Update" : "Save"}
+        </button>
+      </div>
+
+      {notice && <p style={{ fontSize: "0.8rem", color: "var(--onyx)", marginTop: "0.4rem" }}>{notice}</p>}
+
+      <button
+        onClick={() => setShowHelp((s) => !s)}
+        style={{ background: "none", border: "none", padding: 0, marginTop: "0.75rem", fontSize: "0.8rem", color: "var(--plum)", textDecoration: "underline", cursor: "pointer" }}
+      >
+        {showHelp ? "Hide" : "Don't have a PayFast merchant ID?"}
+      </button>
+
+      {showHelp && (
+        <div style={{ marginTop: "0.85rem", padding: "1rem 1.1rem", background: "var(--plum-t)", borderRadius: 14, fontSize: "0.82rem", lineHeight: 1.7, color: "var(--onyx)" }}>
+          <p style={{ marginBottom: "0.6rem" }}>
+            Your merchant ID is free and comes with a PayFast account — it&apos;s the same account you&apos;d use to accept payments anywhere else, not something specific to Umuhle.
+          </p>
+          <ol style={{ paddingLeft: "1.1rem", marginBottom: "0.6rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            <li>
+              Sign up for a free PayFast account at{" "}
+              <a href="https://www.payfast.io" target="_blank" rel="noopener noreferrer" style={{ color: "var(--plum)" }}>payfast.io</a>
+              {" "}(business or individual, whichever fits you).
+            </li>
+            <li>
+              Once you&apos;re logged in, your Merchant ID is shown on your Dashboard, or under Settings → Integration. PayFast&apos;s own guide:{" "}
+              <a href="https://payfast.io/faq/merchant-faqs/" target="_blank" rel="noopener noreferrer" style={{ color: "var(--plum)" }}>Merchant FAQs</a>.
+            </li>
+            <li>Paste that number above and save.</li>
+          </ol>
+          <p style={{ opacity: 0.85 }}>
+            Curious how the instant-pay part works under the hood? See PayFast&apos;s{" "}
+            <a href="https://payfast.io/features/split-payments/" target="_blank" rel="noopener noreferrer" style={{ color: "var(--plum)" }}>Split Payments</a> page.
+          </p>
         </div>
       )}
     </div>
@@ -3630,13 +3795,13 @@ interface PartnerProductRow {
 const fmtShop = (cents: number) => `R${(cents / 100).toFixed(0)}`;
 
 // ── Products manager ─────────────────────────────────────────────────────────
-// Shared product create/edit/list UI — this is now the whole "My Shop" tab.
-// Products and ads used to be two separate things (a free product listing,
-// plus a paid ad you bought separately to promote it). They're merged now:
-// listing a product IS the promotion, paid for up front via the same
-// Starter/Growth/Business/Premium packages ads used to use on their own.
-// Legacy products (listing_status null, created before this merge) are
-// grandfathered in — ungated, exactly as they worked before.
+// Free to list — see the 2026-08 removal of the paid Starter/Growth/
+// Business/Premium listing packages (products used to be gated behind
+// `listing_status: "pending_payment"` until a package was bought; that
+// gate is gone). package/listing_status/expires_at columns are left in
+// the database for historical rows but nothing here reads or writes them
+// anymore — every product is either "Live" or "Hidden", purely by the
+// owner's own toggle, once past content moderation.
 function ProductsManager({ user }: { user: { id: string } }) {
   const supabase = createClient();
 
@@ -3644,7 +3809,6 @@ function ProductsManager({ user }: { user: { id: string } }) {
   const [prodLoading, setProdLoading] = useState(true);
   const [showForm,   setShowForm]   = useState(false);
   const [editTarget, setEditTarget] = useState<PartnerProductRow | null>(null);
-  const [paymentTarget, setPaymentTarget] = useState<{ id: string; name: string; mode: "new" | "renew" } | null>(null);
 
   const loadProducts = useCallback(async () => {
     setProdLoading(true);
@@ -3658,11 +3822,6 @@ function ProductsManager({ user }: { user: { id: string } }) {
   }, [supabase, user.id]);
 
   useEffect(() => { loadProducts(); }, [loadProducts]);
-
-  const isExpired = (p: PartnerProductRow) =>
-    Boolean(p.expires_at && new Date(p.expires_at) < new Date());
-  const isGated = (p: PartnerProductRow) =>
-    p.listing_status === "pending_payment" || p.listing_status === "cancelled";
 
   const handleSaved = (saved: ProductFormData & { id: string }, wasNew: boolean) => {
     const toRow = (base: PartnerProductRow | undefined): PartnerProductRow => ({
@@ -3683,7 +3842,7 @@ function ProductsManager({ user }: { user: { id: string } }) {
       created_at:        base?.created_at        ?? new Date().toISOString(),
       partner_id:        base?.partner_id        ?? user.id,
       package:           base?.package        ?? null,
-      listing_status:    base?.listing_status ?? (wasNew ? "pending_payment" : null),
+      listing_status:    base?.listing_status ?? null,
       starts_at:         base?.starts_at      ?? null,
       expires_at:        base?.expires_at     ?? null,
     });
@@ -3694,22 +3853,14 @@ function ProductsManager({ user }: { user: { id: string } }) {
     });
     setShowForm(false);
     setEditTarget(null);
-    if (wasNew) setPaymentTarget({ id: saved.id, name: saved.name, mode: "new" });
   };
 
   const toggleActive = async (p: PartnerProductRow) => {
-    if (isGated(p) || isExpired(p)) return; // use the payment flow instead
     await supabase.from("products").update({ is_active: !p.is_active }).eq("id", p.id);
     setProducts(prev => prev.map(x => x.id === p.id ? { ...x, is_active: !x.is_active } : x));
   };
 
   const modBadge = (p: PartnerProductRow) => {
-    if (isGated(p)) {
-      return <span style={{ background: "#FFF3E0", color: "#E65100", borderRadius: 100, padding: "0.2rem 0.65rem", fontSize: "0.7rem", fontWeight: 600 }}>Awaiting payment</span>;
-    }
-    if (isExpired(p)) {
-      return <span style={{ background: "#F5F5F5", color: "#757575", borderRadius: 100, padding: "0.2rem 0.65rem", fontSize: "0.7rem", fontWeight: 600 }}>Expired</span>;
-    }
     const map: Record<string, { bg: string; color: string; label: string }> = {
       approved:     { bg: "#E8F5E9", color: "#2E7D32", label: "Live" },
       scanning:     { bg: "#FFF3E0", color: "#E65100", label: "Under review" },
@@ -3729,10 +3880,9 @@ function ProductsManager({ user }: { user: { id: string } }) {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "0.75rem" }}>
         <p style={{ fontSize: "0.82rem", color: "var(--grey)", margin: 0, maxWidth: 480 }}>
-          Every listing — from R20 for 6 weeks — goes through a quick review before it appears in the shop.{" "}
-          <a href="/fees" target="_blank" rel="noopener noreferrer" style={{ color: "var(--plum)" }}>See all fees →</a>
+          Listing a product is free — it goes through a quick review before it appears in the shop.
         </p>
-        {!showForm && !editTarget && !paymentTarget && (
+        {!showForm && !editTarget && (
           <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.55rem 1.25rem", fontSize: "0.85rem", whiteSpace: "nowrap" }}>
             + Add product
           </button>
@@ -3765,25 +3915,13 @@ function ProductsManager({ user }: { user: { id: string } }) {
         </div>
       )}
 
-      {paymentTarget && (
-        <div style={{ marginBottom: "1.5rem" }}>
-          <ListingPackagePicker
-            productId={paymentTarget.id}
-            productName={paymentTarget.name}
-            mode={paymentTarget.mode}
-            onCancel={() => setPaymentTarget(null)}
-            onUsedSlot={() => { setPaymentTarget(null); loadProducts(); }}
-          />
-        </div>
-      )}
-
       {prodLoading ? (
         <p style={{ color: "var(--grey)" }}>Loading products…</p>
       ) : products.length === 0 && !showForm ? (
         <div style={{ textAlign: "center", padding: "3rem", background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.12)" }}>
           <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>🛍️</div>
           <p style={{ fontFamily: "var(--font-display)", fontSize: "1.05rem", marginBottom: "0.5rem" }}>No products yet</p>
-          <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>Add your first product — R20 keeps it listed for 6 weeks — to start selling on Umuhle.</p>
+          <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>Add your first product — it&apos;s free — to start selling on Umuhle.</p>
           <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.75rem 2rem" }}>Add a product</button>
         </div>
       ) : (
@@ -3805,40 +3943,21 @@ function ProductsManager({ user }: { user: { id: string } }) {
                 </div>
                 <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: 0 }}>
                   {fmtShop(p.price)} · {p.stock_count} in stock · <span style={{ textTransform: "capitalize" }}>{p.category ?? "—"}</span>
-                  {p.package && p.expires_at && !isExpired(p) && (
-                    <> · <span style={{ textTransform: "capitalize" }}>{p.package}</span> package, live till {new Date(p.expires_at).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })}</>
-                  )}
                 </p>
               </div>
               <div style={{ display: "flex", gap: "0.4rem", flexShrink: 0 }}>
                 <button
-                  onClick={() => { setEditTarget(p); setShowForm(false); setPaymentTarget(null); }}
+                  onClick={() => { setEditTarget(p); setShowForm(false); }}
                   style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "1.5px solid rgba(155,127,184,0.3)", background: "#fff", color: "var(--plum)", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
                 >
                   Edit
                 </button>
-                {isGated(p) ? (
-                  <button
-                    onClick={() => setPaymentTarget({ id: p.id, name: p.name, mode: "new" })}
-                    style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "none", background: "var(--plum)", color: "#fff", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
-                  >
-                    Pay to publish
-                  </button>
-                ) : isExpired(p) ? (
-                  <button
-                    onClick={() => setPaymentTarget({ id: p.id, name: p.name, mode: "renew" })}
-                    style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "none", background: "var(--plum)", color: "#fff", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
-                  >
-                    Renew
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => toggleActive(p)}
-                    style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "none", background: p.is_active ? "#E8F5E9" : "#F5F5F5", color: p.is_active ? "#2E7D32" : "#757575", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
-                  >
-                    {p.is_active ? "Live" : "Hidden"}
-                  </button>
-                )}
+                <button
+                  onClick={() => toggleActive(p)}
+                  style={{ padding: "0.35rem 0.85rem", borderRadius: 100, border: "none", background: p.is_active ? "#E8F5E9" : "#F5F5F5", color: p.is_active ? "#2E7D32" : "#757575", fontWeight: 500, fontSize: "0.78rem", cursor: "pointer" }}
+                >
+                  {p.is_active ? "Live" : "Hidden"}
+                </button>
               </div>
             </div>
           ))}
@@ -3851,7 +3970,7 @@ function ProductsManager({ user }: { user: { id: string } }) {
 // My Shop — products and ads used to be two tabs here (a free product list,
 // plus a separate ad-purchase tab that, as it turns out, had no way to
 // actually create an ad from the UI). They're merged now: this tab IS
-// listing management, and every listing is paid + promoted from the start.
+// listing management, and every listing is free from the start.
 // ─── Orders to Fulfill (partner's own order_items) ─────────────────────────────
 //
 // Per-item, not per-order: this reads order_items directly (via the

@@ -6,7 +6,7 @@
 // artist booking or store deposit booking sent people to a dead end with
 // no way back to the artist/salon they were mid-booking with, forcing them
 // to re-find the store/artist and start the whole flow over. See the
-// per-type initiate routes (app/api/{ozow,tradesafe}/initiate/route.ts)
+// per-type initiate routes (app/api/{ozow,payfast}/initiate/route.ts)
 // for where `ref` + `type` originate.
 //
 // `booking` needs no lookup here — the intent id alone is enough for the

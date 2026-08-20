@@ -25,13 +25,13 @@ const STATUS_STYLES: Record<string, { bg: string; color: string; label: string }
   cancelled: { bg: "#FAFAFA", color: "#757575", label: "Cancelled" },
 };
 
-// Legacy values (payfast/happypay/google_pay) are kept so orders placed
-// before the 2026-08 TradeSafe migration still display a proper label
-// instead of the raw DB string — see types/index.ts's PaymentMethod type.
+// Legacy values (tradesafe/happypay/google_pay) are kept so orders placed
+// under a previous gateway still display a proper label instead of the
+// raw DB string — see types/index.ts's PaymentMethod type.
 const PAYMENT_LABEL: Record<string, string> = {
-  tradesafe: "TradeSafe (Escrow)",
+  payfast: "PayFast",
   ozow: "Ozow (Instant EFT)",
-  payfast: "PayFast (legacy)",
+  tradesafe: "TradeSafe (legacy, escrow)",
   happypay: "HappyPay (legacy)",
   google_pay: "Google Pay (legacy)",
 };

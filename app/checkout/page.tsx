@@ -13,7 +13,7 @@ import AuthModal from "@/components/AuthModal";
 
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
-type PayMethod = "tradesafe" | "ozow";
+type PayMethod = "payfast" | "ozow";
 
 // ── Coupon types ──────────────────────────────────────────────────────────────
 interface Coupon {
@@ -247,10 +247,10 @@ interface PaymentOption {
 
 const PAYMENT_OPTIONS: PaymentOption[] = [
   {
-    id: "tradesafe",
-    label: "TradeSafe",
-    description: "Secure escrow — card, EFT, SnapScan & PayJustNow",
-    tagline: "Cards, EFT & more via TradeSafe",
+    id: "payfast",
+    label: "PayFast",
+    description: "Card, EFT, SnapScan & more",
+    tagline: "Cards, EFT & more via PayFast",
     badges: ["Visa", "Mastercard", "Instant EFT", "SnapScan"],
   },
   {
@@ -263,12 +263,12 @@ const PAYMENT_OPTIONS: PaymentOption[] = [
 ];
 
 // Local brand assets — drop the real files in place at these paths:
-//   /public/payment/tradesafe.svg
+//   /public/payment/payfast.svg
 //   /public/payment/ozow.svg
 // GatewayLogo below falls back to a neutral card glyph if a file is
 // missing or fails to load, so an absent logo never breaks the layout.
 const GATEWAY_LOGOS: Record<PayMethod, string> = {
-  tradesafe: "/payment/tradesafe.svg",
+  payfast: "/payment/payfast.svg",
   ozow: "/payment/ozow.svg",
 };
 
@@ -302,7 +302,7 @@ export default function CheckoutPage() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [payMethod, setPayMethod] = useState<PayMethod>("tradesafe");
+  const [payMethod, setPayMethod] = useState<PayMethod>("payfast");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [discount, setDiscount] = useState(0);
@@ -311,7 +311,7 @@ export default function CheckoutPage() {
   // /api/payments/gateways is loading — the common case is nothing paused
   // and the cart clears both eligibility rules (see lib/payments/eligibility.ts).
   const [availableGateways, setAvailableGateways] = useState<Set<PayMethod>>(
-    new Set<PayMethod>(["tradesafe", "ozow"])
+    new Set<PayMethod>(["payfast", "ozow"])
   );
 
   const [form, setForm] = useState({
@@ -375,7 +375,7 @@ export default function CheckoutPage() {
   // of leaving a disabled option selected.
   useEffect(() => {
     if (availableGateways.has(payMethod)) return;
-    const fallback = (["tradesafe", "ozow"] as PayMethod[]).find((m) => availableGateways.has(m));
+    const fallback = (["payfast", "ozow"] as PayMethod[]).find((m) => availableGateways.has(m));
     if (fallback) setPayMethod(fallback);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [availableGateways]);
@@ -393,10 +393,10 @@ export default function CheckoutPage() {
       .eq("id", appliedCoupon.id);
   }, [appliedCoupon, supabase]);
 
-  const handleTradeSafe = async () => {
+  const handlePayFast = async () => {
     setSubmitting(true); setError("");
     try {
-      const res = await fetch("/api/tradesafe/initiate", {
+      const res = await fetch("/api/payfast/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -411,12 +411,13 @@ export default function CheckoutPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        // The cart can become TradeSafe-ineligible between page load and
-        // submit (a coupon just dropped the total under R50, say) — the
+        // The cart can become PayFast-ineligible between page load and
+        // submit (a coupon just dropped the total under R5, or the cart
+        // spans multiple sellers so it can't split — see
+        // lib/payments/eligibility.ts's GATEWAY_INELIGIBLE code) — the
         // effect above should already have hidden this button in that
         // case, but if the request still lands here, fall back to Ozow
-        // automatically rather than showing a dead end. See
-        // lib/payments/eligibility.ts's GATEWAY_INELIGIBLE code.
+        // automatically rather than showing a dead end.
         if (data.code === "GATEWAY_INELIGIBLE" && data.fallback === "ozow") {
           setPayMethod("ozow");
           setSubmitting(false);
@@ -427,11 +428,17 @@ export default function CheckoutPage() {
       }
       await recordCouponUsage();
 
-      // ⚠️  Do NOT call clear() here — if the user cancels on TradeSafe's
+      // ⚠️  Do NOT call clear() here — if the user cancels on PayFast's
       //     checkout page they must land on /payment/cancelled with their
       //     cart still intact. Cart is cleared only after confirmed
       //     payment (see /payment/success).
-      window.location.href = data.redirectUrl;
+      const form2 = document.createElement("form");
+      form2.method = "POST"; form2.action = data.payfastUrl;
+      Object.entries(data.params as Record<string, string>).forEach(([k, v]) => {
+        const inp = document.createElement("input"); inp.type = "hidden"; inp.name = k; inp.value = v; form2.appendChild(inp);
+      });
+      document.body.appendChild(form2);
+      form2.submit();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Payment failed");
       setSubmitting(false);
@@ -458,7 +465,7 @@ export default function CheckoutPage() {
       if (!res.ok) throw new Error(data.error ?? "Ozow failed");
       await recordCouponUsage();
 
-      // ⚠️  Same as TradeSafe — do NOT clear cart here. Cart is
+      // ⚠️  Same as PayFast — do NOT clear cart here. Cart is
       //     cleared on /payment/success after confirmed payment.
       window.location.href = data.redirectUrl;
     } catch (err: unknown) {
@@ -639,7 +646,7 @@ export default function CheckoutPage() {
                 </div>
               )}
 
-              {/* Badge panel — TradeSafe fans out to several networks, shown
+              {/* Badge panel — PayFast fans out to several networks, shown
                   as badges (see PAYMENT_OPTIONS above); Ozow shows its one. */}
               {selectedPaymentOption ? (
                 <div className="payment-methods-panel">
@@ -660,10 +667,10 @@ export default function CheckoutPage() {
             )}
 
             {/* Pay buttons */}
-            {payMethod === "tradesafe" && (
+            {payMethod === "payfast" && (
               <button className="btn-plum" style={{ width: "100%", padding: "1rem", fontSize: "1rem" }}
-                onClick={handleTradeSafe} disabled={submitting || !isFormValid}>
-                {submitting ? "Redirecting…" : `Pay ${fmt(total)} with TradeSafe`}
+                onClick={handlePayFast} disabled={submitting || !isFormValid}>
+                {submitting ? "Redirecting…" : `Pay ${fmt(total)} with PayFast`}
               </button>
             )}
 
@@ -674,11 +681,11 @@ export default function CheckoutPage() {
               </button>
             )}
 
-            {!availableGateways.has("tradesafe") && (
+            {!availableGateways.has("payfast") && (
               <p style={{ fontSize: "0.72rem", color: "var(--light)", textAlign: "center", marginTop: "0.5rem" }}>
                 {isUmuhleProfitOnly
                   ? "This order is Umuhle stock only, so it's paid via Ozow."
-                  : "Orders under R50 are paid via Ozow."}
+                  : "Orders under R5 are paid via Ozow."}
               </p>
             )}
 

@@ -3,15 +3,15 @@
 // booking_intents row — mirrors lib/orders.ts's createPendingOrder() for
 // shop orders. Previously this lookup-and-insert logic lived only inline
 // inside app/api/payfast/initiate/route.ts, because PayFast was the only
-// gateway that sold bookings (PayFast is gone — see the 2026-08 TradeSafe
-// migration). Pulled out here so TradeSafe and Ozow's initiate routes
+// gateway that sold bookings (PayFast is gone — see the 2026-08 PayFast
+// migration). Pulled out here so PayFast and Ozow's initiate routes
 // can't drift apart the way the pre-refactor fulfillment logic did (see
 // lib/payments/fulfillment.ts).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { v4 as uuidv4 } from "uuid";
 
-export type BookingPaymentMethod = "tradesafe" | "ozow";
+export type BookingPaymentMethod = "payfast" | "ozow";
 
 interface CreateBookingIntentOptions {
   paymentMethod: BookingPaymentMethod;

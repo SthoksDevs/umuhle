@@ -5,7 +5,7 @@
 // /api/<gateway>/initiate. Two things narrow the list, both from
 // lib/payments/gateways.ts and lib/payments/eligibility.ts:
 //   1. A gateway paused via its ENABLED env var (lib/payments/gateways.ts).
-//   2. TradeSafe's R50 minimum / Umuhle-profit-only rule
+//   2. PayFast's R5 minimum / Umuhle-profit-only rule
 //      (lib/payments/eligibility.ts) — pass `amountCents` and, for shop
 //      orders, `profitOnly` to have this factored in. Omitting them
 //      returns every currently-enabled gateway, unfiltered by amount.

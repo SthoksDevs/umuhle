@@ -469,7 +469,7 @@ export default function Home() {
   }, [user]);
 
   // Replay a pending booking that was interrupted by the login wall at the
-  // final "pay now" step (see BookingDrawer's handleTradeSafe) — reopens
+  // final "pay now" step (see BookingDrawer's handlePayFast) — reopens
   // the drawer for the right artist AND feeds the saved selections through
   // the same `resume` prop the payment-retry flow uses, so it lands
   // straight back on the confirm step instead of starting over. Fetched
@@ -1138,23 +1138,47 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [takenTimes, date]);
 
-  // Relevant-product upsells for the chosen service — matched purely by
-  // curated tag overlap (see UPSELL_TAG_GROUPS), never by broad category.
-  // A service with no tags (or one the artist deliberately left untagged,
-  // e.g. a big-chop cut) simply shows nothing here rather than falling
-  // back to "everything in this category".
+  // Upsells for the chosen service — an artist's own explicit picks (see
+  // components/UpsellProductPicker.tsx, service_upsell_products) shown
+  // first, topped up with tag-overlap matches (UPSELL_TAG_GROUPS) from any
+  // seller up to 6 total. A service with neither simply shows nothing here
+  // rather than falling back to "everything in this category".
   useEffect(() => {
-    if (!selected || selected.tags.length === 0) { setUpsellProducts([]); return; }
+    if (!selected) { setUpsellProducts([]); return; }
     let cancelled = false;
-    supabase
-      .from("products")
-      .select("id, partner_id, name, price, image_url, category, tags, stock_count")
-      .overlaps("tags", selected.tags)
-      .eq("is_active", true)
-      .eq("moderation_status", "approved")
-      .gt("stock_count", 0)
-      .limit(6)
-      .then(({ data }) => { if (!cancelled) setUpsellProducts((data ?? []) as UpsellProduct[]); });
+    (async () => {
+      const { data: picked } = await supabase
+        .from("service_upsell_products")
+        .select("display_order, product:products(id, partner_id, name, price, image_url, category, tags, stock_count, is_active, moderation_status)")
+        .eq("service_id", selected.id)
+        .order("display_order", { ascending: true });
+
+      type PickedRow = { product: UpsellProduct & { is_active: boolean; moderation_status: string } | (UpsellProduct & { is_active: boolean; moderation_status: string })[] | null };
+      const explicit = ((picked ?? []) as PickedRow[])
+        .map((r) => Array.isArray(r.product) ? r.product[0] : r.product)
+        .filter((p): p is UpsellProduct & { is_active: boolean; moderation_status: string } =>
+          Boolean(p && p.is_active && p.moderation_status === "approved" && p.stock_count > 0));
+
+      if (cancelled) return;
+      const remaining = 6 - explicit.length;
+      if (selected.tags.length === 0 || remaining <= 0) {
+        setUpsellProducts(explicit.slice(0, 6));
+        return;
+      }
+
+      const excludeIds = explicit.map((p) => p.id);
+      const { data: tagMatched } = await supabase
+        .from("products")
+        .select("id, partner_id, name, price, image_url, category, tags, stock_count")
+        .overlaps("tags", selected.tags)
+        .eq("is_active", true)
+        .eq("moderation_status", "approved")
+        .gt("stock_count", 0)
+        .not("id", "in", `(${excludeIds.length ? excludeIds.join(",") : "00000000-0000-0000-0000-000000000000"})`)
+        .limit(remaining);
+
+      if (!cancelled) setUpsellProducts([...explicit, ...((tagMatched ?? []) as UpsellProduct[])]);
+    })();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
@@ -1172,7 +1196,7 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
       .catch(() => setReviews([]));
   }, [artist.id, artist.review_count]);
 
-  const handleTradeSafe = async () => {
+  const handlePayFast = async () => {
     if (!selected || !address.trim() || !pocName.trim() || !pocPhone.trim()) return;
     // Browsing services and picking a date/time never required an account —
     // this is the one point that does, so a lead who was just looking isn't
@@ -1199,7 +1223,7 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
     }
     setLoading(true); setError("");
     try {
-      const res = await fetch("/api/tradesafe/initiate", {
+      const res = await fetch("/api/payfast/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "booking", serviceId: selected.id, artistId: artist.id, bookingDate: date, bookingTime: time, meetingAddress: address, clientPocName: pocName, clientPocPhone: pocPhone }),
@@ -1208,7 +1232,15 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
       if (!res.ok) {
         throw new Error(data.error ?? "Payment initiation failed");
       }
-      window.location.href = data.redirectUrl;
+      // PayFast is a hosted-page form POST, not a redirect URL — build and
+      // submit a hidden form with the signed fields it returned.
+      const form = document.createElement("form");
+      form.method = "POST"; form.action = data.payfastUrl;
+      Object.entries(data.params as Record<string, string>).forEach(([k, v]) => {
+        const inp = document.createElement("input"); inp.type = "hidden"; inp.name = k; inp.value = v; form.appendChild(inp);
+      });
+      document.body.appendChild(form);
+      form.submit();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setLoading(false);
@@ -1429,9 +1461,9 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
 
             {error && <p style={{ color: "#E53935", fontSize: "0.85rem", marginBottom: "1rem" }}>{error}</p>}
             <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginBottom: "1.25rem" }}>
-              You will be redirected to TradeSafe to complete payment securely — your money stays in escrow until the appointment is done. Once paid, you will receive a WhatsApp confirmation.
+              You will be redirected to PayFast to complete payment securely. Once paid, you will receive a WhatsApp confirmation.
             </p>
-            <button className="btn-plum" style={{ width: "100%", padding: "0.875rem" }} onClick={handleTradeSafe} disabled={loading}>
+            <button className="btn-plum" style={{ width: "100%", padding: "0.875rem" }} onClick={handlePayFast} disabled={loading}>
               {loading ? "Redirecting…" : user ? `Pay ${fmt(selected.price)} now to Book` : `Log in to pay ${fmt(selected.price)} & book`}
             </button>
           </>

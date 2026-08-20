@@ -4,26 +4,21 @@
 // Umuhle — booking, shop order, ad, salon subscription, product listing,
 // store booking deposit.
 //
-// This used to live entirely inside app/api/payfast/notify/route.ts,
-// because PayFast was the only gateway that handled anything beyond plain
-// shop orders. HappyPay and Ozow each grew their own smaller, slightly
-// diverging copy of just the order logic. PayFast and HappyPay are gone
-// now (see the 2026-08 TradeSafe migration) — TradeSafe and Ozow are the
-// only two gateways left, and every payment type routes through one or the
-// other (see lib/payments/eligibility.ts for which).
+// PayFast and Ozow are the two gateways today (PayFast's short-lived
+// escrow experiment was reverted 2026-08 — PayFast is a direct-settlement
+// gateway, same as Ozow, so there's no allocation/escrow lifecycle to
+// track here anymore). Every payment type routes through one or the other
+// (see lib/payments/eligibility.ts for which).
 //
-// This file is the single version of the truth now. Every gateway's
-// webhook route does ONLY gateway-specific transport — verify a signature
-// or secret, translate that gateway's field names into a PaymentEvent (see
+// This file is the single version of the truth. Every gateway's webhook
+// route does ONLY gateway-specific transport — verify a signature or
+// secret, translate that gateway's field names into a PaymentEvent (see
 // ./types) — and then calls fulfillPayment() below. Nothing in this file
-// imports lib/tradesafe or lib/ozow for signature/secret checking, and
+// imports lib/payfast or lib/ozow for signature/secret checking, and
 // nothing in here knows what a HashCheck or a webhook secret is. That's
 // what makes a gateway safe to pause (lib/payments/gateways.ts) or
 // eventually remove entirely without touching a single decision made in
-// here. TradeSafe's escrow-release calls (startAllocationDelivery/
-// acceptAllocationDelivery) are the one exception — those aren't transport,
-// they're a real fulfillment decision ("we've started/finished delivering
-// this order"), so they live here rather than in the callback route.
+// here.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PaymentEvent, FulfillmentResult } from "./types";
@@ -34,12 +29,8 @@ import {
   sendBookingFailedEmail,
   sendOrderPaidEmail,
   sendOrderFailedEmail,
-  sendAdPaidEmail,
   sendSalonPaidEmail,
-  sendProductListingPaidEmail,
 } from "@/lib/email";
-import { LISTING_PACKAGES } from "@/types";
-import { startAllocationDelivery } from "@/lib/tradesafe";
 
 const WEEKS: Record<string, number> = { starter: 6, growth: 12, business: 16, premium: 24 };
 const AD_COUNTS: Record<string, number> = { starter: 1, growth: 3, business: 6, premium: 10 };
@@ -52,7 +43,7 @@ const DURATION_LABELS: Record<string, string> = {
  * listing_packages/salon_subscription_payments) predates multi-gateway
  * support and is still named after PayFast specifically — kept around,
  * frozen, for historical rows already using it. Every gateway from here on
- * (TradeSafe, Ozow) writes to the gateway-neutral `gateway_order_id`
+ * (PayFast, Ozow) writes to the gateway-neutral `gateway_order_id`
  * column instead, the pattern `orders` already used before this file
  * existed.
  */
@@ -80,10 +71,6 @@ export async function fulfillPayment(
         return await fulfillBooking(supabase, event, tag);
       case "order":
         return await fulfillOrder(supabase, event, tag);
-      case "ad":
-        return await fulfillAd(supabase, event, tag);
-      case "product_listing":
-        return await fulfillProductListing(supabase, event, tag);
       case "salon":
         return await fulfillSalon(supabase, event, tag);
       case "store_booking_deposit":
@@ -138,11 +125,11 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
         artist_poc_name: intent.artist_poc_name,
         artist_poc_phone: intent.artist_poc_phone,
         payment_method: event.gateway,
-        tradesafe_allocation_id: intent.tradesafe_allocation_id ?? null,
+        payout_via: intent.payout_via ?? "wallet",
         ...gatewayReferenceColumns(event),
       })
       .select(`
-        id, booking_date, booking_time, meeting_address, notes, total_amount, tradesafe_allocation_id,
+        id, booking_date, booking_time, meeting_address, notes, total_amount,
         client_poc_name, client_poc_phone,
         client:profiles!bookings_client_id_fkey(full_name, phone, email),
         artist:artists!bookings_artist_id_fkey(
@@ -166,22 +153,6 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
       await recordBookingSplit(supabase, booking.id, booking.total_amount);
     } catch (e) {
       console.error(`${tag} failed to record booking commission split`, e);
-    }
-
-    // Same escrow-lifecycle reasoning as fulfillOrder() below: TradeSafe
-    // holds this in escrow until acceptAllocationDelivery is called from
-    // app/api/bookings/[id]/status/route.ts when the artist marks the
-    // booking "completed" (the same moment creditBookingPayout() runs).
-    if (event.gateway === "tradesafe" && booking.tradesafe_allocation_id) {
-      try {
-        await startAllocationDelivery(booking.tradesafe_allocation_id);
-        await supabase
-          .from("bookings")
-          .update({ tradesafe_delivery_started_at: new Date().toISOString() })
-          .eq("id", booking.id);
-      } catch (e) {
-        console.error(`${tag} TradeSafe allocationStartDelivery failed`, e);
-      }
     }
 
     const clientRow = Array.isArray(booking.client) ? booking.client[0] : booking.client;
@@ -299,7 +270,7 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
   const { data: order } = await supabase
     .from("orders")
     .select(`
-      id, status, total_amount, shipping_address, created_at, tradesafe_allocation_id,
+      id, status, total_amount, shipping_address, created_at,
       client:profiles!orders_client_id_fkey(full_name, email, phone)
     `)
     .eq("id", event.referenceId)
@@ -339,26 +310,6 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
     if (orderItems) {
       for (const item of orderItems) {
         await supabase.rpc("decrement_stock", { p_product_id: item.product_id, p_qty: item.quantity });
-      }
-    }
-
-    // TradeSafe holds this payment in escrow rather than paying Umuhle
-    // directly (unlike Ozow) — moving the allocation to INITIATED here is
-    // what lets it later be released once delivery is confirmed (see
-    // acceptAllocationDelivery, called from
-    // app/api/order-items/confirm/[token]/route.ts once every item on the
-    // order is delivered). Best-effort: a failure here shouldn't block the
-    // order being marked paid — worst case, allocationAcceptDelivery later
-    // fails too and that gets surfaced/retried there instead.
-    if (event.gateway === "tradesafe" && order.tradesafe_allocation_id) {
-      try {
-        await startAllocationDelivery(order.tradesafe_allocation_id);
-        await supabase
-          .from("orders")
-          .update({ tradesafe_delivery_started_at: paidAt })
-          .eq("id", event.referenceId);
-      } catch (e) {
-        console.error(`${tag} TradeSafe allocationStartDelivery failed`, e);
       }
     }
 
@@ -446,141 +397,9 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
   return { ok: true, message: `Order marked ${event.outcome}` };
 }
 
-// ── Ad ───────────────────────────────────────────────────────────────────────
-// paid only — a failed/cancelled ad payment leaves the ad sitting in
-// pending_payment with no notification. That matches the pre-existing
-// behaviour (there's no sendAdFailedEmail template yet), so it's preserved
-// rather than silently changed here.
-
-async function fulfillAd(supabase: SupabaseClient, event: PaymentEvent, tag: string): Promise<FulfillmentResult> {
-  if (event.outcome !== "paid") {
-    return { ok: true, message: `No action for ad outcome=${event.outcome}` };
-  }
-
-  const now = new Date();
-  const { data: ad } = await supabase
-    .from("ads")
-    .select("package, price, partner_id, partner:profiles!partner_id(full_name, email)")
-    .eq("id", event.referenceId)
-    .eq("status", "pending_payment") // guards a duplicate notification from re-sending the paid email
-    .single();
-
-  if (!ad) {
-    console.warn(`${tag} ad not found or already processed`, event.referenceId);
-    return { ok: true, message: "Already processed or unknown ad" };
-  }
-
-  const pkg = ad.package ?? "starter";
-  const weeks = WEEKS[pkg] ?? 6;
-  const expiresAt = new Date(now.getTime() + weeks * 7 * 24 * 60 * 60 * 1000);
-
-  await supabase
-    .from("ads")
-    .update({
-      status: "active",
-      starts_at: now.toISOString(),
-      expires_at: expiresAt.toISOString(),
-      moderation_status: "scanning",
-      ...gatewayReferenceColumns(event),
-    })
-    .eq("id", event.referenceId)
-    .eq("status", "pending_payment");
-
-  const partnerRow = Array.isArray(ad.partner) ? ad.partner[0] : ad.partner;
-  try {
-    await sendAdPaidEmail({
-      adId: event.referenceId,
-      clientName: (partnerRow as { full_name: string } | undefined)?.full_name ?? "Partner",
-      clientEmail: (partnerRow as { email: string } | undefined)?.email ?? "",
-      packageName: pkg.charAt(0).toUpperCase() + pkg.slice(1),
-      adsCount: AD_COUNTS[pkg] ?? 1,
-      durationLabel: DURATION_LABELS[pkg] ?? `${weeks} weeks`,
-      amount: ad.price ?? 0,
-    });
-  } catch (e) {
-    console.error(`${tag} ad paid email error`, e);
-  }
-
-  return { ok: true, message: "Ad activated" };
-}
-
-// ── Product listing ──────────────────────────────────────────────────────────
-// Same shape as fulfillAd above — same packages, same durations — just
-// updating `products` (+ creating a listing_packages credit bank) instead
-// of `ads`. paid only, same rationale as fulfillAd.
-
-async function fulfillProductListing(supabase: SupabaseClient, event: PaymentEvent, tag: string): Promise<FulfillmentResult> {
-  if (event.outcome !== "paid") {
-    return { ok: true, message: `No action for product_listing outcome=${event.outcome}` };
-  }
-
-  const now = new Date();
-  const { data: product } = await supabase
-    .from("products")
-    .select("package, name, partner_id, moderation_status, partner:profiles!partner_id(full_name, email)")
-    .eq("id", event.referenceId)
-    .eq("listing_status", "pending_payment")
-    .single();
-
-  if (!product) {
-    console.warn(`${tag} product not found or already processed`, event.referenceId);
-    return { ok: true, message: "Already processed or unknown product" };
-  }
-
-  const pkg = product.package ?? "starter";
-  const weeks = WEEKS[pkg] ?? 6;
-  const slotsTotal = LISTING_PACKAGES.find((p) => p.id === pkg)?.ads ?? 1;
-  const expiresAt = new Date(now.getTime() + weeks * 7 * 24 * 60 * 60 * 1000);
-
-  const { data: pkgRow } = await supabase
-    .from("listing_packages")
-    .insert({
-      partner_id: product.partner_id,
-      package: pkg,
-      weeks,
-      slots_total: slotsTotal,
-      slots_used: 1, // this payment's product consumes the first slot immediately
-      status: "active",
-      purchased_at: now.toISOString(),
-      ...gatewayReferenceColumns(event),
-    })
-    .select("id")
-    .single();
-
-  await supabase
-    .from("products")
-    .update({
-      listing_status: "active",
-      listing_package_id: pkgRow?.id ?? null,
-      starts_at: now.toISOString(),
-      expires_at: expiresAt.toISOString(),
-      is_active: product.moderation_status === "approved",
-      ...gatewayReferenceColumns(event),
-    })
-    .eq("id", event.referenceId)
-    .eq("listing_status", "pending_payment");
-
-  const partnerRow = Array.isArray(product.partner) ? product.partner[0] : product.partner;
-  try {
-    await sendProductListingPaidEmail({
-      productId: event.referenceId,
-      productName: product.name,
-      clientName: (partnerRow as { full_name: string } | undefined)?.full_name ?? "Partner",
-      clientEmail: (partnerRow as { email: string } | undefined)?.email ?? "",
-      packageName: pkg.charAt(0).toUpperCase() + pkg.slice(1),
-      durationLabel: DURATION_LABELS[pkg] ?? `${weeks} weeks`,
-      slotsTotal,
-      amount: LISTING_PACKAGES.find((p) => p.id === pkg)?.price ?? 2000,
-    });
-  } catch (e) {
-    console.error(`${tag} product listing paid email error`, e);
-  }
-
-  return { ok: true, message: "Product listing activated" };
-}
-
-// ── Salon subscription ───────────────────────────────────────────────────────
-// paid only, same rationale as fulfillAd.
+// paid only — a failed/cancelled subscription payment leaves the salon's
+// subscription sitting unpaid with no notification, matching pre-existing
+// behaviour.
 
 async function fulfillSalon(supabase: SupabaseClient, event: PaymentEvent, tag: string): Promise<FulfillmentResult> {
   if (event.outcome !== "paid") {
@@ -659,7 +478,7 @@ async function fulfillStoreBookingDeposit(supabase: SupabaseClient, event: Payme
       })
       .eq("id", event.referenceId)
       .eq("deposit_status", "pending") // guards a duplicate notification from re-applying this
-      .select("id, deposit_amount, tradesafe_allocation_id")
+      .select("id, deposit_amount")
       .single();
 
     if (error || !booking) {
@@ -676,22 +495,6 @@ async function fulfillStoreBookingDeposit(supabase: SupabaseClient, event: Payme
       await recordStoreBookingDepositSplit(supabase, booking.id, booking.deposit_amount);
     } catch (e) {
       console.error(`${tag} failed to record store booking deposit split`, e);
-    }
-
-    // Same escrow-lifecycle reasoning as fulfillOrder/fulfillBooking:
-    // TradeSafe holds this in escrow until acceptAllocationDelivery is
-    // called from app/api/store-bookings/[id]/status/route.ts when the
-    // salon marks the booking "completed".
-    if (event.gateway === "tradesafe" && booking.tradesafe_allocation_id) {
-      try {
-        await startAllocationDelivery(booking.tradesafe_allocation_id);
-        await supabase
-          .from("store_bookings")
-          .update({ tradesafe_delivery_started_at: new Date().toISOString() })
-          .eq("id", booking.id);
-      } catch (e) {
-        console.error(`${tag} TradeSafe allocationStartDelivery failed`, e);
-      }
     }
 
     return { ok: true, message: "Store booking deposit confirmed" };

@@ -4,7 +4,7 @@
 // app/api/bookings/[id]/status/route.ts for artist bookings — direct
 // client-side writes to `store_bookings.status` should go through here
 // instead, the same reasoning as that route: otherwise side effects (the
-// salon review invite, the deposit payout, and TradeSafe's escrow release
+// salon review invite, the deposit payout, and PayFast's escrow release
 // below) never get triggered. Deposits belong to the salon, not Umuhle
 // (confirmed 2026-08-06) — see recordStoreBookingDepositSplit /
 // creditStoreBookingDepositPayout in lib/payouts.ts.
@@ -19,7 +19,6 @@ import { createReviewInvite, buildReviewUrl } from "@/lib/review-invites";
 import { sendReviewInviteEmail } from "@/lib/email";
 import { notifyReviewInvite } from "@/lib/whatsapp";
 import { creditStoreBookingDepositPayout } from "@/lib/payouts";
-import { acceptAllocationDelivery } from "@/lib/tradesafe";
 
 const STORE_BOOKING_STATUSES = ["pending", "confirmed", "completed", "cancelled"] as const;
 type StoreBookingStatusValue = typeof STORE_BOOKING_STATUSES[number];
@@ -67,7 +66,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     .from("store_bookings")
     .update({ status })
     .eq("id", bookingId)
-    .select("id, status, payment_method, tradesafe_allocation_id, tradesafe_released_at")
+    .select("id, status, payment_method")
     .single();
 
   if (error || !updated) {
@@ -78,7 +77,8 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     // Credits the salon owner's wallet with their 94.5% of the deposit —
     // own try/catch, independent of everything else here. Safe to call
     // repeatedly (creditStoreBookingDepositPayout no-ops once already
-    // credited).
+    // credited, including when it was already settled instantly via a
+    // PayFast split — see lib/payouts.ts).
     try {
       const result = await creditStoreBookingDepositPayout(service, bookingId);
       if (!result.credited) {
@@ -86,22 +86,6 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       }
     } catch (e) {
       console.error("[store-bookings/status] deposit payout error:", e);
-    }
-
-    // TradeSafe holds this deposit in escrow rather than paying Umuhle
-    // directly — "completed" is also the right moment to release it, since
-    // the service has actually been rendered. Best-effort, independent of
-    // the payout above.
-    if (updated.payment_method === "tradesafe" && updated.tradesafe_allocation_id && !updated.tradesafe_released_at) {
-      try {
-        await acceptAllocationDelivery(updated.tradesafe_allocation_id);
-        await service
-          .from("store_bookings")
-          .update({ tradesafe_released_at: new Date().toISOString() })
-          .eq("id", bookingId);
-      } catch (e) {
-        console.error("[store-bookings/status] TradeSafe allocationAcceptDelivery failed:", e);
-      }
     }
   }
 

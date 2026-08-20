@@ -5,7 +5,7 @@
 // This is deliberately opt-OUT, not opt-in: an unset env var means the
 // gateway is enabled. That way the existing deployment keeps working with
 // zero config changes, and pausing a gateway later is a one-line env var
-// flip (e.g. TRADESAFE_ENABLED=false) rather than something that has to be
+// flip (e.g. PAYFAST_ENABLED=false) rather than something that has to be
 // explicitly turned on everywhere first.
 //
 // IMPORTANT: only the *initiate* routes consult this — never the
@@ -20,17 +20,17 @@
 // in this codebase yet, so that's not a gap in practice, just a boundary
 // worth knowing about if one gets added later.
 
-export type PaymentGateway = "tradesafe" | "ozow";
+export type PaymentGateway = "payfast" | "ozow";
 
-export const PAYMENT_GATEWAYS: readonly PaymentGateway[] = ["tradesafe", "ozow"];
+export const PAYMENT_GATEWAYS: readonly PaymentGateway[] = ["payfast", "ozow"];
 
 const ENABLED_ENV_VAR: Record<PaymentGateway, string> = {
-  tradesafe: "TRADESAFE_ENABLED",
+  payfast: "PAYFAST_ENABLED",
   ozow: "OZOW_ENABLED",
 };
 
 export const GATEWAY_LABEL: Record<PaymentGateway, string> = {
-  tradesafe: "TradeSafe",
+  payfast: "PayFast",
   ozow: "Ozow",
 };
 

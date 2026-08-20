@@ -1,9 +1,9 @@
 // app/api/payments/finalize/route.ts
 //
 // Why this exists: a shopper can back out of a hosted checkout page
-// (TradeSafe or, previously, PayFast) before ever submitting a payment
+// (PayFast or, previously, PayFast) before ever submitting a payment
 // method — there's no transaction on the gateway's side to report, so no
-// webhook notification ever arrives (see app/api/tradesafe/callback/route.ts
+// webhook notification ever arrives (see app/api/payfast/callback/route.ts
 // — that route only ever hears about a real state change). Nothing was
 // ever calling fulfillPayment() with outcome "cancelled" for that case,
 // which is why cancelling a payment wasn't sending an email even though a
@@ -22,11 +22,11 @@
 //     webhook uses, including its `status = 'pending'/'pending_payment'`
 //     guard. So if the real webhook already landed — paid, or cancelled/
 //     failed via a gateway that DOES report it reliably (Ozow, or a
-//     genuine TradeSafe decline) — this call finds nothing left in
+//     genuine PayFast decline) — this call finds nothing left in
 //     "pending" and is a harmless no-op. No double emails.
 //   - The reference id is already exposed to the browser the moment
 //     checkout starts (it's embedded in the redirect URLs sent to
-//     TradeSafe/Ozow), so accepting it here from the client doesn't expose
+//     PayFast/Ozow), so accepting it here from the client doesn't expose
 //     anything that wasn't already client-visible. Worst case of a
 //     mismatched ref is closing out someone else's still-in-flight attempt
 //     early — no money moves and nothing sensitive is returned.
@@ -37,15 +37,15 @@ import { fulfillPayment } from "@/lib/payments/fulfillment";
 import type { PaymentEvent, PaymentType } from "@/lib/payments/types";
 import type { PaymentGateway } from "@/lib/payments/gateways";
 
-const VALID_TYPES: PaymentType[] = ["booking", "order", "ad", "salon", "product_listing", "store_booking_deposit"];
-const VALID_GATEWAYS: PaymentGateway[] = ["tradesafe", "ozow"];
+const VALID_TYPES: PaymentType[] = ["booking", "order", "salon", "store_booking_deposit"];
+const VALID_GATEWAYS: PaymentGateway[] = ["payfast", "ozow"];
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
 
   const ref = body?.ref as string | undefined;
   const type = body?.type as PaymentType | undefined;
-  const gateway = (body?.gateway as PaymentGateway | undefined) ?? "tradesafe";
+  const gateway = (body?.gateway as PaymentGateway | undefined) ?? "payfast";
   const outcome = body?.outcome as string | undefined;
 
   if (!ref || !type) {

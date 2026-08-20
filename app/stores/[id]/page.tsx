@@ -11,10 +11,12 @@ import ReviewsList from "@/components/ReviewsList";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Profile } from "@/types";
+import { UPSELL_TAG_GROUPS } from "@/types";
 
 import { isOpenNow as sharedIsOpenNow, isOpenOnDate, hoursRangeForDate, WEEKDAY_LABELS, type OpeningHours } from "@/lib/opening-hours";
 import { TIMES } from "@/lib/booking-times";
 import { gTag } from "@/lib/analytics";
+import { useCart } from "@/lib/cart-context";
 
 type Salon = {
   id: string; name: string; description: string | null;
@@ -302,6 +304,62 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
   const hasStructuredServices = structuredServices.length > 0;
   const selectedService = structuredServices.find(s => s.id === form.serviceId) ?? null;
 
+  const { addItem } = useCart();
+  type UpsellProduct = { id: string; partner_id: string; name: string; price: number; image_url: string | null; category: string | null; tags: string[]; stock_count: number };
+  const [upsellProducts, setUpsellProducts] = useState<UpsellProduct[]>([]);
+  const [addedProductIds, setAddedProductIds] = useState<Set<string>>(new Set());
+
+  // Same explicit-picks-then-tag-match merge as the artist booking drawer
+  // (see app/page.tsx) — salon_services has no tags field of its own, so
+  // the tag match here is driven by the service's `category`
+  // (UPSELL_TAG_GROUPS is keyed by category) rather than a per-service tag
+  // list.
+  useEffect(() => {
+    if (!selectedService) { setUpsellProducts([]); return; }
+    let cancelled = false;
+    (async () => {
+      const { data: picked } = await supabase
+        .from("salon_service_upsell_products")
+        .select("display_order, product:products(id, partner_id, name, price, image_url, category, tags, stock_count, is_active, moderation_status)")
+        .eq("salon_service_id", selectedService.id)
+        .order("display_order", { ascending: true });
+
+      type PickedRow = { product: UpsellProduct & { is_active: boolean; moderation_status: string } | (UpsellProduct & { is_active: boolean; moderation_status: string })[] | null };
+      const explicit = ((picked ?? []) as PickedRow[])
+        .map((r) => Array.isArray(r.product) ? r.product[0] : r.product)
+        .filter((p): p is UpsellProduct & { is_active: boolean; moderation_status: string } =>
+          Boolean(p && p.is_active && p.moderation_status === "approved" && p.stock_count > 0));
+
+      if (cancelled) return;
+      const remaining = 6 - explicit.length;
+      const categoryTags = UPSELL_TAG_GROUPS.find(g => g.category === selectedService.category)?.tags.map(t => t.id) ?? [];
+      if (categoryTags.length === 0 || remaining <= 0) {
+        setUpsellProducts(explicit.slice(0, 6));
+        return;
+      }
+
+      const excludeIds = explicit.map((p) => p.id);
+      const { data: tagMatched } = await supabase
+        .from("products")
+        .select("id, partner_id, name, price, image_url, category, tags, stock_count")
+        .overlaps("tags", categoryTags)
+        .eq("is_active", true)
+        .eq("moderation_status", "approved")
+        .gt("stock_count", 0)
+        .not("id", "in", `(${excludeIds.length ? excludeIds.join(",") : "00000000-0000-0000-0000-000000000000"})`)
+        .limit(remaining);
+
+      if (!cancelled) setUpsellProducts([...explicit, ...((tagMatched ?? []) as UpsellProduct[])]);
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedService?.id]);
+
+  const handleAddUpsell = (p: UpsellProduct) => {
+    addItem({ id: p.id, partner_id: p.partner_id, name: p.name, description: null, price: p.price, image_url: p.image_url, category: p.category, tags: p.tags, stock_count: p.stock_count, is_active: true, moderation_status: "approved", moderation_score: null, created_at: "" });
+    setAddedProductIds(prev => new Set(prev).add(p.id));
+  };
+
   // Default to the first priced service once the list loads in.
   useEffect(() => {
     if (hasStructuredServices && !form.serviceId) {
@@ -395,21 +453,18 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
     setDone(true);
   };
 
-  // Pays a deposit through TradeSafe or Ozow instead of the free/no-deposit
-  // insert above — see app/api/tradesafe/initiate/route.ts and
-  // app/api/ozow/initiate/route.ts (both handle "store_booking_deposit"),
-  // and lib/payments/fulfillment.ts (fulfillStoreBookingDeposit). The
+  // Pays a deposit through PayFast instead of the free/no-deposit insert
+  // above — see app/api/payfast/initiate/route.ts and
+  // lib/payments/fulfillment.ts (fulfillStoreBookingDeposit). The
   // store_bookings row is created server-side once payment is confirmed,
-  // not here — this only ever kicks off the redirect. Deposits belong to
-  // the salon (see lib/payments/eligibility.ts), so both gateways are
-  // genuinely in play here, unlike ads/listings/salon subscriptions which
-  // are Ozow-only.
+  // not here — this only ever kicks off the hosted-page hand-off. Deposits
+  // belong to the salon (see lib/payments/eligibility.ts).
   const payDeposit = async () => {
     setError("");
     if (!fieldsOk()) return;
     setDepositSaving(true);
     try {
-      const res = await fetch("/api/tradesafe/initiate", {
+      const res = await fetch("/api/payfast/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -432,7 +487,13 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
       }
 
       gTag("form_submit", { form_name: "store_booking_deposit", store_id: salon.id, service: selectedService?.name });
-      window.location.href = data.redirectUrl;
+      const payForm = document.createElement("form");
+      payForm.method = "POST"; payForm.action = data.payfastUrl;
+      Object.entries(data.params as Record<string, string>).forEach(([k, v]) => {
+        const inp = document.createElement("input"); inp.type = "hidden"; inp.name = k; inp.value = v; payForm.appendChild(inp);
+      });
+      document.body.appendChild(payForm);
+      payForm.submit();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Couldn't start payment. Please try again.");
       setDepositSaving(false);
@@ -526,6 +587,37 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
       <textarea value={form.notes} onChange={e => setForm(f=>({...f,notes:e.target.value}))} placeholder="Special requests, inspiration images link…" rows={3} style={{ ...inp, resize: "vertical" }} />
 
       {error && <p style={{ color: "#E53935", fontSize: "0.82rem", marginBottom: "0.75rem" }}>{error}</p>}
+
+      {upsellProducts.length > 0 && (
+        <div style={{ marginBottom: "0.85rem" }}>
+          <p style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.15rem" }}>You might also like</p>
+          <p style={{ fontSize: "0.78rem", color: "var(--grey)", marginBottom: "0.6rem" }}>
+            Handy for your {selectedService?.name.toLowerCase()} — added to your cart, checked out separately.
+          </p>
+          <div style={{ display: "flex", gap: "0.75rem", overflowX: "auto", paddingBottom: "0.25rem" }}>
+            {upsellProducts.map(p => {
+              const added = addedProductIds.has(p.id);
+              return (
+                <div key={p.id} style={{ flexShrink: 0, width: 120, borderRadius: 12, border: "1.5px solid rgba(155,127,184,0.15)", overflow: "hidden", background: "#fff" }}>
+                  <div style={{ height: 90, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                    <Image src={p.image_url ?? "/umuhle-icon.png"} alt={p.name} width={60} height={60} style={{ objectFit: "contain" }} />
+                  </div>
+                  <div style={{ padding: "0.5rem" }}>
+                    <p style={{ fontSize: "0.75rem", fontWeight: 500, margin: 0, lineHeight: 1.3, height: "2.1rem", overflow: "hidden" }}>{p.name}</p>
+                    <p style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--plum)", margin: "0.2rem 0 0.4rem" }}>R{(p.price / 100).toFixed(0)}</p>
+                    <button
+                      type="button"
+                      onClick={() => handleAddUpsell(p)}
+                      disabled={added}
+                      style={{ width: "100%", padding: "0.35rem", borderRadius: 8, border: "none", fontSize: "0.72rem", fontWeight: 500, cursor: added ? "default" : "pointer", background: added ? "var(--forest)" : "var(--plum)", color: "#fff" }}
+                    >{added ? "Added ✓" : "Add to cart"}</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {depositRand && (
         <div style={{ background: "var(--plum-t)", border: "1.5px solid rgba(155,127,184,0.25)", borderRadius: 14, padding: "1rem 1.1rem", marginBottom: "0.85rem" }}>

@@ -65,6 +65,8 @@ export interface Profile {
   artist_category: ServiceCategory | null; // set at signup when account_type = 'artist'
   poc_name: string | null;   // point-of-contact name (required before booking)
   poc_phone: string | null;  // point-of-contact WhatsApp number
+  payfast_merchant_id: string | null;    // for instant PayFast split payouts — see lib/payments/split.ts
+  payfast_split_approved: boolean;       // admin-set, once TKZ has allow-listed this merchant ID in PayFast's dashboard
   created_at: string;
   updated_at: string;
 }
@@ -149,6 +151,7 @@ export interface Booking {
   commission_cents: number | null; // Umuhle's 5.5% cut, recorded at payment time
   payout_cents: number | null;     // artist's 94.5% share
   payout_credited_at: string | null; // set once the payout has been credited to the artist's wallet
+  payout_via: "wallet" | "instant_split"; // 'instant_split' = already paid straight to the artist via PayFast, see lib/payments/split.ts
   // Relations
   client?: Profile;
   artist?: Artist;
@@ -169,23 +172,9 @@ export interface Review {
   reviewer?: Profile;
 }
 
+// Kept only so Product.listing_status (a frozen legacy column, see below)
+// keeps typechecking.
 export type ListingStatus = "pending_payment" | "active" | "expired" | "cancelled";
-
-// One row per package PURCHASE (not per product) — a partner can spend its
-// slots on multiple products over time. See use_listing_slot() in the
-// 2026-07-10 migration.
-export interface ListingPackageRow {
-  id: string;
-  partner_id: string;
-  package: AdPackageId;
-  weeks: number;
-  slots_total: number;
-  slots_used: number;
-  status: "pending_payment" | "active" | "cancelled";
-  payfast_payment_id: string | null;
-  purchased_at: string | null;
-  created_at: string;
-}
 
 export interface Product {
   id: string;
@@ -202,10 +191,11 @@ export interface Product {
   moderation_score: number | null;
   created_at: string;
   partner?: Profile;
-  // ── Listing fee fields (added alongside the products/ads pricing merge) ──
-  // Nullable/optional so legacy rows (created before this change) and
-  // Umuhle's own skipVerify products keep working without a value here.
-  package?: AdPackageId | null;
+  // ── Legacy paid-listing fields (package/listing fee removed 2026-08) ──
+  // Every product is free to list now — see components/ProductForm.tsx.
+  // These stay optional/nullable purely so old rows created while the fee
+  // existed keep typechecking; nothing writes them anymore.
+  package?: string | null;
   listing_status?: ListingStatus | null;
   listing_package_id?: string | null;
   starts_at?: string | null;
@@ -213,8 +203,8 @@ export interface Product {
   payfast_payment_id?: string | null;
   // Drives lib/payments/eligibility.ts: an order where every line item has
   // this set to true is 100% Umuhle profit (no partner payout), so it's
-  // forced onto Ozow instead of TradeSafe's escrow — see lib/payouts.ts
-  // for the payout-side logic that already reads this same column.
+  // forced onto Ozow instead of PayFast — see lib/payouts.ts for the
+  // payout-side logic that already reads this same column.
   is_umuhle_product?: boolean | null;
   // ── Gallery + variation fields ──
   // Not yet columns on `products` (checked July 2026) — kept optional so the
@@ -233,12 +223,12 @@ export interface CartItem {
   quantity: number;
 }
 
-// "tradesafe" and "ozow" are the only two gateways new payments can use
-// (see lib/payments/gateways.ts). "payfast" | "happypay" | "google_pay"
-// are kept here only so existing rows created before this change — and
-// any admin screen still displaying them — keep typechecking; nothing
-// should ever write those values again.
-export type PaymentMethod = "tradesafe" | "ozow" | "payfast" | "happypay" | "google_pay";
+// "payfast" and "ozow" are the only two gateways new payments can use
+// (see lib/payments/gateways.ts). "tradesafe" | "happypay" | "google_pay"
+// are kept here only so existing rows created before those gateways were
+// retired — and any admin screen still displaying them — keep
+// typechecking; nothing should ever write those values again.
+export type PaymentMethod = "payfast" | "ozow" | "tradesafe" | "happypay" | "google_pay";
 
 export interface Order {
   id: string;
@@ -250,7 +240,8 @@ export interface Order {
   contact_whatsapp: string | null;
   payment_method: PaymentMethod | null;
   payfast_payment_id: string | null;
-  gateway_order_id: string | null; // TradeSafe transaction id / Ozow TransactionId
+  gateway_order_id: string | null; // PayFast pf_payment_id / Ozow TransactionId
+  payout_via: "wallet" | "instant_split"; // 'instant_split' = already paid straight to a single partner via PayFast, see lib/payments/split.ts
   created_at: string;
   order_items?: OrderItem[];
 }
@@ -270,25 +261,9 @@ export interface OrderItem {
   product?: Product;
 }
 
-export interface Ad {
-  id: string;
-  partner_id: string;
-  title: string;
-  description: string | null;
-  image_url: string | null;
-  link_url: string | null;
-  category: ServiceCategory | "general" | null;
-  package: "starter" | "growth" | "business" | "premium";
-  ads_count: number;
-  price: number;
-  status: "pending_payment" | "active" | "expired" | "cancelled";
-  payfast_payment_id: string | null;
-  starts_at: string | null;
-  expires_at: string | null;
-  moderation_status: ModerationStatus;
-  created_at: string;
-  partner?: Profile;
-}
+// Ads (a separate paid promotional-content entity) were removed in
+// 2026-08 — products now serve as the site's upsells directly, optionally
+// linked to a service. See ServiceUpsellProduct and lib/payments/split.ts.
 
 export interface PartnerSalon {
   id: string;
@@ -417,21 +392,9 @@ export const ACCOUNT_TYPES: { id: AccountType; label: string; blurb: string }[] 
   { id: "business_partner", label: "Business Partner", blurb: "Sell beauty products" },
 ];
 
-// These four tiers are the ONE pricing model behind every paid listing on
-// Umuhle — whether that listing is a product or a general ad. "ads" here
-// means "listing slots" (kept as `ads` rather than renamed, so every
-// existing call site that reads pkg.ads — ozow/initiate, fulfillment.ts,
-// emails — keeps working unchanged).
-export const AD_PACKAGES = [
-  { id: "starter",  name: "Starter",  price: 2000,  ads: 1,  weeks: 6,  label: "6 weeks" },
-  { id: "growth",   name: "Growth",   price: 4500,  ads: 3,  weeks: 12, label: "3 months" },
-  { id: "business", name: "Business", price: 7500,  ads: 6,  weeks: 16, label: "4 months" },
-  { id: "premium",  name: "Premium",  price: 11500, ads: 10, weeks: 24, label: "6 months" },
-] as const;
-
-export type AdPackageId = "starter" | "growth" | "business" | "premium";
-
-// Semantic alias — use this name in new "listing" (product-or-ad) code.
-// Same array, same object identity, so the two names never drift apart.
-export const LISTING_PACKAGES = AD_PACKAGES;
-export type ListingPackageId = AdPackageId;
+// Paid listing packages (Starter/Growth/Business/Premium) and the
+// separate Ads entity were both removed in 2026-08. Listing a product is
+// free — see components/ProductForm.tsx and app/dashboard/page.tsx's
+// ProductsManager. Products can optionally link to a service as an
+// upsell instead — see ServiceUpsellProduct below and
+// UPSELL_TAG_GROUPS above.

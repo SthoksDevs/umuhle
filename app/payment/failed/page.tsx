@@ -17,7 +17,7 @@ function FailedContent() {
   const router = useRouter();
   const ref    = params.get("ref");
   const type   = params.get("type");
-  const method = params.get("method") ?? "tradesafe";
+  const method = params.get("method") ?? "payfast";
 
   // Where "Try again" sends them back to — /checkout only makes sense for
   // a shop order. An artist or store booking needs to go back to that

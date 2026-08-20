@@ -35,19 +35,17 @@ export async function GET(request: NextRequest) {
 
   const supabase = serviceClient();
 
-  const [salonsRes, productsRes, adsRes, withdrawalsRes] = await Promise.all([
+  const [salonsRes, productsRes, withdrawalsRes] = await Promise.all([
     // Matches SalonsTab's pending filter.
     supabase.from("partner_salons").select("id, name, created_at").eq("status", "pending").order("created_at", { ascending: true }),
     // Matches ProductsReviewTab's pending filter.
     supabase.from("products").select("id, name, is_umuhle_product, created_at").in("moderation_status", ["scanning", "needs_review", "draft"]).order("created_at", { ascending: true }),
-    // Matches AdsReviewTab's pending filter.
-    supabase.from("ads").select("id, title, created_at").eq("moderation_status", "draft").neq("status", "expired").order("created_at", { ascending: true }),
     // Matches PaymentsTab's pending-withdrawals filter.
     supabase.from("withdrawals").select("id, amount, bank_name, account_holder, created_at").eq("status", "pending").order("created_at", { ascending: true }),
   ]);
 
-  if (salonsRes.error || productsRes.error || adsRes.error || withdrawalsRes.error) {
-    console.error("[cron/admin-digest] query error:", salonsRes.error ?? productsRes.error ?? adsRes.error ?? withdrawalsRes.error);
+  if (salonsRes.error || productsRes.error || withdrawalsRes.error) {
+    console.error("[cron/admin-digest] query error:", salonsRes.error ?? productsRes.error ?? withdrawalsRes.error);
     return NextResponse.json({ error: "Query failed" }, { status: 500 });
   }
 
@@ -55,7 +53,6 @@ export async function GET(request: NextRequest) {
   // Umuhle-direct products are auto-managed and never show approve/reject
   // actions in ProductsReviewTab — excluded here for the same reason.
   const products = (productsRes.data ?? []).filter((p) => !p.is_umuhle_product);
-  const ads = adsRes.data ?? [];
   const withdrawals = withdrawalsRes.data ?? [];
 
   const sections: PendingDigestSection[] = [
@@ -68,11 +65,6 @@ export async function GET(request: NextRequest) {
       label: "Products awaiting moderation",
       count: products.length,
       items: products.map((p) => ({ title: p.name, href: `${SITE}/admin?tab=products` })),
-    },
-    {
-      label: "Ads awaiting moderation",
-      count: ads.length,
-      items: ads.map((a) => ({ title: a.title, href: `${SITE}/admin?tab=ads` })),
     },
     {
       label: "Withdrawal requests awaiting payout",

@@ -17,7 +17,7 @@ function CancelledContent() {
   const router = useRouter();
   const ref    = params.get("ref");
   const type   = params.get("type");
-  const method = params.get("method") ?? "tradesafe";
+  const method = params.get("method") ?? "payfast";
 
   // Same "send them back to what they were actually doing" fix as
   // /payment/failed — see lib/payments/resume.ts.
@@ -31,7 +31,7 @@ function CancelledContent() {
   }, [type, ref]);
 
   // Most gateways don't send a server-to-server notification for a plain
-  // "shopper backed out before paying" cancellation — TradeSafe/PayFast's
+  // "shopper backed out before paying" cancellation — PayFast/Ozow's
   // hosted checkout pages in particular never do (see
   // app/api/payments/finalize/route.ts for the full explanation). This
   // closes out the booking/order and sends the cancellation email if the

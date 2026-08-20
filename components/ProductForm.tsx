@@ -100,9 +100,11 @@ interface Props {
   supabase:    any;
   skipVerify?: boolean;
   isLive?:     boolean;
-  // wasNew is true only for a fresh, non-skipVerify insert — i.e. exactly
-  // the case that now needs a listing package + payment before it can go
-  // live. Edits and skipVerify (Umuhle's own products) always pass false.
+  // wasNew is true only for a fresh insert (vs. an edit) — listing is free
+  // for everyone now (see 2026-08 removal of the paid listing packages),
+  // so callers no longer need to branch on this for payment purposes, but
+  // it's kept since e.g. UpsellProductPicker uses it to know whether to
+  // auto-select the just-created product.
   onSaved:     (row: ProductFormData & { id: string }, wasNew: boolean) => void;
   onCancel?:   () => void;
 }
@@ -275,24 +277,20 @@ export default function ProductForm({
 
       let data, err;
       if (isEdit && form.id) {
-        // Editing never touches listing_status/package/expires_at — a
-        // partner tidying up a description shouldn't reset or extend the
-        // paid listing window they already bought.
+        // Editing never touches moderation_status/is_active for a partner's
+        // own product — a partner tidying up a description shouldn't reset
+        // it back into the review queue.
         const updatePayload = skipVerify
           ? payload
           : { ...payload, moderation_status: undefined, is_active: undefined };
         ({ data, error: err } = await supabase
           .from("products").update(updatePayload).eq("id", form.id).select().single());
       } else {
-        // Brand-new product from a partner: gate it behind the listing fee.
-        // skipVerify (Umuhle's own products, added via admin) skips this —
-        // Umuhle doesn't charge itself — and just goes straight to active
-        // via the column default.
-        const insertPayload = skipVerify
-          ? payload
-          : { ...payload, listing_status: "pending_payment" };
+        // Brand-new product — free to list (see 2026-08 removal of the
+        // paid listing fee). moderation_status/is_active above already
+        // handle the review gate; nothing further needed here.
         ({ data, error: err } = await supabase
-          .from("products").insert(insertPayload).select().single());
+          .from("products").insert(payload).select().single());
       }
       if (err) throw err;
 
