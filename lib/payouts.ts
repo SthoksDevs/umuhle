@@ -35,6 +35,7 @@
 // (authoritative, safe against concurrent webhook retries).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { maybeTriggerReferralReward, sumOrderCommissionForPartner } from "@/lib/referrals";
 
 export const COMMISSION_RATE = 0.055; // 5.5%
 export const PAYOUT_HOLD_DAYS = 2; // turnaround target (was 7) — see note above re: returns-window overlap
@@ -132,6 +133,12 @@ export async function creditBookingPayout(
       .update({ commission_cents: commissionCents, payout_cents: payoutCents, payout_credited_at: new Date().toISOString() })
       .eq("id", bookingId)
       .is("payout_credited_at", null);
+    await maybeTriggerReferralReward(supabase, {
+      referredPartnerId: artistRow.profile_id,
+      sourceType: "booking",
+      sourceId: bookingId,
+      commissionBaseCents: commissionCents,
+    });
     return { credited: true };
   }
 
@@ -170,6 +177,13 @@ export async function creditBookingPayout(
       payout_credited_at: new Date().toISOString(),
     })
     .eq("id", bookingId);
+
+  await maybeTriggerReferralReward(supabase, {
+    referredPartnerId: artistRow.profile_id,
+    sourceType: "booking",
+    sourceId: bookingId,
+    commissionBaseCents: commissionCents,
+  });
 
   return { credited: true };
 }
@@ -423,6 +437,12 @@ export async function creditOrderItemPayout(
       .update({ commission_cents: commissionCents, payout_cents: payoutCents, payout_credited_at: new Date().toISOString() })
       .eq("id", item.id)
       .is("payout_credited_at", null);
+    await maybeTriggerReferralReward(supabase, {
+      referredPartnerId: product.partner_id,
+      sourceType: "order",
+      sourceId: item.order_id,
+      commissionBaseCents: await sumOrderCommissionForPartner(supabase, item.order_id, product.partner_id),
+    });
     return { credited: true };
   }
 
@@ -464,6 +484,13 @@ export async function creditOrderItemPayout(
       payout_credited_at: new Date().toISOString(),
     })
     .eq("id", item.id);
+
+  await maybeTriggerReferralReward(supabase, {
+    referredPartnerId: product.partner_id,
+    sourceType: "order",
+    sourceId: item.order_id,
+    commissionBaseCents: await sumOrderCommissionForPartner(supabase, item.order_id, product.partner_id),
+  });
 
   return { credited: true };
 }
@@ -589,6 +616,21 @@ export async function creditOrderPayouts(
 
     creditedItems++;
     results.push({ itemId: item.id, productName, status: "credited" });
+  }
+
+  const partnerIds = new Set(
+    items
+      .map((i) => (Array.isArray(i.product) ? i.product[0] : i.product))
+      .filter((p) => p?.partner_id && !p.is_umuhle_product)
+      .map((p) => p!.partner_id as string)
+  );
+  for (const partnerId of partnerIds) {
+    await maybeTriggerReferralReward(supabase, {
+      referredPartnerId: partnerId,
+      sourceType: "order",
+      sourceId: orderId,
+      commissionBaseCents: await sumOrderCommissionForPartner(supabase, orderId, partnerId),
+    });
   }
 
   return { creditedItems, skipped, results };

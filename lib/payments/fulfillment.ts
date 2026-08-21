@@ -23,6 +23,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PaymentEvent, FulfillmentResult } from "./types";
 import { recordBookingSplit, recordOrderItemSplits, recordStoreBookingDepositSplit } from "@/lib/payouts";
+import { maybeTriggerReferralReward } from "@/lib/referrals";
 import { notifyBookingCreated, notifyOrderPaid, notifyPocBookingUpdate } from "@/lib/whatsapp";
 import {
   sendBookingConfirmedEmail,
@@ -418,7 +419,7 @@ async function fulfillSalon(supabase: SupabaseClient, event: PaymentEvent, tag: 
     })
     .eq("id", event.referenceId)
     .eq("status", "pending")
-    .select("salon_id, amount, partner:profiles!partner_id(full_name, email)")
+    .select("salon_id, amount, partner_id, partner:profiles!partner_id(full_name, email)")
     .single();
 
   if (!payment?.salon_id) {
@@ -436,6 +437,13 @@ async function fulfillSalon(supabase: SupabaseClient, event: PaymentEvent, tag: 
     .select("name")
     .eq("id", payment.salon_id)
     .single();
+
+  await maybeTriggerReferralReward(supabase, {
+    referredPartnerId: payment.partner_id,
+    sourceType: "salon",
+    sourceId: event.referenceId,
+    commissionBaseCents: (payment as { amount?: number }).amount ?? 3500,
+  });
 
   const partnerRow = Array.isArray(payment.partner) ? payment.partner[0] : payment.partner;
   try {
