@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, Suspense } from "react";
 import { useCart } from "@/lib/cart-context";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
-import type { Profile } from "@/types";
+import type { Profile, Province, FulfillmentMethod } from "@/types";
+import { SA_PROVINCES } from "@/types";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -546,7 +547,7 @@ export default function CheckoutPage() {
                 <div className="checkout-field-row">
                   <select value={form.province} onChange={(e) => setForm((f) => ({ ...f, province: e.target.value }))} style={{ ...inputStyle, background: "#fff" }}>
                     <option value="">Province</option>
-                    {["Gauteng","Western Cape","KwaZulu-Natal","Eastern Cape","Limpopo","Mpumalanga","North West","Free State","Northern Cape"].map((p) => (
+                    {SA_PROVINCES.map((p) => (
                       <option key={p} value={p}>{p}</option>
                     ))}
                   </select>

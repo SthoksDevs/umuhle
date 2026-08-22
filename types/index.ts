@@ -46,6 +46,18 @@ export const upsellTagLabel = (id: string): string => UPSELL_TAG_GROUPS.flatMap(
 // since selecting "Artist" at signup doesn't instantly create an artists row.
 export type AccountType = "customer" | "artist" | "business_partner";
 
+// Canonical South African province list — matches the check constraint on
+// profiles.province / orders.shipping_province / order_shipments.*_province
+// (see supabase migration "local_delivery_and_provincial_sales"). Single
+// source of truth so the checkout province <select>, a product's "Sell To"
+// province picker, and a partner's fulfillment address all offer the exact
+// same nine options in the exact same order.
+export const SA_PROVINCES = [
+  "Gauteng", "Western Cape", "KwaZulu-Natal", "Eastern Cape", "Limpopo",
+  "Mpumalanga", "North West", "Free State", "Northern Cape",
+] as const;
+export type Province = typeof SA_PROVINCES[number];
+
 export interface Profile {
   id: string;
   email: string;
@@ -67,6 +79,23 @@ export interface Profile {
   poc_phone: string | null;  // point-of-contact WhatsApp number
   payfast_merchant_id: string | null;    // for instant PayFast split payouts — see lib/payments/split.ts
   payfast_split_approved: boolean;       // admin-set, once TKZ has allow-listed this merchant ID in PayFast's dashboard
+  // ── Fulfillment address + collection/courier capability ──
+  // Drives the origin snapshot on order_shipments when this profile sells
+  // products, and the default sell_provinces (see Product.sell_provinces
+  // below) when a product's sell_scope is "province" but the seller hasn't
+  // picked specific provinces. Any profile can carry these — not gated to
+  // is_partner — since a customer's own address fields are read the same
+  // way at checkout. See components/ProductForm.tsx and
+  // app/dashboard/page.tsx's PartnerFulfillmentSettings.
+  address: string | null;
+  suburb: string | null;
+  city: string | null;
+  province: Province | null;
+  postal_code: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  allow_collection: boolean; // offers in-person collection instead of courier
+  allow_courier: boolean;    // ships via courier — default true, so existing sellers keep working unchanged
   created_at: string;
   updated_at: string;
 }
@@ -206,6 +235,22 @@ export interface Product {
   // forced onto Ozow instead of PayFast — see lib/payouts.ts for the
   // payout-side logic that already reads this same column.
   is_umuhle_product?: boolean | null;
+  // ── Local delivery & provincial sales ──
+  // "province" = only ships within sell_provinces (falls back to the
+  // seller's own profiles.province when sell_provinces is empty);
+  // "south_africa" = ships nationwide. Set on components/ProductForm.tsx,
+  // enforced server-side in lib/orders.ts's createPendingOrder for any
+  // line going out by courier (collection is exempt — the customer is
+  // fetching it in person, so there's no shipping range to restrict).
+  sell_scope: "province" | "south_africa";
+  sell_provinces: string[];
+  // Parcel dimensions — real columns on `products`, used to build the
+  // aggregate parcel_* snapshot on order_shipments. Optional here only
+  // because older rows may not have them set.
+  weight_g?: number | null;
+  length_cm?: number | null;
+  width_cm?: number | null;
+  height_cm?: number | null;
   // ── Gallery + variation fields ──
   // Not yet columns on `products` (checked July 2026) — kept optional so the
   // product page's gallery rail and Colour/Size pickers render once these
@@ -235,7 +280,19 @@ export interface Order {
   client_id: string;
   total_amount: number;
   status: "pending_payment" | "paid" | "processing" | "shipped" | "delivered" | "cancelled";
-  shipping_address: string | null;
+  shipping_address: string | null; // legacy flat string — still written (joined from the fields below) for anything not yet reading the structured ones
+  // ── Structured shipping address ──
+  // Populated at checkout alongside the legacy shipping_address string
+  // above. This is what gets snapshotted onto each order_shipments row's
+  // destination_* columns for courier fulfillment.
+  shipping_address_line1: string | null;
+  shipping_address_line2: string | null;
+  shipping_suburb: string | null;
+  shipping_city: string | null;
+  shipping_province: Province | null;
+  shipping_postal_code: string | null;
+  shipping_latitude: number | null;
+  shipping_longitude: number | null;
   contact_name: string | null;
   contact_whatsapp: string | null;
   payment_method: PaymentMethod | null;
@@ -244,6 +301,7 @@ export interface Order {
   payout_via: "wallet" | "instant_split"; // 'instant_split' = already paid straight to a single partner via PayFast, see lib/payments/split.ts
   created_at: string;
   order_items?: OrderItem[];
+  order_shipments?: OrderShipment[];
 }
 
 export interface OrderItem {
@@ -258,7 +316,68 @@ export interface OrderItem {
   shipped_at: string | null;    // set when the partner marks this item dispatched
   delivered_at: string | null;  // set when the customer confirms receipt via their confirm link
   confirm_token: string | null; // opaque token backing the customer's confirm-receipt link
+  shipment_id: string | null;   // which order_shipments row (i.e. which partner's parcel) this line rides in — see OrderShipment
   product?: Product;
+  shipment?: OrderShipment | null;
+}
+
+// One row per partner per order — one parcel/waybill. A single cart can
+// span several partners (possibly in different cities); each gets its own
+// shipment here rather than the order carrying one flat shipping address,
+// which is what actually makes multi-partner carts workable for courier
+// booking. See supabase migration "local_delivery_and_provincial_sales"
+// and lib/orders.ts's createPendingOrder (where these rows get created).
+export type FulfillmentMethod = "collection" | "courier";
+export type ShipmentStatus =
+  | "pending"               // just created, nothing actioned yet
+  | "ready_for_collection"  // partner has it ready, waiting on the customer to fetch it
+  | "collected"             // customer picked it up in person
+  | "booked"                // courier booking made (waybill_number set) — pre-collection
+  | "in_transit"
+  | "delivered"
+  | "cancelled";
+
+export interface OrderShipment {
+  id: string;
+  order_id: string;
+  partner_id: string;
+  fulfillment_method: FulfillmentMethod;
+  status: ShipmentStatus;
+  // Origin snapshot — partner's dispatch/pickup address at order time (see
+  // Profile.address etc.), frozen here so a partner moving premises later
+  // doesn't retroactively change an in-flight parcel's recorded origin.
+  origin_address: string | null;
+  origin_suburb: string | null;
+  origin_city: string | null;
+  origin_province: Province | null;
+  origin_postal_code: string | null;
+  origin_latitude: number | null;
+  origin_longitude: number | null;
+  // Destination snapshot — irrelevant/null for collection.
+  destination_address_line1: string | null;
+  destination_address_line2: string | null;
+  destination_suburb: string | null;
+  destination_city: string | null;
+  destination_province: Province | null;
+  destination_postal_code: string | null;
+  destination_latitude: number | null;
+  destination_longitude: number | null;
+  // Aggregate parcel, derived from the products riding in this shipment.
+  parcel_weight_g: number | null;
+  parcel_length_cm: number | null;
+  parcel_width_cm: number | null;
+  parcel_height_cm: number | null;
+  // Courier API readiness — filled in by hand today (see
+  // app/dashboard/page.tsx's OrderFulfillmentManager); shaped so a real
+  // courier integration can populate/read the same columns later.
+  courier_provider: string | null;
+  waybill_number: string | null;
+  tracking_url: string | null;
+  courier_reference: string | null;
+  courier_booked_at: string | null;
+  collected_at: string | null;
+  delivered_at: string | null;
+  created_at: string;
 }
 
 // Ads (a separate paid promotional-content entity) were removed in

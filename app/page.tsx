@@ -14,6 +14,7 @@ import StarRating from "@/components/StarRating";
 import { gTag, fbq, ttq } from "@/lib/analytics";
 import { useCart } from "@/lib/cart-context";
 import { useGeolocation, distanceKm, type GeoStatus } from "@/lib/geolocation";
+import { sortByLocality } from "@/lib/locality";
 import { getProvince } from "@/lib/provinces";
 import { TIMES } from "@/lib/booking-times";
 import ProximityFilter from "@/components/ProximityFilter";
@@ -963,7 +964,12 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
   const router = useRouter();
   const { addItem } = useCart();
   type Service = { id: string; name: string; price: number; duration_minutes: number; tags: string[] };
-  type UpsellProduct = { id: string; partner_id: string; name: string; price: number; image_url: string | null; category: string | null; tags: string[]; stock_count: number };
+  type UpsellProduct = {
+    id: string; partner_id: string; name: string; price: number; image_url: string | null;
+    category: string | null; tags: string[]; stock_count: number;
+    sell_scope: "province" | "south_africa"; sell_provinces: string[];
+    partner?: { latitude: number | null; longitude: number | null } | { latitude: number | null; longitude: number | null }[] | null;
+  };
   type SalonSuggestion = { id: string; name: string; address: string | null; suburb: string | null; city: string | null; latitude: number | null; longitude: number | null };
   const [services, setServices]   = useState<Service[]>([]);
   const [selected, setSelected]   = useState<Service | null>(null);
@@ -1149,7 +1155,7 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
     (async () => {
       const { data: picked } = await supabase
         .from("service_upsell_products")
-        .select("display_order, product:products(id, partner_id, name, price, image_url, category, tags, stock_count, is_active, moderation_status)")
+        .select("display_order, product:products(id, partner_id, name, price, image_url, category, tags, stock_count, is_active, moderation_status, sell_scope, sell_provinces)")
         .eq("service_id", selected.id)
         .order("display_order", { ascending: true });
 
@@ -1167,24 +1173,48 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
       }
 
       const excludeIds = explicit.map((p) => p.id);
+      // Over-fetch beyond what's needed so there's something to prioritize
+      // among once ranked by locality below, rather than just taking
+      // whichever `remaining` rows Postgres happened to return first.
+      const fetchLimit = Math.min(remaining * 5, 30);
       const { data: tagMatched } = await supabase
         .from("products")
-        .select("id, partner_id, name, price, image_url, category, tags, stock_count")
+        .select("id, partner_id, name, price, image_url, category, tags, stock_count, sell_scope, sell_provinces, partner:profiles(latitude, longitude)")
         .overlaps("tags", selected.tags)
         .eq("is_active", true)
         .eq("moderation_status", "approved")
         .gt("stock_count", 0)
         .not("id", "in", `(${excludeIds.length ? excludeIds.join(",") : "00000000-0000-0000-0000-000000000000"})`)
-        .limit(remaining);
+        .limit(fetchLimit);
 
-      if (!cancelled) setUpsellProducts([...explicit, ...((tagMatched ?? []) as UpsellProduct[])]);
+      // Local sellers first (same city, then same province, then the rest
+      // of the country) — see lib/locality.ts. Falls back to unranked
+      // (whatever order the query returned) when we don't have the
+      // customer's location.
+      const ranked = sortByLocality(
+        (tagMatched ?? []) as UpsellProduct[],
+        geo.coords,
+        (p) => {
+          const partner = Array.isArray(p.partner) ? p.partner[0] : p.partner;
+          return partner?.latitude != null && partner?.longitude != null
+            ? { latitude: partner.latitude, longitude: partner.longitude }
+            : null;
+        }
+      ).slice(0, remaining);
+
+      if (!cancelled) setUpsellProducts([...explicit, ...ranked]);
     })();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
   const handleAddUpsell = (p: UpsellProduct) => {
-    addItem({ id: p.id, partner_id: p.partner_id, name: p.name, description: null, price: p.price, image_url: p.image_url, category: p.category, tags: p.tags, stock_count: p.stock_count, is_active: true, moderation_status: "approved", moderation_score: null, created_at: "" });
+    addItem({
+      id: p.id, partner_id: p.partner_id, name: p.name, description: null, price: p.price,
+      image_url: p.image_url, category: p.category, tags: p.tags, stock_count: p.stock_count,
+      is_active: true, moderation_status: "approved", moderation_score: null, created_at: "",
+      sell_scope: p.sell_scope, sell_provinces: p.sell_provinces,
+    });
     setAddedProductIds(prev => new Set(prev).add(p.id));
   };
 

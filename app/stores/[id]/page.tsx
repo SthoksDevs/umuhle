@@ -17,6 +17,7 @@ import { isOpenNow as sharedIsOpenNow, isOpenOnDate, hoursRangeForDate, WEEKDAY_
 import { TIMES } from "@/lib/booking-times";
 import { gTag } from "@/lib/analytics";
 import { useCart } from "@/lib/cart-context";
+import { sortByLocality } from "@/lib/locality";
 
 type Salon = {
   id: string; name: string; description: string | null;
@@ -305,7 +306,12 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
   const selectedService = structuredServices.find(s => s.id === form.serviceId) ?? null;
 
   const { addItem } = useCart();
-  type UpsellProduct = { id: string; partner_id: string; name: string; price: number; image_url: string | null; category: string | null; tags: string[]; stock_count: number };
+  type UpsellProduct = {
+    id: string; partner_id: string; name: string; price: number; image_url: string | null;
+    category: string | null; tags: string[]; stock_count: number;
+    sell_scope: "province" | "south_africa"; sell_provinces: string[];
+    partner?: { latitude: number | null; longitude: number | null } | { latitude: number | null; longitude: number | null }[] | null;
+  };
   const [upsellProducts, setUpsellProducts] = useState<UpsellProduct[]>([]);
   const [addedProductIds, setAddedProductIds] = useState<Set<string>>(new Set());
 
@@ -320,7 +326,7 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
     (async () => {
       const { data: picked } = await supabase
         .from("salon_service_upsell_products")
-        .select("display_order, product:products(id, partner_id, name, price, image_url, category, tags, stock_count, is_active, moderation_status)")
+        .select("display_order, product:products(id, partner_id, name, price, image_url, category, tags, stock_count, is_active, moderation_status, sell_scope, sell_provinces)")
         .eq("salon_service_id", selectedService.id)
         .order("display_order", { ascending: true });
 
@@ -339,24 +345,50 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
       }
 
       const excludeIds = explicit.map((p) => p.id);
+      // Over-fetch beyond what's needed so there's something to prioritize
+      // among once ranked by locality below.
+      const fetchLimit = Math.min(remaining * 5, 30);
       const { data: tagMatched } = await supabase
         .from("products")
-        .select("id, partner_id, name, price, image_url, category, tags, stock_count")
+        .select("id, partner_id, name, price, image_url, category, tags, stock_count, sell_scope, sell_provinces, partner:profiles(latitude, longitude)")
         .overlaps("tags", categoryTags)
         .eq("is_active", true)
         .eq("moderation_status", "approved")
         .gt("stock_count", 0)
         .not("id", "in", `(${excludeIds.length ? excludeIds.join(",") : "00000000-0000-0000-0000-000000000000"})`)
-        .limit(remaining);
+        .limit(fetchLimit);
 
-      if (!cancelled) setUpsellProducts([...explicit, ...((tagMatched ?? []) as UpsellProduct[])]);
+      // Ranked by proximity to this salon (not the browser's geolocation —
+      // the customer is coming here in person, so the salon's own address
+      // is the meaningful "local" reference point). Same city, then same
+      // province, then the rest of the country — see lib/locality.ts.
+      const salonCoords = salon.latitude != null && salon.longitude != null
+        ? { latitude: salon.latitude, longitude: salon.longitude }
+        : null;
+      const ranked = sortByLocality(
+        (tagMatched ?? []) as UpsellProduct[],
+        salonCoords,
+        (p) => {
+          const partner = Array.isArray(p.partner) ? p.partner[0] : p.partner;
+          return partner?.latitude != null && partner?.longitude != null
+            ? { latitude: partner.latitude, longitude: partner.longitude }
+            : null;
+        }
+      ).slice(0, remaining);
+
+      if (!cancelled) setUpsellProducts([...explicit, ...ranked]);
     })();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedService?.id]);
 
   const handleAddUpsell = (p: UpsellProduct) => {
-    addItem({ id: p.id, partner_id: p.partner_id, name: p.name, description: null, price: p.price, image_url: p.image_url, category: p.category, tags: p.tags, stock_count: p.stock_count, is_active: true, moderation_status: "approved", moderation_score: null, created_at: "" });
+    addItem({
+      id: p.id, partner_id: p.partner_id, name: p.name, description: null, price: p.price,
+      image_url: p.image_url, category: p.category, tags: p.tags, stock_count: p.stock_count,
+      is_active: true, moderation_status: "approved", moderation_score: null, created_at: "",
+      sell_scope: p.sell_scope, sell_provinces: p.sell_provinces,
+    });
     setAddedProductIds(prev => new Set(prev).add(p.id));
   };
 

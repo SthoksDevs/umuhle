@@ -3,8 +3,9 @@
 import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
-import type { Profile, Booking, Artist, Order, OrderItem, Product, Wallet, WalletTransaction, Withdrawal } from "@/types";
-import { UPSELL_TAG_GROUPS, upsellTagLabel } from "@/types";
+import type { Profile, Booking, Artist, Order, OrderItem, Product, Wallet, WalletTransaction, Withdrawal, Province, OrderShipment, FulfillmentMethod } from "@/types";
+import { UPSELL_TAG_GROUPS, upsellTagLabel, SA_PROVINCES } from "@/types";
+import { getProvince } from "@/lib/provinces";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -540,6 +541,140 @@ function ProfileTab({ profile, user, locationStatus, onUpdate }: { profile: Prof
           </button>
         )}
       </div>
+
+      {profile.is_partner && <PartnerFulfillmentSettings profile={profile} onUpdate={onUpdate} />}
+    </div>
+  );
+}
+
+// ── PartnerFulfillmentSettings ───────────────────────────────────────────────
+// Where a partner's orders dispatch from, and how customers get them —
+// courier, in-person collection, or both. Feeds two things downstream:
+// the origin snapshot on each order_shipments row (lib/orders.ts), and the
+// default sell_provinces a "province"-scoped product falls back to when
+// the seller hasn't picked specific ones (components/ProductForm.tsx).
+function PartnerFulfillmentSettings({ profile, onUpdate }: { profile: Profile; onUpdate: (p: Profile) => void }) {
+  const supabase = createClient();
+  const [address, setAddress] = useState(profile.address ?? "");
+  const [suburb, setSuburb] = useState(profile.suburb ?? "");
+  const [city, setCity] = useState(profile.city ?? "");
+  const [province, setProvince] = useState<Province | "">(profile.province ?? "");
+  const [postalCode, setPostalCode] = useState(profile.postal_code ?? "");
+  const [coords, setCoords] = useState<{ latitude: number; longitude: number } | null>(
+    profile.latitude != null && profile.longitude != null
+      ? { latitude: profile.latitude, longitude: profile.longitude }
+      : null
+  );
+  const [allowCollection, setAllowCollection] = useState(profile.allow_collection);
+  const [allowCourier, setAllowCourier] = useState(profile.allow_courier);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleAddressSelect = (r: GeocodeSuggestion) => {
+    setAddress(r.street || r.displayName);
+    setSuburb(r.suburb);
+    setCity(r.city);
+    setPostalCode(r.postalCode);
+    setCoords({ latitude: r.latitude, longitude: r.longitude });
+    // Nominatim doesn't return a province, so guess it from the pin using
+    // the same nearest-centroid classifier used elsewhere (lib/provinces.ts)
+    // — a reasonable default, editable below if it's ever wrong near a border.
+    setProvince(getProvince({ latitude: r.latitude, longitude: r.longitude }) as Province);
+  };
+
+  const handleSave = async () => {
+    if (!allowCollection && !allowCourier) {
+      setError("Turn on at least one of courier or collection — otherwise customers have no way to actually get an order from you.");
+      return;
+    }
+    setSaving(true); setError(""); setSaved(false);
+    const { data, error: err } = await supabase
+      .from("profiles")
+      .update({
+        address: address.trim() || null,
+        suburb: suburb.trim() || null,
+        city: city.trim() || null,
+        province: province || null,
+        postal_code: postalCode.trim() || null,
+        latitude: coords?.latitude ?? null,
+        longitude: coords?.longitude ?? null,
+        allow_collection: allowCollection,
+        allow_courier: allowCourier,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", profile.id)
+      .select()
+      .single();
+    setSaving(false);
+    if (err) { setError(err.message); return; }
+    if (data) { onUpdate(data as Profile); setSaved(true); setTimeout(() => setSaved(false), 3000); }
+  };
+
+  const toggleCardStyle = (active: boolean): React.CSSProperties => ({
+    flex: 1, textAlign: "left", padding: "0.8rem 1rem", borderRadius: 14, cursor: "pointer",
+    border: active ? "1.5px solid var(--plum)" : "1.5px solid #E0E0E0",
+    background: active ? "rgba(155,127,184,0.08)" : "#fff",
+  });
+  const smallLabel: React.CSSProperties = { display: "block", fontSize: "0.78rem", fontWeight: 600, color: "#888", marginBottom: "0.3rem" };
+  const smallInput: React.CSSProperties = { width: "100%", padding: "0.65rem 0.85rem", borderRadius: 10, border: "1.5px solid #E0E0E0", fontSize: "0.85rem", boxSizing: "border-box" };
+
+  return (
+    <div style={{ background: "#fff", border: "1.5px solid var(--plum-t)", borderRadius: 18, padding: "1.5rem", marginTop: "1.5rem" }}>
+      <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.05rem", marginBottom: "0.4rem" }}>Fulfillment</h3>
+      <p style={{ color: "var(--grey)", fontSize: "0.85rem", lineHeight: 1.6, marginBottom: "1.1rem" }}>
+        Where your orders dispatch from, and how customers can get them. This also sets the default area for any product you list as &quot;province only&quot; without picking specific provinces.
+      </p>
+
+      <label style={smallLabel}>Pickup / dispatch address</label>
+      <AddressAutocomplete onSelect={handleAddressSelect} />
+      {address && (
+        <p style={{ fontSize: "0.78rem", color: "var(--grey)", marginTop: "0.4rem" }}>
+          {[address, suburb, city].filter(Boolean).join(", ")}
+        </p>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginTop: "0.75rem" }}>
+        <div>
+          <label style={smallLabel}>Suburb</label>
+          <input value={suburb} onChange={e => setSuburb(e.target.value)} style={smallInput} />
+        </div>
+        <div>
+          <label style={smallLabel}>City</label>
+          <input value={city} onChange={e => setCity(e.target.value)} style={smallInput} />
+        </div>
+        <div>
+          <label style={smallLabel}>Province</label>
+          <select value={province} onChange={e => setProvince(e.target.value as Province)} style={smallInput}>
+            <option value="">Select…</option>
+            {SA_PROVINCES.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={smallLabel}>Postal code</label>
+          <input value={postalCode} onChange={e => setPostalCode(e.target.value)} style={smallInput} />
+        </div>
+      </div>
+
+      <label style={{ ...smallLabel, marginTop: "1.1rem", color: "#9B7FB8", textTransform: "uppercase", letterSpacing: "0.06em", fontSize: "0.72rem" }}>
+        How customers get their order
+      </label>
+      <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.5rem" }}>
+        <button type="button" onClick={() => setAllowCourier(v => !v)} style={toggleCardStyle(allowCourier)}>
+          <div style={{ fontSize: "0.85rem", fontWeight: 600, color: allowCourier ? "var(--plum)" : "#333" }}>🚚 Courier</div>
+          <div style={{ fontSize: "0.72rem", color: "#999", marginTop: "0.15rem" }}>Shipped to their address</div>
+        </button>
+        <button type="button" onClick={() => setAllowCollection(v => !v)} style={toggleCardStyle(allowCollection)}>
+          <div style={{ fontSize: "0.85rem", fontWeight: 600, color: allowCollection ? "var(--plum)" : "#333" }}>🏠 Collection</div>
+          <div style={{ fontSize: "0.72rem", color: "#999", marginTop: "0.15rem" }}>They fetch it from you</div>
+        </button>
+      </div>
+
+      {error && <p style={{ color: "#E53935", fontSize: "0.85rem", marginTop: "0.75rem" }}>{error}</p>}
+      {saved && <p style={{ color: "var(--forest)", fontSize: "0.85rem", marginTop: "0.75rem" }}>Fulfillment settings saved.</p>}
+      <button onClick={handleSave} disabled={saving} className="btn-plum" style={{ marginTop: "1rem", padding: "0.65rem 1.6rem", fontSize: "0.85rem", opacity: saving ? 0.6 : 1 }}>
+        {saving ? "Saving…" : "Save fulfillment settings"}
+      </button>
     </div>
   );
 }
@@ -3785,6 +3920,8 @@ interface PartnerProductRow {
   length_cm: number | null;
   width_cm: number | null;
   height_cm: number | null;
+  sell_scope: "province" | "south_africa";
+  sell_provinces: string[];
   package: string | null;
   listing_status: string | null;
   listing_package_id: string | null;
@@ -3802,7 +3939,7 @@ const fmtShop = (cents: number) => `R${(cents / 100).toFixed(0)}`;
 // the database for historical rows but nothing here reads or writes them
 // anymore — every product is either "Live" or "Hidden", purely by the
 // owner's own toggle, once past content moderation.
-function ProductsManager({ user }: { user: { id: string } }) {
+function ProductsManager({ user, partnerProvince }: { user: { id: string }; partnerProvince?: string | null }) {
   const supabase = createClient();
 
   const [products,   setProducts]   = useState<PartnerProductRow[]>([]);
@@ -3837,6 +3974,8 @@ function ProductsManager({ user }: { user: { id: string } }) {
       length_cm:   saved.length_cm  ? parseFloat(saved.length_cm) : null,
       width_cm:    saved.width_cm   ? parseFloat(saved.width_cm)  : null,
       height_cm:   saved.height_cm  ? parseFloat(saved.height_cm) : null,
+      sell_scope:      saved.sell_scope,
+      sell_provinces:  saved.sell_scope === "province" ? saved.sell_provinces : [],
       is_active:         base?.is_active         ?? false,
       moderation_status: base?.moderation_status ?? "scanning",
       created_at:        base?.created_at        ?? new Date().toISOString(),
@@ -3895,6 +4034,7 @@ function ProductsManager({ user }: { user: { id: string } }) {
             partnerId={user.id}
             supabase={supabase}
             skipVerify={false}
+            defaultProvince={partnerProvince}
             onSaved={handleSaved}
             onCancel={() => setShowForm(false)}
           />
@@ -3909,6 +4049,7 @@ function ProductsManager({ user }: { user: { id: string } }) {
             supabase={supabase}
             skipVerify={false}
             isLive={editTarget.is_active && editTarget.moderation_status === "approved"}
+            defaultProvince={partnerProvince}
             onSaved={handleSaved}
             onCancel={() => setEditTarget(null)}
           />
@@ -3985,6 +4126,7 @@ type FulfillmentItem = {
   unit_price: number;
   shipped_at: string | null;
   delivered_at: string | null;
+  shipment_id: string | null;
   product: { id: string; name: string; image_url: string | null } | null;
   order: {
     id: string;
@@ -3993,6 +4135,16 @@ type FulfillmentItem = {
     contact_name: string | null;
     shipping_address: string | null;
     client?: { full_name: string } | null;
+  } | null;
+  // Which parcel this line rides in — see OrderShipment. Joined read-only
+  // here just for display; actual status/waybill editing happens in
+  // ShipmentsManager below, since it's per-parcel, not per-line-item.
+  shipment: {
+    id: string;
+    fulfillment_method: FulfillmentMethod;
+    status: string;
+    destination_city: string | null;
+    destination_province: string | null;
   } | null;
 };
 
@@ -4017,9 +4169,10 @@ function OrderFulfillmentManager({ user }: { user: { id: string } }) {
     const { data } = await supabase
       .from("order_items")
       .select(`
-        id, order_id, quantity, unit_price, shipped_at, delivered_at,
+        id, order_id, quantity, unit_price, shipped_at, delivered_at, shipment_id,
         product:products!inner(id, name, image_url, partner_id),
-        order:orders(id, status, created_at, contact_name, shipping_address, client:profiles!client_id(full_name))
+        order:orders(id, status, created_at, contact_name, shipping_address, client:profiles!client_id(full_name)),
+        shipment:order_shipments(id, fulfillment_method, status, destination_city, destination_province)
       `)
       .eq("product.partner_id", user.id);
 
@@ -4144,7 +4297,16 @@ function OrderFulfillmentManager({ user }: { user: { id: string } }) {
                     Order #{item.order_id.slice(0, 8)} · {item.order ? new Date(item.order.created_at).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" }) : ""}
                     {item.order?.client?.full_name ? ` · ${item.order.client.full_name}` : ""}
                   </p>
-                  {item.order?.shipping_address && !item.shipped_at && (
+                  {!item.shipped_at && item.shipment && (
+                    item.shipment.fulfillment_method === "collection" ? (
+                      <p style={{ fontSize: "0.78rem", color: "var(--onyx)", margin: "0.2rem 0 0" }}>🏠 Customer will collect in person</p>
+                    ) : (
+                      <p style={{ fontSize: "0.78rem", color: "var(--onyx)", margin: "0.2rem 0 0" }}>
+                        🚚 Ships to {[item.shipment.destination_city, item.shipment.destination_province].filter(Boolean).join(", ") || item.order?.shipping_address || "customer address"}
+                      </p>
+                    )
+                  )}
+                  {!item.shipped_at && !item.shipment && item.order?.shipping_address && (
                     <p style={{ fontSize: "0.78rem", color: "var(--onyx)", margin: "0.2rem 0 0" }}>📍 {item.order.shipping_address}</p>
                   )}
                 </div>
@@ -4172,7 +4334,207 @@ function OrderFulfillmentManager({ user }: { user: { id: string } }) {
   );
 }
 
-function MyShopTab({ user }: { user: { id: string } }) {
+// ── ShipmentsManager ─────────────────────────────────────────────────────────
+// Parcel-level view: one card per order_shipments row (i.e. per partner per
+// order — see the "local_delivery_and_provincial_sales" migration), separate
+// from the per-line-item list above since a shipment can bundle several
+// order_items and its status/waybill genuinely belongs to the parcel, not
+// any one line. Direct client-side reads/writes here rely on the
+// "order_shipments: partner manage own" RLS policy (partner_id = auth.uid()),
+// not a server route — there's nothing privileged about a partner updating
+// their own parcel's status or courier reference.
+//
+// Waybill/tracking fields are entered by hand for now — "courier API ready"
+// means the columns exist in the shape a real integration would read/write
+// (courier_provider, waybill_number, tracking_url, courier_reference,
+// courier_booked_at), not that one's wired up yet.
+type ShipmentRow = OrderShipment & {
+  order: {
+    id: string;
+    created_at: string;
+    contact_name: string | null;
+    client?: { full_name: string } | null;
+  } | null;
+};
+
+const SHIPMENT_STATUS_OPTIONS: { value: string; label: string }[] = [
+  { value: "pending", label: "Pending" },
+  { value: "ready_for_collection", label: "Ready for collection" },
+  { value: "collected", label: "Collected" },
+  { value: "booked", label: "Courier booked" },
+  { value: "in_transit", label: "In transit" },
+  { value: "delivered", label: "Delivered" },
+  { value: "cancelled", label: "Cancelled" },
+];
+
+function shipmentStatusMeta(status: string) {
+  const map: Record<string, { bg: string; color: string; label: string }> = {
+    pending:               { bg: "#FFF3E0", color: "#E65100", label: "Pending" },
+    ready_for_collection:  { bg: "#E3F2FD", color: "#1565C0", label: "Ready for collection" },
+    collected:             { bg: "#E8F5E9", color: "#2E7D32", label: "Collected" },
+    booked:                { bg: "#EDE7F6", color: "#4527A0", label: "Courier booked" },
+    in_transit:            { bg: "#EDE7F6", color: "#4527A0", label: "In transit" },
+    delivered:             { bg: "#E8F5E9", color: "#2E7D32", label: "Delivered" },
+    cancelled:             { bg: "#FFEBEE", color: "#C62828", label: "Cancelled" },
+  };
+  return map[status] ?? map.pending;
+}
+
+function ShipmentsManager({ user }: { user: { id: string } }) {
+  const supabase = createClient();
+  const [shipments, setShipments] = useState<ShipmentRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ status: "pending", courier_provider: "", waybill_number: "", tracking_url: "" });
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from("order_shipments")
+      .select(`*, order:orders(id, created_at, contact_name, client:profiles!client_id(full_name))`)
+      .eq("partner_id", user.id)
+      .order("created_at", { ascending: false });
+    setShipments((data ?? []) as ShipmentRow[]);
+    setLoading(false);
+  }, [supabase, user.id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const startEdit = (s: ShipmentRow) => {
+    setEditingId(s.id);
+    setDraft({
+      status: s.status,
+      courier_provider: s.courier_provider ?? "",
+      waybill_number: s.waybill_number ?? "",
+      tracking_url: s.tracking_url ?? "",
+    });
+    setNotice(null);
+  };
+
+  const saveEdit = async (s: ShipmentRow) => {
+    setSaving(true);
+    const patch: Record<string, unknown> = {
+      status: draft.status,
+      courier_provider: draft.courier_provider.trim() || null,
+      waybill_number: draft.waybill_number.trim() || null,
+      tracking_url: draft.tracking_url.trim() || null,
+    };
+    // Best-effort milestone timestamps — only set the first time each is
+    // reached, never clobbered by a later unrelated edit.
+    if (draft.status === "collected" && !s.collected_at) patch.collected_at = new Date().toISOString();
+    if (draft.status === "booked" && !s.courier_booked_at) patch.courier_booked_at = new Date().toISOString();
+    if (draft.status === "delivered" && !s.delivered_at) patch.delivered_at = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from("order_shipments").update(patch).eq("id", s.id).select().single();
+    setSaving(false);
+    if (error) { setNotice("Couldn't save that update — please try again."); return; }
+    setShipments(prev => prev.map(x => x.id === s.id ? { ...x, ...(data as OrderShipment) } : x));
+    setEditingId(null);
+    setNotice("Shipment updated.");
+  };
+
+  if (loading) return <p style={{ color: "var(--grey)", fontSize: "0.85rem" }}>Loading shipments…</p>;
+  if (shipments.length === 0) return null;
+
+  const inputStyle: React.CSSProperties = { width: "100%", padding: "0.5rem 0.7rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.8rem", boxSizing: "border-box" };
+
+  return (
+    <section style={{ marginBottom: "2.5rem" }}>
+      <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", margin: "0 0 0.2rem" }}>Shipments</h2>
+      <p style={{ color: "var(--grey)", fontSize: "0.82rem", margin: "0 0 1rem" }}>
+        One parcel per order — track collection or courier status, and add a waybill once one's booked.
+      </p>
+
+      {notice && <p style={{ fontSize: "0.82rem", color: notice.includes("Couldn't") ? "#BF360C" : "#2E7D32", marginBottom: "0.85rem" }}>{notice}</p>}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+        {shipments.map(s => {
+          const meta = shipmentStatusMeta(s.status);
+          const isEditing = editingId === s.id;
+          const destination = s.fulfillment_method === "courier"
+            ? [s.destination_address_line1, s.destination_suburb, s.destination_city, s.destination_province].filter(Boolean).join(", ")
+            : null;
+          return (
+            <div key={s.id} style={{ border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, background: "#fff", padding: "1rem 1.25rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "0.75rem" }}>
+                <div>
+                  <p style={{ fontWeight: 500, fontSize: "0.9rem", margin: "0 0 0.15rem" }}>
+                    {s.fulfillment_method === "collection" ? "🏠 Collection" : "🚚 Courier"}
+                    {" · "}Order #{s.order_id.slice(0, 8)}
+                  </p>
+                  <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: 0 }}>
+                    {s.order ? new Date(s.order.created_at).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" }) : ""}
+                    {s.order?.client?.full_name ? ` · ${s.order.client.full_name}` : ""}
+                  </p>
+                  {destination && <p style={{ fontSize: "0.78rem", color: "var(--onyx)", margin: "0.3rem 0 0" }}>📍 {destination}{s.destination_postal_code ? `, ${s.destination_postal_code}` : ""}</p>}
+                  {(s.parcel_weight_g || s.parcel_length_cm) && (
+                    <p style={{ fontSize: "0.74rem", color: "#aaa", margin: "0.2rem 0 0" }}>
+                      Parcel: {s.parcel_weight_g ? `${s.parcel_weight_g}g` : ""}
+                      {s.parcel_length_cm ? ` · ${s.parcel_length_cm}×${s.parcel_width_cm ?? "?"}×${s.parcel_height_cm ?? "?"}cm` : ""}
+                    </p>
+                  )}
+                  {!isEditing && s.waybill_number && (
+                    <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: "0.3rem 0 0" }}>
+                      Waybill: {s.waybill_number}{s.courier_provider ? ` (${s.courier_provider})` : ""}
+                      {s.tracking_url && <> · <a href={s.tracking_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--plum)" }}>Track</a></>}
+                    </p>
+                  )}
+                </div>
+                <span style={{ background: meta.bg, color: meta.color, borderRadius: 100, padding: "0.25rem 0.75rem", fontSize: "0.74rem", fontWeight: 600, whiteSpace: "nowrap" }}>
+                  {meta.label}
+                </span>
+              </div>
+
+              {isEditing ? (
+                <div style={{ marginTop: "0.85rem", paddingTop: "0.85rem", borderTop: "1px solid #F0F0F0", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem" }}>
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <label style={{ fontSize: "0.72rem", color: "#888", fontWeight: 600 }}>Status</label>
+                    <select value={draft.status} onChange={e => setDraft(d => ({ ...d, status: e.target.value }))} style={inputStyle}>
+                      {SHIPMENT_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  </div>
+                  {s.fulfillment_method === "courier" && (
+                    <>
+                      <div>
+                        <label style={{ fontSize: "0.72rem", color: "#888", fontWeight: 600 }}>Courier</label>
+                        <input value={draft.courier_provider} onChange={e => setDraft(d => ({ ...d, courier_provider: e.target.value }))} placeholder="e.g. The Courier Guy" style={inputStyle} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: "0.72rem", color: "#888", fontWeight: 600 }}>Waybill number</label>
+                        <input value={draft.waybill_number} onChange={e => setDraft(d => ({ ...d, waybill_number: e.target.value }))} style={inputStyle} />
+                      </div>
+                      <div style={{ gridColumn: "1 / -1" }}>
+                        <label style={{ fontSize: "0.72rem", color: "#888", fontWeight: 600 }}>Tracking link</label>
+                        <input value={draft.tracking_url} onChange={e => setDraft(d => ({ ...d, tracking_url: e.target.value }))} placeholder="https://…" style={inputStyle} />
+                      </div>
+                    </>
+                  )}
+                  <div style={{ gridColumn: "1 / -1", display: "flex", gap: "0.5rem", marginTop: "0.25rem" }}>
+                    <button onClick={() => saveEdit(s)} disabled={saving} className="btn-plum" style={{ padding: "0.45rem 1.1rem", fontSize: "0.8rem" }}>
+                      {saving ? "Saving…" : "Save"}
+                    </button>
+                    <button onClick={() => setEditingId(null)} disabled={saving} className="btn-outline" style={{ padding: "0.45rem 1.1rem", fontSize: "0.8rem" }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button onClick={() => startEdit(s)} className="btn-outline" style={{ marginTop: "0.75rem", padding: "0.4rem 1rem", fontSize: "0.78rem" }}>
+                  Update shipment
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function MyShopTab({ user, partnerProvince }: { user: { id: string }; partnerProvince?: string | null }) {
   return (
     <div>
       <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.25rem" }}>My Shop</h2>
@@ -4180,7 +4542,8 @@ function MyShopTab({ user }: { user: { id: string } }) {
         List a product and it&apos;s automatically promoted on Umuhle for as long as its package runs — starting at R20 for 6 weeks. No separate ad to buy.
       </p>
       <OrderFulfillmentManager user={user} />
-      <ProductsManager user={user} />
+      <ShipmentsManager user={user} />
+      <ProductsManager user={user} partnerProvince={partnerProvince} />
     </div>
   );
 }
@@ -4656,7 +5019,7 @@ function DashboardContent() {
 
         {/* ── My Shop tab — products + promotion, merged. Open to everyone: ──
              selling was never restricted to formal "partner" accounts. ── */}
-        {tab === "my-shop" && <section><MyShopTab user={user} /></section>}
+        {tab === "my-shop" && <section><MyShopTab user={user} partnerProvince={profile.province} /></section>}
       </main>
 
       {/* ── Mobile Bottom Action Bar ── */}

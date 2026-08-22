@@ -13,7 +13,7 @@
 //   onCancel     — called when user clicks Cancel
 
 import { useState } from "react";
-import { UPSELL_TAG_GROUPS } from "@/types";
+import { UPSELL_TAG_GROUPS, SA_PROVINCES } from "@/types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -42,6 +42,13 @@ export interface ProductFormData {
   width_cm: string;
   height_cm: string;
   image_url?: string | null;
+  // ── Local delivery & provincial sales ──
+  // "province" ships only within sell_provinces (or the seller's own home
+  // province if left empty — see the placeholder copy below); "south_africa"
+  // ships nationwide. Enforced server-side for courier orders in
+  // lib/orders.ts's createPendingOrder.
+  sell_scope: "province" | "south_africa";
+  sell_provinces: string[];
 }
 
 const CATEGORIES = ["hair", "nails", "makeup", "lashes", "skincare", "tools", "other"];
@@ -55,6 +62,7 @@ const emptyForm = (): ProductFormData => ({
   stock_count: "0", product_type: "simple", variants: [],
   weight_g: "", length_cm: "", width_cm: "", height_cm: "",
   image_url: null,
+  sell_scope: "south_africa", sell_provinces: [],
 });
 
 export function productToForm(p: {
@@ -63,6 +71,7 @@ export function productToForm(p: {
   product_type?: string | null;
   weight_g?: number | null; length_cm?: number | null;
   width_cm?: number | null; height_cm?: number | null;
+  sell_scope?: string | null; sell_provinces?: string[] | null;
   product_variants?: Array<{
     id: string; label: string; price: number; stock_count: number; sku: string | null;
   }> | null;
@@ -88,6 +97,8 @@ export function productToForm(p: {
     width_cm:     p.width_cm  != null ? String(p.width_cm)  : "",
     height_cm:    p.height_cm != null ? String(p.height_cm) : "",
     image_url:    p.image_url,
+    sell_scope:      (p.sell_scope as "province" | "south_africa") ?? "south_africa",
+    sell_provinces:  p.sell_provinces ?? [],
   };
 }
 
@@ -107,6 +118,11 @@ interface Props {
   // auto-select the just-created product.
   onSaved:     (row: ProductFormData & { id: string }, wasNew: boolean) => void;
   onCancel?:   () => void;
+  // Seller's own profiles.province, if set — used only to pre-check that
+  // one box the first time a brand-new product switches to "province"
+  // scope. Never overrides an existing product's already-saved
+  // sell_provinces.
+  defaultProvince?: string | null;
 }
 
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // 2MB
@@ -114,6 +130,7 @@ const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 
 export default function ProductForm({
   initial, partnerId, supabase, skipVerify = false, isLive = false, onSaved, onCancel,
+  defaultProvince = null,
 }: Props) {
   const [form,         setForm]         = useState<ProductFormData>(initial ?? emptyForm());
   const [imageFile,    setImageFile]    = useState<File | null>(null);
@@ -271,6 +288,11 @@ export default function ProductForm({
         length_cm:         form.length_cm  ? parseFloat(form.length_cm) : null,
         width_cm:          form.width_cm   ? parseFloat(form.width_cm)  : null,
         height_cm:         form.height_cm  ? parseFloat(form.height_cm) : null,
+        sell_scope:        form.sell_scope,
+        // A "province" product with no provinces ticked falls back to the
+        // seller's own home province at enforcement time (lib/orders.ts) —
+        // so it's fine to save an empty array here rather than force a pick.
+        sell_provinces:    form.sell_scope === "province" ? form.sell_provinces : [],
         moderation_status: skipVerify ? "approved" : "scanning",
         is_active:         skipVerify,
       };
@@ -531,6 +553,77 @@ export default function ProductForm({
             placeholder="5" style={inputStyle} />
         </div>
       </div>
+
+      {/* ── Sell To (local delivery & provincial sales) ── */}
+      <label style={sectionLabel}>Sell to</label>
+      <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.5rem" }}>
+        {([
+          { value: "south_africa" as const, title: "Whole of South Africa", sub: "Ships nationwide" },
+          { value: "province"     as const, title: "Selected provinces",    sub: "Only within provinces you pick" },
+        ]).map(opt => (
+          <button key={opt.value} type="button"
+            onClick={() => setForm(f => ({
+              ...f,
+              sell_scope: opt.value,
+              // First time a fresh product flips to "province", default to
+              // the seller's own home province rather than leaving it blank
+              // (an empty list already falls back to the seller's province
+              // at enforcement time, but pre-ticking it makes that explicit
+              // and lets them add more from there).
+              sell_provinces:
+                opt.value === "province" && f.sell_provinces.length === 0 && defaultProvince
+                  ? [defaultProvince]
+                  : f.sell_provinces,
+            }))}
+            style={{
+              flex: 1, textAlign: "left", padding: "0.7rem 0.9rem", borderRadius: 12, cursor: "pointer",
+              border: form.sell_scope === opt.value ? "1.5px solid var(--plum)" : "1.5px solid #E0E0E0",
+              background: form.sell_scope === opt.value ? "rgba(155,127,184,0.08)" : "#fff",
+            }}>
+            <div style={{ fontSize: "0.85rem", fontWeight: 600, color: form.sell_scope === opt.value ? "var(--plum)" : "#333" }}>
+              {opt.title}
+            </div>
+            <div style={{ fontSize: "0.72rem", color: "#999", marginTop: "0.15rem" }}>{opt.sub}</div>
+          </button>
+        ))}
+      </div>
+
+      {form.sell_scope === "province" && (
+        <div style={{ marginTop: "0.6rem" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.4rem" }}>
+            {SA_PROVINCES.map(prov => {
+              const checked = form.sell_provinces.includes(prov);
+              return (
+                <label key={prov}
+                  style={{
+                    display: "flex", alignItems: "center", gap: "0.4rem",
+                    padding: "0.45rem 0.6rem", borderRadius: 10, cursor: "pointer",
+                    border: checked ? "1.5px solid var(--plum)" : "1.5px solid #E0E0E0",
+                    background: checked ? "rgba(155,127,184,0.08)" : "#fff",
+                    fontSize: "0.78rem", color: checked ? "var(--plum)" : "#555",
+                  }}>
+                  <input type="checkbox" checked={checked}
+                    onChange={() => setForm(f => ({
+                      ...f,
+                      sell_provinces: checked
+                        ? f.sell_provinces.filter(p => p !== prov)
+                        : [...f.sell_provinces, prov],
+                    }))}
+                    style={{ margin: 0 }} />
+                  {prov}
+                </label>
+              );
+            })}
+          </div>
+          {form.sell_provinces.length === 0 && (
+            <p style={{ fontSize: "0.75rem", color: "#999", marginTop: "0.4rem" }}>
+              {defaultProvince
+                ? `No provinces picked yet — this will ship only within ${defaultProvince} until you tick some above.`
+                : "No provinces picked yet — set your fulfillment address in Profile settings so this has a default, or tick provinces above."}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* ── Product image ── */}
       <label style={sectionLabel}>Product image</label>

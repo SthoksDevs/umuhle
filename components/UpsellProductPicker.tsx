@@ -165,6 +165,7 @@ export default function UpsellProductPicker({
               id: undefined, name: "", description: "", price: "", category: serviceCategoryGuess(serviceTags),
               tags: serviceTags, stock_count: "1", product_type: "simple", variants: [],
               weight_g: "", length_cm: "", width_cm: "", height_cm: "", image_url: null,
+              sell_scope: "south_africa", sell_provinces: [],
             }}
             onSaved={handleProductCreated}
             onCancel={() => setShowCreate(false)}
