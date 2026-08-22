@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, Suspense } from "react";
 import { useCart } from "@/lib/cart-context";
+import type { CartLine } from "@/lib/cart-context";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Profile, Province, FulfillmentMethod } from "@/types";
@@ -293,6 +294,43 @@ function GatewayLogo({ id, className = "payment-method-logo" }: { id: PayMethod;
   );
 }
 
+// ── Per-partner fulfillment ─────────────────────────────────────────────────
+// One row per distinct products.partner_id in the cart. Fetched client-side
+// straight from `profiles` (public-readable for active accounts — see the
+// local-delivery handoff doc) rather than through a new API route.
+interface PartnerFulfillmentInfo {
+  id: string;
+  full_name: string | null;
+  address: string | null;
+  suburb: string | null;
+  city: string | null;
+  province: string | null;
+  postal_code: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  allow_collection: boolean;
+  allow_courier: boolean;
+}
+
+/**
+ * Client-side mirror of the sell_scope check `lib/orders.ts` enforces
+ * server-side. Collection lines are always exempt — the customer is
+ * fetching the item in person, so there's no shipping range to restrict.
+ */
+function sellScopeViolation(
+  line: CartLine,
+  method: FulfillmentMethod,
+  province: string,
+  partnerInfo: Record<string, PartnerFulfillmentInfo>
+): boolean {
+  if (method !== "courier") return false;
+  if (line.product.sell_scope !== "province") return false;
+  if (!province) return false; // nothing to validate against yet
+  const sellProvinces = line.product.sell_provinces ?? [];
+  const allowed = sellProvinces.length > 0 ? sellProvinces : [partnerInfo[line.product.partner_id]?.province].filter(Boolean);
+  return !allowed.includes(province);
+}
+
 // ── Main checkout page ────────────────────────────────────────────────────────
 
 export default function CheckoutPage() {
@@ -324,6 +362,19 @@ export default function CheckoutPage() {
     province: "",
     postalCode: "",
   });
+
+  // ── Per-partner fulfillment (collection vs courier) ──
+  const [partnerInfo, setPartnerInfo] = useState<Record<string, PartnerFulfillmentInfo>>({});
+  const [fulfillmentByPartner, setFulfillmentByPartner] = useState<Record<string, FulfillmentMethod>>({});
+
+  // CartLine.product.partner_id is already populated on every line (products
+  // are fetched with select("*") elsewhere in the app) — no extra fetch
+  // needed for that part. Deduped + sorted into a stable string so the
+  // effect below can key off a primitive instead of array identity (see
+  // the Aug 8 "search reload bug" note — effects must key off a primitive,
+  // not an object/array, or they re-fire every render).
+  const partnerIds = [...new Set(items.map((l) => l.product.partner_id).filter(Boolean))].sort();
+  const partnerIdsKey = partnerIds.join(",");
 
   const total = Math.max(0, subtotal - discount);
   // Drives lib/payments/eligibility.ts's Umuhle-profit-only rule: true only
@@ -381,6 +432,63 @@ export default function CheckoutPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [availableGateways]);
 
+  // profiles: public read (active) already lets a signed-in customer read
+  // another partner's full profile row client-side (address/allow_collection/
+  // allow_courier/lat/long included) — it's row-level, not column-level, and
+  // these are all fine to be public (equivalent to a store's public
+  // address). So no new API route is needed here.
+  useEffect(() => {
+    if (!partnerIdsKey) return;
+    const ids = partnerIdsKey.split(",");
+    supabase
+      .from("profiles")
+      .select("id, full_name, address, suburb, city, province, postal_code, latitude, longitude, allow_collection, allow_courier")
+      .in("id", ids)
+      .then(({ data }) => {
+        if (!data) return;
+        const map: Record<string, PartnerFulfillmentInfo> = {};
+        (data as PartnerFulfillmentInfo[]).forEach((p) => { map[p.id] = p; });
+        setPartnerInfo((prev) => ({ ...prev, ...map }));
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partnerIdsKey]);
+
+  // Default each partner to "courier" if they offer it, else "collection" —
+  // only once, when their info first loads. Left alone after that so it
+  // doesn't clobber the customer's own toggle choice on a later re-render.
+  useEffect(() => {
+    const ids = Object.keys(partnerInfo);
+    if (ids.length === 0) return;
+    setFulfillmentByPartner((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const id of ids) {
+        if (next[id]) continue;
+        const info = partnerInfo[id];
+        next[id] = info.allow_courier ? "courier" : "collection";
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [partnerInfo]);
+
+  const setFulfillment = (partnerId: string, method: FulfillmentMethod) => {
+    setFulfillmentByPartner((prev) => ({ ...prev, [partnerId]: method }));
+  };
+
+  // At least one partner group needs courier ⇒ a delivery address is
+  // required. If every group is collection, the address card is hidden —
+  // see "Delivery address" below.
+  const anyCourier = partnerIds.some((id) => (fulfillmentByPartner[id] ?? "courier") === "courier");
+
+  // Client-side pre-check mirroring lib/orders.ts's authoritative
+  // server-side enforcement — lets the customer fix the problem before
+  // even submitting, rather than only finding out after a redirect to the
+  // payment gateway and back.
+  const sellScopeViolations = items.filter((line) =>
+    sellScopeViolation(line, fulfillmentByPartner[line.product.partner_id] ?? "courier", form.province, partnerInfo)
+  );
+
   const shippingAddress = [form.address, form.suburb, form.city, form.province, form.postalCode]
     .filter(Boolean)
     .join(", ");
@@ -404,6 +512,13 @@ export default function CheckoutPage() {
           type: "order",
           items: items.map((l) => ({ productId: l.product.id, quantity: l.quantity })),
           shippingAddress,
+          fulfillmentByPartner,
+          shippingAddressLine1: form.address,
+          shippingAddressLine2: "",
+          shippingSuburb: form.suburb,
+          shippingCity: form.city,
+          shippingProvince: form.province,
+          shippingPostalCode: form.postalCode,
           contactName: form.name,
           contactWhatsapp: form.whatsapp,
           discountCents: discount,
@@ -456,6 +571,13 @@ export default function CheckoutPage() {
           type: "order",
           items: items.map((l) => ({ productId: l.product.id, quantity: l.quantity })),
           shippingAddress,
+          fulfillmentByPartner,
+          shippingAddressLine1: form.address,
+          shippingAddressLine2: "",
+          shippingSuburb: form.suburb,
+          shippingCity: form.city,
+          shippingProvince: form.province,
+          shippingPostalCode: form.postalCode,
           contactName: form.name,
           contactWhatsapp: form.whatsapp,
           discountCents: discount,
@@ -484,7 +606,12 @@ export default function CheckoutPage() {
     boxSizing: "border-box",
   };
 
-  const isFormValid = form.name.trim() && form.whatsapp.trim() && form.address.trim() && form.city.trim();
+  const isFormValid = Boolean(
+    form.name.trim() &&
+    form.whatsapp.trim() &&
+    (!anyCourier || (form.address.trim() && form.city.trim())) &&
+    sellScopeViolations.length === 0
+  );
   const selectedPaymentOption = PAYMENT_OPTIONS.find((opt) => opt.id === payMethod);
 
   if (loading) {
@@ -535,26 +662,101 @@ export default function CheckoutPage() {
               </div>
             </div>
 
-            {/* Shipping */}
-            <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem" }}>
-              <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>Delivery address</h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                <input placeholder="Street address *" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} style={inputStyle} />
-                <div className="checkout-field-row">
-                  <input placeholder="Suburb" value={form.suburb} onChange={(e) => setForm((f) => ({ ...f, suburb: e.target.value }))} style={inputStyle} />
-                  <input placeholder="City *" value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))} style={inputStyle} />
-                </div>
-                <div className="checkout-field-row">
-                  <select value={form.province} onChange={(e) => setForm((f) => ({ ...f, province: e.target.value }))} style={{ ...inputStyle, background: "#fff" }}>
-                    <option value="">Province</option>
-                    {SA_PROVINCES.map((p) => (
-                      <option key={p} value={p}>{p}</option>
-                    ))}
-                  </select>
-                  <input placeholder="Postal code" value={form.postalCode} onChange={(e) => setForm((f) => ({ ...f, postalCode: e.target.value }))} style={inputStyle} />
+            {/* Fulfillment — one row per partner group */}
+            {partnerIds.length > 0 && (
+              <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem" }}>
+                <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>Fulfillment</h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+                  {partnerIds.map((partnerId, idx) => {
+                    const info = partnerInfo[partnerId];
+                    const method = fulfillmentByPartner[partnerId] ?? "courier";
+                    const partnerName = info?.full_name || "Seller";
+                    const bothSupported = Boolean(info?.allow_collection && info?.allow_courier);
+                    return (
+                      <div
+                        key={partnerId}
+                        style={{
+                          paddingBottom: idx < partnerIds.length - 1 ? "1rem" : 0,
+                          borderBottom: idx < partnerIds.length - 1 ? "1px dashed rgba(155,127,184,0.15)" : "none",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 600, fontSize: "0.88rem" }}>{partnerName}</span>
+                          {bothSupported ? (
+                            <div style={{ display: "flex", gap: "0.4rem" }}>
+                              {(["courier", "collection"] as FulfillmentMethod[]).map((m) => (
+                                <button
+                                  key={m}
+                                  type="button"
+                                  onClick={() => setFulfillment(partnerId, m)}
+                                  style={{
+                                    padding: "0.4rem 0.85rem",
+                                    borderRadius: 999,
+                                    fontSize: "0.78rem",
+                                    fontWeight: 600,
+                                    border: method === m ? "1.5px solid var(--plum)" : "1.5px solid #E0E0E0",
+                                    background: method === m ? "var(--plum)" : "#fff",
+                                    color: method === m ? "#fff" : "var(--grey)",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  {m === "courier" ? "🚚 Courier" : "🏠 Collection"}
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <span style={{ fontSize: "0.78rem", color: "var(--light)" }}>
+                              {method === "courier" ? "Ships via courier" : `Collect in person from ${partnerName}`}
+                            </span>
+                          )}
+                        </div>
+                        {method === "collection" && (
+                          <p style={{ fontSize: "0.78rem", color: "var(--grey)", marginTop: "0.5rem" }}>
+                            📍 {[info?.address, info?.suburb, info?.city, info?.province].filter(Boolean).join(", ") || "Pickup address available after checkout"}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-            </div>
+            )}
+
+            {/* Shipping */}
+            {anyCourier ? (
+              <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem" }}>
+                <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>Delivery address</h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                  <input placeholder="Street address *" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} style={inputStyle} />
+                  <div className="checkout-field-row">
+                    <input placeholder="Suburb" value={form.suburb} onChange={(e) => setForm((f) => ({ ...f, suburb: e.target.value }))} style={inputStyle} />
+                    <input placeholder="City *" value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))} style={inputStyle} />
+                  </div>
+                  <div className="checkout-field-row">
+                    <select value={form.province} onChange={(e) => setForm((f) => ({ ...f, province: e.target.value }))} style={{ ...inputStyle, background: "#fff" }}>
+                      <option value="">Province</option>
+                      {SA_PROVINCES.map((p) => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
+                    </select>
+                    <input placeholder="Postal code" value={form.postalCode} onChange={(e) => setForm((f) => ({ ...f, postalCode: e.target.value }))} style={inputStyle} />
+                  </div>
+                </div>
+                {sellScopeViolations.length > 0 && (
+                  <p style={{ color: "#C62828", fontSize: "0.8rem", marginTop: "0.85rem" }}>
+                    {[...new Set(sellScopeViolations.map((l) => l.product.name))].join(", ")}{" "}
+                    {sellScopeViolations.length === 1 ? "doesn't" : "don't"} ship to {form.province || "the selected province"}. Choose collection instead, or update the delivery province above.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem" }}>
+                <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "0.5rem" }}>Delivery address</h3>
+                <p style={{ fontSize: "0.85rem", color: "var(--light)", margin: 0 }}>
+                  No delivery address needed — you&apos;re collecting everything in person.
+                </p>
+              </div>
+            )}
 
             {/* Coupon */}
             <CouponSection

@@ -24,6 +24,7 @@ import { isGatewayEligible, whyPayFastIneligible } from "@/lib/payments/eligibil
 import { getSplitTarget, singleSellerProfileId } from "@/lib/payments/split";
 import { splitCommission } from "@/lib/payouts";
 import type { PaymentType } from "@/lib/payments/types";
+import type { FulfillmentMethod } from "@/types";
 
 type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
 type PFProfile = { email: string; full_name?: string | null; phone?: string | null };
@@ -163,11 +164,22 @@ async function initiateOrder(
   body: Record<string, unknown>,
   baseUrl: string
 ) {
-  const { items, shippingAddress, contactName, contactWhatsapp } = body as {
+  const {
+    items, shippingAddress, contactName, contactWhatsapp,
+    fulfillmentByPartner, shippingAddressLine1, shippingAddressLine2,
+    shippingSuburb, shippingCity, shippingProvince, shippingPostalCode,
+  } = body as {
     items: { productId: string; quantity: number }[];
     shippingAddress: string;
     contactName?: string;
     contactWhatsapp?: string;
+    fulfillmentByPartner?: Record<string, FulfillmentMethod>;
+    shippingAddressLine1?: string;
+    shippingAddressLine2?: string;
+    shippingSuburb?: string;
+    shippingCity?: string;
+    shippingProvince?: string;
+    shippingPostalCode?: string;
   };
 
   const created = await createPendingOrder(supabase, userId, items, {
@@ -175,6 +187,13 @@ async function initiateOrder(
     shippingAddress,
     contactName,
     contactWhatsapp,
+    fulfillmentByPartner,
+    shippingAddressLine1,
+    shippingAddressLine2,
+    shippingSuburb,
+    shippingCity,
+    shippingProvince,
+    shippingPostalCode,
   });
   if ("error" in created) return NextResponse.json({ error: created.error }, { status: 400 });
   const { orderId, totalAmount, lines, isUmuhleProfitOnly } = created.result;
