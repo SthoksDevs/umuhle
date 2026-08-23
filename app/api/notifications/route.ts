@@ -61,7 +61,7 @@ export async function GET(request: NextRequest) {
       booking_time,
       meeting_address,
       client_poc_phone,
-      client:profiles!bookings_client_id_fkey(full_name, email, phone),
+      client:profiles!bookings_client_id_fkey(full_name, email, phone, whatsapp_comms_enabled),
       artist:artists!bookings_artist_id_fkey(
         display_name,
         point_of_contact_phone,
@@ -89,6 +89,12 @@ export async function GET(request: NextRequest) {
 
     try {
       if (clientPhone) {
+        // Email is the default channel now — notifyBookingReminder only
+        // actually sends the client-facing WhatsApp template when
+        // clientWhatsappEnabled is true; when it's false, clientSent comes
+        // back false and the email branch below fires instead. Artist/POC
+        // messages inside notifyBookingReminder are NOT gated by the
+        // client's own preference, so they still go out either way.
         const { clientSent } = await notifyBookingReminder({
           clientName: clientRow.full_name as string,
           clientPhone,
@@ -99,6 +105,7 @@ export async function GET(request: NextRequest) {
           serviceName: serviceRow?.name as string,
           clientPocPhone: booking.client_poc_phone ?? undefined,
           artistPocPhone: artistRow?.point_of_contact_phone as string | undefined,
+          clientWhatsappEnabled: clientRow?.whatsapp_comms_enabled ?? false,
         });
 
         if (!clientSent && clientRow?.email) {
@@ -140,13 +147,15 @@ export async function GET(request: NextRequest) {
     .from("store_bookings")
     .select(`
       id,
+      client_id,
       client_name,
       client_phone,
       client_email,
       service,
       booking_date,
       booking_time,
-      salon:partner_salons(name)
+      salon:partner_salons(name),
+      client:profiles!client_id(whatsapp_comms_enabled)
     `)
     .eq("status", "confirmed")
     .eq("reminder_sent", false)
@@ -159,9 +168,14 @@ export async function GET(request: NextRequest) {
     if (!isDueWithinTwoHours(booking.booking_date, booking.booking_time, now)) continue;
 
     const salonRow = Array.isArray(booking.salon) ? booking.salon[0] : booking.salon;
+    // Guest/no-account bookings (client_id null) have no comms preference
+    // to respect — those keep the original WhatsApp-primary behaviour.
+    // Registered accounts default to email unless they've opted in.
+    const clientProfileRow = Array.isArray(booking.client) ? booking.client[0] : booking.client;
+    const whatsappAllowed = !booking.client_id || (clientProfileRow?.whatsapp_comms_enabled ?? false);
 
     try {
-      if (booking.client_phone) {
+      if (booking.client_phone && whatsappAllowed) {
         const { clientSent } = await notifyStoreBookingReminder({
           clientName: booking.client_name,
           clientPhone: booking.client_phone,
