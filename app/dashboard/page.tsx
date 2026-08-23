@@ -70,10 +70,9 @@ function formatDate(dateStr: string) {
   return d.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "long", year: "numeric" });
 }
 
-// ── Tab type extended with "invite" and "my-store" (replaces "my-store") ──────
-// "my-products" was folded into "my-shop" — products and ads are now one
-// concept, one tab (see the products/ads pricing merge).
-type Tab = "bookings" | "my-orders" | "wishlist" | "profile" | "my-store" | "my-services" | "invite" | "my-shop" | "wallet";
+// ── Dashboard navigation ───────────────────────────────────────────────────
+// The old tab ids remain supported through deep-link aliases below.
+type Tab = "dashboard" | "bookings" | "my-orders" | "wishlist" | "profile" | "my-stores" | "my-services" | "invite" | "my-shop" | "wallet";
 
 const SERVICE_TYPES = [
   { id: "hair",   label: "Hair",  banner: "/banners/hair.jpg",   description: "From protective styles to blowouts, braids to colour — let clients know exactly what you specialise in." },
@@ -2126,193 +2125,186 @@ function ServiceManager({ salonId, salonCategories, ownerId }: { salonId: string
 // ── MySalonTab ────────────────────────────────────────────────────────────────
 // This replaces the MySalonTab function in your dashboard/page.tsx
  
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let value = "";
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (quoted && line[i + 1] === '"') { value += '"'; i++; }
+      else quoted = !quoted;
+    } else if (ch === ',' && !quoted) { out.push(value.trim()); value = ""; }
+    else value += ch;
+  }
+  out.push(value.trim());
+  return out;
+}
+
+const STORE_IMPORT_HEADERS = [
+  "name","description","address","suburb","city","postal_code","phone","email","website","services",
+  "monday_open","monday_close","monday_closed","tuesday_open","tuesday_close","tuesday_closed",
+  "wednesday_open","wednesday_close","wednesday_closed","thursday_open","thursday_close","thursday_closed",
+  "friday_open","friday_close","friday_closed","saturday_open","saturday_close","saturday_closed",
+  "sunday_open","sunday_close","sunday_closed","instagram_username","youtube_url"
+];
+
+function csvEscape(value: string) {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function downloadStoreTemplate() {
+  const example = [
+    "Bella Beauty Studio","Professional beauty studio","12 Main Road","Sandton","Johannesburg","2196","0821234567","hello@example.co.za","https://example.co.za","hair|nails",
+    "08:00","17:00","false","08:00","17:00","false","08:00","17:00","false","08:00","17:00","false","08:00","17:00","false","08:00","13:00","false","","","true","bellabeauty","https://youtube.com/@example"
+  ];
+  const csv = STORE_IMPORT_HEADERS.join(",") + "\n" + example.map(csvEscape).join(",") + "\n";
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = "umuhle-store-import-template.csv"; a.click(); URL.revokeObjectURL(url);
+}
+
 function MySalonTab({ user }: { user: { id: string } }) {
   const supabase = createClient();
   const [listings, setListings] = useState<SalonListing[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<SalonListing | null>(null);
-  const [innerTab, setInnerTab] = useState<"listing" | "staff" | "bookings">("listing");
- 
-  useEffect(() => {
-    supabase
-      .from("partner_salons")
-      .select("*")
-      .eq("partner_id", user.id)
-      .then(({ data }) => {
-        if (data) {
-  const converted = (data as SalonListing[]).map((salon) => {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [innerTab, setInnerTab] = useState<"overview" | "staff" | "bookings">("overview");
+  const [showImport, setShowImport] = useState(false);
+  const [importRows, setImportRows] = useState<Record<string,string>[]>([]);
+  const [importErrors, setImportErrors] = useState<{ row: number; message: string }[]>([]);
+  const [importing, setImporting] = useState(false);
+  const [importNotice, setImportNotice] = useState("");
+
+  const normalizeListing = (salon: SalonListing): SalonListing => {
     const oh = salon.opening_hours as any;
-
-    if (oh?.weekly) {
-      return salon;
-    }
-
+    if (oh?.weekly) return salon;
     const days = oh?.days ?? [];
+    const buildDay = (name: string): DayHours => ({ closed: !days.includes(name), open: oh?.open ?? "08:00", close: oh?.close ?? "17:00" });
+    return { ...salon, opening_hours: { weekly: {
+      sunday: buildDay("Sunday"), monday: buildDay("Monday"), tuesday: buildDay("Tuesday"), wednesday: buildDay("Wednesday"),
+      thursday: buildDay("Thursday"), friday: buildDay("Friday"), saturday: buildDay("Saturday")
+    }, public_holidays: { closed: true, open: "", close: "" }, special_days: [] } };
+  };
 
-    const buildDay = (name: string): DayHours => ({
-      closed: !days.includes(name),
-      open: oh?.open ?? "08:00",
-      close: oh?.close ?? "17:00",
-    });
-
-    return {
-      ...salon,
-      opening_hours: {
-        weekly: {
-          sunday: buildDay("Sunday"),
-          monday: buildDay("Monday"),
-          tuesday: buildDay("Tuesday"),
-          wednesday: buildDay("Wednesday"),
-          thursday: buildDay("Thursday"),
-          friday: buildDay("Friday"),
-          saturday: buildDay("Saturday"),
-        },
-
-        public_holidays: {
-          closed: true,
-          open: "",
-          close: "",
-        },
-
-        special_days: [],
-      },
-    };
-  });
-
-  setListings(converted);
-}
-        setLoading(false);
-      });
+  const loadListings = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from("partner_salons").select("*").eq("partner_id", user.id).order("created_at", { ascending: false });
+    const normalized = (data ?? []).map(x => normalizeListing(x as SalonListing));
+    setListings(normalized);
+    setSelectedId(prev => prev && normalized.some(x => x.id === prev) ? prev : normalized[0]?.id ?? null);
+    setLoading(false);
   }, [user.id]);
- 
+
+  useEffect(() => { loadListings(); }, [loadListings]);
+
   const handleSaved = (saved: SalonListing) => {
-    setListings(prev => {
-      const idx = prev.findIndex(l => l.id === saved.id);
-      if (idx >= 0) { const n = [...prev]; n[idx] = saved; return n; }
-      return [...prev, saved];
-    });
-    setShowForm(false);
-    setEditing(null);
+    setListings(prev => { const idx = prev.findIndex(l => l.id === saved.id); if (idx >= 0) { const n=[...prev]; n[idx]=normalizeListing(saved); return n; } return [normalizeListing(saved), ...prev]; });
+    setSelectedId(saved.id ?? null); setShowForm(false); setEditing(null); setInnerTab("overview");
   };
- 
+
   const statusMeta: Record<string, { bg: string; color: string; label: string; desc: string }> = {
-    pending:  { bg: "#FAEEDA", color: "#854F0B", label: "Under review",  desc: "We'll review your listing within 24 hours." },
-    approved: { bg: "#E1F5EE", color: "#0F6E56", label: "Live",          desc: "Your store is visible in Stores and can receive bookings." },
-    rejected: { bg: "#FCEBEB", color: "#A32D2D", label: "Not approved",  desc: "Please edit your listing and resubmit." },
+    pending: { bg: "#FAEEDA", color: "#854F0B", label: "Under review", desc: "We'll review your listing within 24 hours." },
+    approved: { bg: "#E1F5EE", color: "#0F6E56", label: "Live", desc: "Your store is visible in Stores and can receive bookings." },
+    rejected: { bg: "#FCEBEB", color: "#A32D2D", label: "Not approved", desc: "Please edit your listing and resubmit." },
   };
- 
-  if (loading) return <p style={{ color: "var(--grey)" }}>Loading…</p>;
- 
-  // ── Add form (no existing listing) ──
-  if (listings.length === 0 && (showForm || true)) {
-    if (showForm) return (
-      <SalonForm initial={emptySalon()} userId={user.id} onSaved={handleSaved}
-        onCancel={() => setShowForm(false)} isEdit={false} />
-    );
-    return (
-      <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "2rem", textAlign: "center" }}>
-        <p style={{ fontFamily: "var(--font-display)", fontSize: "1.1rem", marginBottom: "0.5rem" }}>List your store on Umuhle</p>
-        <p style={{ color: "var(--grey)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
-          Appear in the Stores page and receive appointment bookings directly.
-        </p>
-        <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.75rem 2rem", borderRadius: 100, fontWeight: 600 }}>
-          Add your store
-        </button>
-      </div>
-    );
-  }
- 
-  // ── Existing listing view ──
-  const listing = listings[0];
-  const sm = statusMeta[listing.status ?? "pending"] ?? statusMeta.pending;
- 
-  if (editing) {
-    return (
-      <SalonForm initial={editing} userId={user.id} onSaved={handleSaved}
-        onCancel={() => setEditing(null)} isEdit />
-    );
-  }
- 
-  return (
-    <div>
-      {/* Status banner */}
-      <div style={{ background: sm.bg, color: sm.color, borderRadius: 14, padding: "0.85rem 1.25rem", marginBottom: "1.25rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <p style={{ fontWeight: 700, margin: 0, fontSize: "0.9rem" }}>{sm.label}</p>
-          <p style={{ margin: 0, fontSize: "0.8rem", opacity: 0.9 }}>{sm.desc}</p>
-        </div>
-        <button onClick={() => setEditing(listing)} style={{ background: "rgba(255,255,255,0.7)", border: "none", borderRadius: 100, padding: "0.4rem 1rem", fontSize: "0.8rem", fontWeight: 600, cursor: "pointer", color: sm.color }}>
-          Edit
-        </button>
-      </div>
- 
-      {/* Inner tabs */}
-      <div style={{ display: "flex", gap: 0, marginBottom: "1.25rem", borderRadius: 100, overflow: "hidden", border: "1.5px solid rgba(155,127,184,0.2)", width: "fit-content" }}>
-        {(["listing","staff","bookings"] as const).map((t, i, arr) => (
-          <button key={t} onClick={() => setInnerTab(t)} style={{
-            padding: "0.5rem 1.25rem", border: "none", cursor: "pointer", fontSize: "0.85rem",
-            background: innerTab === t ? "var(--plum)" : "#fff",
-            color: innerTab === t ? "#fff" : "var(--grey)",
-            fontWeight: innerTab === t ? 600 : 400,
-            borderRight: i < arr.length - 1 ? "1.5px solid rgba(155,127,184,0.2)" : "none",
-          }}>
-            {t === "listing" ? "Listing" : t === "staff" ? "Staff" : "Bookings"}
-          </button>
-        ))}
-      </div>
- 
-      {innerTab === "listing" && (
-        <>
-        <div style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.25rem" }}>
-          <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "0.75rem" }}>{listing.name}</h3>
-          <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.5rem" }}>
-            📍 {listing.address}, {listing.suburb}{listing.postal_code ? `, ${listing.postal_code}` : ""}
-          </p>
-          {listing.services?.length > 0 && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: "0.75rem" }}>
-              {listing.services.map(s => (
-                <span key={s} style={{ padding: "0.25rem 0.75rem", borderRadius: 100, border: "1px solid rgba(155,127,184,0.3)", fontSize: "0.75rem", color: "var(--plum)", textTransform: "capitalize" }}>{s}</span>
-              ))}
-            </div>
-          )}
-          {listing.instagram_username && (
-            <p style={{ fontSize: "0.82rem", color: "#C13584", marginBottom: "0.35rem" }}>
-              📸 @{listing.instagram_username} <span style={{ background: "#E1F5EE", color: "#0F6E56", borderRadius: 100, padding: "1px 6px", fontSize: "0.7rem", fontWeight: 600, marginLeft: 4 }}>free feed</span>
-            </p>
-          )}
-          {listing.youtube_url && (
-            <p style={{ fontSize: "0.82rem", color: "var(--grey)", marginBottom: "0.35rem" }}>▶ YouTube video linked</p>
-          )}
-          <p style={{ fontSize: "0.78rem", color: "#bbb", marginTop: "0.75rem" }}>
-            {listing.gallery_urls?.length ?? 0} photos uploaded
-          </p>
-          {listing.status === "approved" && (
-            <a href={`/stores/${listing.id}`} target="_blank" rel="noopener noreferrer"
-              style={{ display: "inline-block", marginTop: "0.75rem", fontSize: "0.85rem", color: "var(--plum)", fontWeight: 500 }}>
-              View live page →
-            </a>
-          )}
-        </div>
 
-        {listing.id && (
-          <div style={{ marginTop: "1.5rem" }}>
-            <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "0.75rem" }}>Services</h3>
-            <ServiceManager salonId={listing.id} salonCategories={listing.services ?? []} ownerId={user.id} />
-          </div>
-        )}
-        </>
-      )}
+  const validateImport = (rows: Record<string,string>[]) => {
+    const errors: { row: number; message: string }[] = [];
+    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const timeRe = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+    const allowed = new Set(ALL_SERVICES);
+    rows.forEach((r, i) => {
+      const row = i + 2;
+      if (!r.name) errors.push({row, message:"Store name is required."});
+      ["address","suburb","city","phone","email","services"].forEach(k => { if (!r[k]) errors.push({row, message:`${k} is required.`}); });
+      if (r.email && !emailRe.test(r.email)) errors.push({row, message:"Invalid email address."});
+      if (r.services && r.services.split("|").some(x => !allowed.has(x))) errors.push({row, message:`services must use only: ${ALL_SERVICES.join(" | ")}.`});
+      if (r.postal_code && !/^\d{4}$/.test(r.postal_code)) errors.push({row, message:"postal_code must be exactly 4 digits."});
+      WEEK_DAYS.forEach(day => {
+        const key = day.toLowerCase(); const closed = r[`${key}_closed`];
+        if (closed !== "true" && closed !== "false") errors.push({row, message:`${key}_closed must be true or false.`});
+        if (closed === "false") {
+          if (!timeRe.test(r[`${key}_open`] ?? "") || !timeRe.test(r[`${key}_close`] ?? "")) errors.push({row, message:`${key}_open and ${key}_close must use HH:MM.`});
+        }
+      });
+    });
+    return errors;
+  };
 
-      {innerTab === "staff" && listing.id && (
-        <BranchStaffManager salonId={listing.id} salonServices={listing.services ?? []} />
-      )}
+  const handleImportFile = async (file: File) => {
+    setImportNotice(""); setImportErrors([]); setImportRows([]);
+    if (!file.name.toLowerCase().endsWith(".csv")) { setImportErrors([{row:1,message:"Please upload the Umuhle CSV template. Excel users can save the spreadsheet as CSV."}]); return; }
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).filter(Boolean);
+    if (lines.length < 2) { setImportErrors([{row:1,message:"The file contains no store rows."}]); return; }
+    const headers = parseCsvLine(lines[0]).map(h => h.trim());
+    if (headers.length !== STORE_IMPORT_HEADERS.length || headers.some((h,i) => h !== STORE_IMPORT_HEADERS[i])) {
+      setImportErrors([{row:1,message:"Invalid header row. Download the official Umuhle template and do not rename, remove, or reorder columns."}]); return;
+    }
+    if (lines.length - 1 > 100) { setImportErrors([{row:1,message:"Maximum 100 stores per import."}]); return; }
+    const rows = lines.slice(1).map(line => { const vals=parseCsvLine(line); return Object.fromEntries(STORE_IMPORT_HEADERS.map((h,i)=>[h, vals[i] ?? ""])); });
+    const errors = validateImport(rows);
+    setImportRows(rows); setImportErrors(errors);
+    if (!errors.length) setImportNotice(`${rows.length} store${rows.length===1?"":"s"} ready to import.`);
+  };
 
-      {innerTab === "bookings" && listing.id && (
-        <SalonBookingsInbox salonId={listing.id} />
-      )}
+  const importValidRows = async () => {
+    if (!importRows.length || importErrors.length) return;
+    setImporting(true); setImportNotice("");
+    try {
+      const payload = importRows.map(r => ({
+        name:r.name, description:r.description, address:r.address, suburb:r.suburb, city:r.city, postal_code:r.postal_code || null,
+        phone:r.phone, email:r.email, website:r.website || null, instagram_username:r.instagram_username || null, youtube_url:r.youtube_url || null,
+        services:r.services.split("|").filter(Boolean), partner_id:user.id, status:"pending",
+        opening_hours:{ weekly:Object.fromEntries(WEEK_DAYS.map(day=>{ const k=day.toLowerCase(); return [k,{closed:r[`${k}_closed`] === "true",open:r[`${k}_open`] || "",close:r[`${k}_close`] || ""}]; })), public_holidays:{closed:true,open:"",close:""}, special_days:[] },
+        gallery_urls:[]
+      }));
+      const { error } = await supabase.from("partner_salons").insert(payload);
+      if (error) throw error;
+      setImportNotice(`${payload.length} store${payload.length===1?"":"s"} imported successfully and sent for review.`);
+      setImportRows([]); setShowImport(false); await loadListings();
+    } catch (e: unknown) { setImportNotice(e instanceof Error ? e.message : "Import failed. No stores were imported."); }
+    finally { setImporting(false); }
+  };
+
+  if (loading) return <p style={{ color: "var(--grey)" }}>Loading your stores…</p>;
+  if (editing) return <SalonForm initial={editing} userId={user.id} onSaved={handleSaved} onCancel={() => setEditing(null)} isEdit />;
+  if (showForm) return <SalonForm initial={emptySalon()} userId={user.id} onSaved={handleSaved} onCancel={() => setShowForm(false)} isEdit={false} />;
+
+  const selected = listings.find(x => x.id === selectedId) ?? null;
+
+  return <div className="stores-manager">
+    <div className="stores-manager-head">
+      <div><h2 className="dashboard-page-title">My Stores</h2><p className="dashboard-page-subtitle">Manage your locations, staff, bookings and store information.</p></div>
+      <div className="stores-actions"><button className="btn-outline" onClick={() => setShowImport(true)}>Import stores</button><button className="btn-plum" onClick={() => setShowForm(true)}>+ Add store</button></div>
     </div>
-  );
+
+    {importNotice && <div className="dashboard-notice">{importNotice}</div>}
+
+    {showImport && <div className="dashboard-card import-card">
+      <div className="import-head"><div><h3>Import stores</h3><p>Upload the official CSV template to add up to 100 stores at once.</p></div><button className="icon-button" onClick={() => setShowImport(false)} aria-label="Close">×</button></div>
+      <div className="import-steps"><span><b>1</b> Download template</span><span><b>2</b> Fill in your stores</span><span><b>3</b> Upload and validate</span></div>
+      <button className="btn-outline" onClick={downloadStoreTemplate}>Download CSV template</button>
+      <label className="import-drop"><input type="file" accept=".csv,text/csv" onChange={e => e.target.files?.[0] && handleImportFile(e.target.files[0])} />Choose CSV file</label>
+      {importErrors.length > 0 && <div className="import-errors"><strong>{importErrors.length} validation issue{importErrors.length===1?"":"s"}</strong>{importErrors.slice(0,12).map((e,i)=><div key={i}>Row {e.row}: {e.message}</div>)}{importErrors.length>12 && <div>…and {importErrors.length-12} more.</div>}</div>}
+      {importRows.length > 0 && importErrors.length === 0 && <div className="import-preview"><strong>Ready to import {importRows.length} stores</strong><div className="import-table-wrap"><table><thead><tr><th>Store</th><th>City</th><th>Services</th><th>Email</th></tr></thead><tbody>{importRows.slice(0,8).map((r,i)=><tr key={i}><td>{r.name}</td><td>{r.city}</td><td>{r.services.replaceAll("|",", ")}</td><td>{r.email}</td></tr>)}</tbody></table></div><button className="btn-plum" onClick={importValidRows} disabled={importing}>{importing ? "Importing…" : `Import ${importRows.length} stores`}</button></div>}
+      <p className="import-help">The format is intentionally strict. Use the Umuhle template exactly. Excel users can use Save As → CSV UTF-8.</p>
+    </div>}
+
+    {listings.length === 0 && !showImport ? <div className="dashboard-empty"><div className="empty-icon">✂</div><h3>No stores yet</h3><p>Add your first store manually or import multiple locations from a spreadsheet.</p><div className="stores-actions" style={{justifyContent:"center"}}><button className="btn-outline" onClick={() => setShowImport(true)}>Import stores</button><button className="btn-plum" onClick={() => setShowForm(true)}>Add your store</button></div></div> : <>
+      <div className="store-list-grid">{listings.map(store => { const sm=statusMeta[store.status??"pending"]??statusMeta.pending; return <button key={store.id} className={`store-list-card ${selectedId===store.id?"is-selected":""}`} onClick={() => {setSelectedId(store.id??null);setInnerTab("overview")}}><div className="store-card-top"><span className="store-status" style={{background:sm.bg,color:sm.color}}>{sm.label}</span><span>›</span></div><h3>{store.name}</h3><p>{store.suburb}, {store.city}</p><div className="store-card-meta"><span>{store.services?.length??0} services</span><span>Manage →</span></div></button>})}</div>
+      {selected && <div className="store-workspace">
+        <div className="store-workspace-head"><div><div className="store-breadcrumb">My Stores /</div><h2>{selected.name}</h2><p>{selected.address}, {selected.suburb}, {selected.city}</p></div><div className="stores-actions"><button className="btn-outline" onClick={() => setEditing(selected)}>Edit store</button>{selected.status === "approved" && <a className="btn-outline" href={`/stores/${selected.id}`} target="_blank" rel="noopener noreferrer">View store</a>}</div></div>
+        <div className="store-inner-nav">{(["overview","staff","bookings"] as const).map(t=><button key={t} className={innerTab===t?"active":""} onClick={()=>setInnerTab(t)}>{t === "overview" ? "Overview" : t === "staff" ? "Staff" : "Bookings"}</button>)}</div>
+        {innerTab === "overview" && <div className="store-overview-grid"><div className="dashboard-card"><h3>Store details</h3><p>{selected.description || "No description added yet."}</p><div className="tag-list">{selected.services?.map(s=><span key={s}>{s}</span>)}</div><div className="store-detail-lines"><div>📞 {selected.phone || "No phone number"}</div><div>✉ {selected.email || "No email address"}</div><div>🖼 {selected.gallery_urls?.length??0} photos</div></div></div><div className="dashboard-card"><h3>Services</h3><p>Manage the bookable services offered at this location.</p><ServiceManager salonId={selected.id!} salonCategories={selected.services ?? []} ownerId={user.id} /></div></div>}
+        {innerTab === "staff" && selected.id && <BranchStaffManager salonId={selected.id} salonServices={selected.services ?? []} />}
+        {innerTab === "bookings" && selected.id && <SalonBookingsInbox salonId={selected.id} />}
+      </div>}
+    </>}
+  </div>;
 }
 
 // ─── My Services tab ───────────────────────────────────────────────────────────
@@ -4874,6 +4866,30 @@ function MyOrdersTab({ user }: { user: User }) {
   );
 }
 
+function DashboardHome({ user, profile, onNavigate }: { user: User; profile: Profile; onNavigate: (tab: Tab) => void }) {
+  const supabase = createClient();
+  const [stats, setStats] = useState({ bookings: 0, orders: 0, stores: 0 });
+  useEffect(() => {
+    let mounted = true;
+    Promise.all([
+      supabase.from("bookings").select("id", { count: "exact", head: true }).eq("client_id", user.id),
+      supabase.from("orders").select("id", { count: "exact", head: true }).eq("client_id", user.id),
+      supabase.from("partner_salons").select("id", { count: "exact", head: true }).eq("partner_id", user.id),
+    ]).then(([b,o,s]) => { if (mounted) setStats({ bookings:b.count??0, orders:o.count??0, stores:s.count??0 }); });
+    return () => { mounted=false; };
+  }, [user.id]);
+  const cards = [
+    {label:"Bookings", value:stats.bookings, action:"bookings" as Tab},
+    {label:"Orders", value:stats.orders, action:"my-orders" as Tab},
+    {label:"My Stores", value:stats.stores, action:"my-stores" as Tab},
+  ];
+  return <section>
+    <div className="dashboard-welcome"><div><p className="dashboard-eyebrow">Welcome back</p><h1>{profile.full_name?.split(" ")[0] ?? "Beautiful"}</h1><p>{user.email}</p></div><button className="btn-plum" onClick={()=>onNavigate("my-stores")}>+ Add store</button></div>
+    <div className="dashboard-stat-grid">{cards.map(c=><button key={c.label} className="dashboard-stat-card" onClick={()=>onNavigate(c.action)}><span>{c.label}</span><strong>{c.value}</strong><small>Open {c.label.toLowerCase()} →</small></button>)}</div>
+    <div className="dashboard-home-grid"><div className="dashboard-card"><h2>Quick actions</h2><div className="quick-actions"><button onClick={()=>onNavigate("my-stores")}>+ Add a store</button><button onClick={()=>onNavigate("my-services")}>+ Add a service</button><button onClick={()=>onNavigate("my-shop")}>+ Add a product</button><button onClick={()=>onNavigate("bookings")}>View bookings</button></div></div><div className="dashboard-card"><h2>My business</h2><p>Manage your locations, staff, services and products from one place.</p><button className="text-link" onClick={()=>onNavigate("my-stores")}>Manage My Stores →</button></div></div>
+  </section>;
+}
+
 // ─── Main dashboard ────────────────────────────────────────────────────────────
 function DashboardContent() {
   const router = useRouter();
@@ -4882,7 +4898,7 @@ function DashboardContent() {
 
   const [user, setUser]       = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [tab, setTab]         = useState<Tab>("bookings");
+  const [tab, setTab]         = useState<Tab>("dashboard");
   const [loading, setLoading] = useState(true);
 
   const [wishlist, setWishlist]   = useState<WishlistArtist[]>([]);
@@ -4896,7 +4912,7 @@ function DashboardContent() {
     const raw = searchParams.get("tab");
     // "my-products" no longer exists — it merged into "my-shop". Keep old
     // bookmarks/links working instead of landing on a blank pane.
-    const t = (raw === "my-products" ? "my-shop" : raw) as Tab | null;
+    const t = (raw === "my-products" ? "my-shop" : raw === "my-store" ? "my-stores" : raw) as Tab | null;
     if (t) setTab(t);
     const sub = searchParams.get("sub");
     if (sub === "products" || sub === "artists") setWishlistSubTab(sub);
@@ -4904,7 +4920,7 @@ function DashboardContent() {
   }, [searchParams]);
 
   const [showWhatsAppNudge, setShowWhatsAppNudge] = useState(false);
-  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Proximity backbone — no-ops for non-artists (isArtist gate inside the hook).
   const artistLocationStatus = useArtistLocationPing(user, profile?.is_artist ?? false);
@@ -4941,11 +4957,6 @@ function DashboardContent() {
     if (tab === "wishlist" && user) fetchWishlist();
   }, [tab, user, fetchWishlist]);
 
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    router.push("/");
-  };
-
   if (loading) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--white)" }}>
@@ -4960,29 +4971,46 @@ function DashboardContent() {
   if (!user || !profile) return null;
 
   const TAB_CONFIG: { id: Tab; label: string; icon: string }[] = [
-    { id: "bookings",    label: "Bookings",   icon: "📅" },
-    { id: "my-orders",   label: "My Orders",  icon: "🧾" },
-    { id: "wishlist",    label: "Wishlist",   icon: "💜" },
-    { id: "my-store",    label: "My Store",   icon: "✂️" },
-    { id: "my-shop",     label: "My Shop",    icon: "🛍️" },
-    { id: "my-services", label: "Services",   icon: "💅" },
-    { id: "invite",      label: "Invite",     icon: "🎁" },
-    { id: "wallet",      label: "Wallet",     icon: "👛" },
-    { id: "profile",     label: "Profile",    icon: "👤" },
+    { id: "dashboard", label: "Dashboard", icon: "⌂" },
+    { id: "bookings", label: "Bookings", icon: "▣" },
+    { id: "my-orders", label: "Orders", icon: "▤" },
+    { id: "wishlist", label: "Saved", icon: "♡" },
+    { id: "my-stores", label: "My Stores", icon: "⌂" },
+    { id: "my-services", label: "Services", icon: "✦" },
+    { id: "my-shop", label: "Products", icon: "▢" },
+    { id: "invite", label: "Referrals", icon: "↗" },
+    { id: "wallet", label: "Wallet", icon: "R" },
+    { id: "profile", label: "Account", icon: "○" },
   ];
+  const groups = [
+    { title: "", ids: ["dashboard"] as Tab[] },
+    { title: "My activity", ids: ["bookings","my-orders","wishlist"] as Tab[] },
+    { title: "My business", ids: ["my-stores","my-services","my-shop"] as Tab[] },
+    { title: "Money", ids: ["wallet","invite"] as Tab[] },
+    { title: "Account", ids: ["profile"] as Tab[] },
+  ];
+  const navItem = (id: Tab) => TAB_CONFIG.find(x => x.id === id)!;
 
-  // Suppress unused-var warning — kept for potential header use
-  void handleSignOut;
-
-  // Primary tabs shown in bottom action bar (mobile) — most used
-  const PRIMARY_TABS: Tab[] = ["bookings", "wishlist", "my-store", "my-services", "my-shop", "profile"];
-  const MORE_TABS = TAB_CONFIG.filter(t => !PRIMARY_TABS.includes(t.id));
+  const setActiveTab = (next: Tab) => { setTab(next); setSidebarOpen(false); };
+  const handleSignOut = async () => { await supabase.auth.signOut(); router.push("/"); };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh", background: "#FAFAFA" }}>
+    <div className="dashboard-app">
       <SiteHeader initialUser={user} initialProfile={profile} />
-
-      {/* ── WhatsApp incomplete nudge ── */}
+      <div className="dashboard-mobile-top"><button onClick={() => setSidebarOpen(true)} aria-label="Open dashboard menu">☰</button><span>Dashboard</span><button onClick={() => setActiveTab("profile")} aria-label="Open account">○</button></div>
+      {sidebarOpen && <div className="dashboard-sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
+      <aside className={`dashboard-sidebar ${sidebarOpen ? "is-open" : ""}`}>
+        <div className="dashboard-sidebar-brand"><Image src={ICON} alt="Umuhle" width={34} height={34} style={{borderRadius:"50%"}}/><span>umuhle</span></div>
+        <nav className="dashboard-sidebar-nav">
+          {groups.map(group => <div key={group.title || "home"} className="dashboard-nav-group">
+            {group.title && <div className="dashboard-nav-heading">{group.title}</div>}
+            {group.ids.map(id => { const item=navItem(id); return <button key={id} className={`dashboard-nav-item ${tab===id?"active":""}`} onClick={()=>setActiveTab(id)}><span className="dashboard-nav-icon">{item.icon}</span><span>{item.label}</span></button>; })}
+          </div>)}
+        </nav>
+        <button className="dashboard-nav-item dashboard-signout" onClick={handleSignOut}><span className="dashboard-nav-icon">↪</span><span>Sign out</span></button>
+      </aside>
+      <main className="dashboard-main">
+        {/* ── WhatsApp incomplete nudge ── */}
       {showWhatsAppNudge && (
         <div className="modal-overlay" onClick={() => setShowWhatsAppNudge(false)}>
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 380, boxShadow: "0 24px 80px rgba(0,0,0,0.15)", textAlign: "center" }}>
@@ -4997,35 +5025,8 @@ function DashboardContent() {
         </div>
       )}
 
-      {/* ── More menu overlay (mobile) ── */}
-      {showMoreMenu && (
-        <div className="modal-overlay" onClick={() => setShowMoreMenu(false)} style={{ alignItems: "flex-end", padding: 0 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: "20px 20px 0 0", padding: "1.25rem 1rem 2rem", width: "100%", maxWidth: 480, boxShadow: "0 -8px 40px rgba(0,0,0,0.12)" }}>
-            <div style={{ width: 40, height: 4, background: "#E0E0E0", borderRadius: 2, margin: "0 auto 1.25rem" }} />
-            <p style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--grey)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "0.75rem", paddingLeft: "0.5rem" }}>More</p>
-            {MORE_TABS.map(t => (
-              <button key={t.id} onClick={() => { setTab(t.id); setShowMoreMenu(false); }}
-                style={{ width: "100%", display: "flex", alignItems: "center", gap: "1rem", padding: "0.85rem 0.75rem", borderRadius: 14, border: "none", background: tab === t.id ? "var(--plum-t)" : "transparent", cursor: "pointer", textAlign: "left", transition: "background 0.15s" }}>
-                <span style={{ fontSize: "1.3rem", width: 28 }}>{t.icon}</span>
-                <span style={{ fontSize: "0.95rem", fontWeight: tab === t.id ? 600 : 400, color: tab === t.id ? "var(--plum)" : "var(--onyx)" }}>{t.label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <main style={{ flex: 1, maxWidth: 900, margin: "0 auto", padding: "2rem 1.5rem 6rem", width: "100%", boxSizing: "border-box" }}>
-        {/* ── Header ── */}
-        <div style={{ marginBottom: "2rem" }}>
-          <p style={{ fontFamily: "var(--font-display)", fontSize: "0.75rem", letterSpacing: "0.3em", color: "var(--nude)", textTransform: "uppercase", marginBottom: "0.5rem" }}>Welcome back</p>
-          <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "clamp(1.75rem,4vw,2.5rem)", color: "var(--onyx)", marginBottom: "0.5rem" }}>{profile.full_name?.split(" ")[0] ?? "Beautiful"}</h1>
-          <p style={{ color: "var(--grey)", fontSize: "0.9rem" }}>{user.email}</p>
-        </div>
-
-        {/* ── Desktop Tabs (hidden on mobile) ── */}
-        <div className="dashboard-desktop-tabs">
-          <PillNav tabs={TAB_CONFIG} active={tab} onChange={setTab} />
-        </div>
+        {/* ── Dashboard home ── */}
+        {tab === "dashboard" && <DashboardHome user={user} profile={profile} onNavigate={setActiveTab} />}
 
         {/* ── Bookings tab ── */}
         {tab === "bookings" && <BookingsTab user={user} profile={profile} onUpdateProfile={p => { setProfile(p); if (p.phone) setShowWhatsAppNudge(false); }} />}
@@ -5098,7 +5099,7 @@ function DashboardContent() {
         {tab === "profile" && <section><ProfileTab profile={profile} user={user} locationStatus={artistLocationStatus} onUpdate={(p) => { setProfile(p); if (p.phone) setShowWhatsAppNudge(false); }} /></section>}
 
         {/* ── My Salon tab ── */}
-        {tab === "my-store" && <section><MySalonTab user={user} /></section>}
+        {tab === "my-stores" && <section><MySalonTab user={user} /></section>}
 
         {/* ── My Services tab ── */}
         {tab === "my-services" && <section><MyServicesTab profile={profile} user={user} onUpdate={(p) => setProfile(p)} /></section>}
@@ -5113,33 +5114,6 @@ function DashboardContent() {
              selling was never restricted to formal "partner" accounts. ── */}
         {tab === "my-shop" && <section><MyShopTab user={user} partnerProvince={profile.province} /></section>}
       </main>
-
-      {/* ── Mobile Bottom Action Bar ── */}
-      <nav className="dashboard-bottom-bar">
-        {PRIMARY_TABS.map(id => {
-          const t = TAB_CONFIG.find(x => x.id === id)!;
-          const isActive = tab === t.id;
-          return (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{
-              flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-              gap: "0.2rem", padding: "0.6rem 0.25rem", border: "none", background: "transparent",
-              cursor: "pointer", borderRadius: 12, transition: "background 0.15s",
-            }}>
-              <span style={{ fontSize: "1.35rem", lineHeight: 1 }}>{t.icon}</span>
-              <span style={{ fontSize: "0.68rem", fontWeight: isActive ? 600 : 400, color: isActive ? "var(--plum)" : "var(--grey)", letterSpacing: "0.01em" }}>{t.label}</span>
-              {isActive && <div style={{ width: 4, height: 4, borderRadius: "50%", background: "var(--plum)", marginTop: "0.1rem" }} />}
-            </button>
-          );
-        })}
-        {/* More button */}
-        <button onClick={() => setShowMoreMenu(true)} style={{
-          flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-          gap: "0.2rem", padding: "0.6rem 0.25rem", border: "none", background: "transparent", cursor: "pointer", borderRadius: 12,
-        }}>
-          <span style={{ fontSize: "1.35rem", lineHeight: 1 }}>⋯</span>
-          <span style={{ fontSize: "0.68rem", fontWeight: 400, color: "var(--grey)" }}>More</span>
-        </button>
-      </nav>
 
       <Footer />
     </div>
