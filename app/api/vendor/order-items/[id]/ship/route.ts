@@ -53,7 +53,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       id, order_id, quantity, shipped_at, delivered_at, confirm_token,
       product:products(id, name, partner_id),
       order:orders(id, status, client_id, contact_name, contact_whatsapp,
-        client:profiles!client_id(full_name, email, phone))
+        client:profiles!client_id(full_name, email, phone, whatsapp_comms_enabled))
     `)
     .eq("id", itemId)
     .single();
@@ -114,7 +114,10 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
         confirmToken,
       });
     }
-    if (clientPhone) {
+    // Order-shipped is a status update, not a point-of-contact or security
+    // message, so it respects the client's whatsapp_comms_enabled preference
+    // (same as notifyOrderPaid in lib/payments/fulfillment.ts).
+    if (clientPhone && client?.whatsapp_comms_enabled) {
       await notifyOrderItemShipped({
         clientName,
         clientPhone,
