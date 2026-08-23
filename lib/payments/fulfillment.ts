@@ -132,10 +132,10 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
       .select(`
         id, booking_date, booking_time, meeting_address, notes, total_amount,
         client_poc_name, client_poc_phone,
-        client:profiles!bookings_client_id_fkey(full_name, phone, email),
+        client:profiles!bookings_client_id_fkey(full_name, phone, email, whatsapp_comms_enabled),
         artist:artists!bookings_artist_id_fkey(
           display_name, point_of_contact_name, point_of_contact_phone,
-          profile:profiles!artists_profile_id_fkey(phone)
+          profile:profiles!artists_profile_id_fkey(phone, whatsapp_comms_enabled)
         ),
         service:services(name, duration_minutes)
       `)
@@ -176,12 +176,21 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
           serviceName: serviceRow?.name as string,
           meetingAddress: booking.meeting_address ?? undefined,
           expectedDuration: serviceRow?.duration_minutes ?? undefined,
+          // Email is the default channel now — WhatsApp only for accounts
+          // that opted in (whatsapp_comms_enabled). Booking confirmation
+          // email is sent unconditionally just below regardless.
+          clientWhatsappEnabled: clientRow?.whatsapp_comms_enabled ?? false,
+          artistWhatsappEnabled: artistProfileRow?.whatsapp_comms_enabled ?? false,
         });
       } catch (e) {
         console.error(`${tag} WhatsApp notify error`, e);
       }
     }
 
+    // Point-of-contact booking update — NOT gated by whatsapp_comms_enabled.
+    // The POC isn't the account holder (often isn't an Umuhle user at all),
+    // so there's no comms preference of theirs to respect here — this is
+    // one of the three always-on WABA categories.
     if (booking.client_poc_phone) {
       try {
         await notifyPocBookingUpdate({
@@ -272,7 +281,7 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
     .from("orders")
     .select(`
       id, status, total_amount, shipping_address, created_at,
-      client:profiles!orders_client_id_fkey(full_name, email, phone)
+      client:profiles!orders_client_id_fkey(full_name, email, phone, whatsapp_comms_enabled)
     `)
     .eq("id", event.referenceId)
     .single();
@@ -358,7 +367,7 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
       console.error(`${tag} order paid email error`, e);
     }
 
-    if (clientRow?.phone) {
+    if (clientRow?.phone && clientRow?.whatsapp_comms_enabled) {
       try {
         await notifyOrderPaid({
           clientName: clientRow.full_name ?? "there",
