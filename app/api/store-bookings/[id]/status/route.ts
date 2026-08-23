@@ -99,7 +99,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     try {
       const { data: clientProfile } = await service
         .from("profiles")
-        .select("full_name, phone, email")
+        .select("full_name, phone, email, whatsapp_comms_enabled")
         .eq("id", booking.client_id)
         .single();
 
@@ -131,7 +131,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
               console.error("[store-bookings/status] review-invite email error:", e);
             }
           }
-          if (clientPhone) {
+          if (clientPhone && (clientProfile?.whatsapp_comms_enabled ?? false)) {
             await notifyReviewInvite({
               phone:      clientPhone,
               name:       clientName,
