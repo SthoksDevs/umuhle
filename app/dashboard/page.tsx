@@ -26,6 +26,7 @@ import { PAYOUT_HOLD_DAYS, getNextPayoutDate, formatPayoutDate } from "@/lib/pay
 import { useGeolocation, type GeoStatus } from "@/lib/geolocation";
 import { subscribeToPush, unsubscribeFromPush } from "@/lib/push-client";
 import { normalizePhone, isValidSAMobile } from "@/lib/phone";
+import DashboardTour from "@/components/DashboardTour";
 
 // Refreshes the logged-in artist's stored lat/long from the browser so
 // nearby_artists() (supabase/migrations/20260727_proximity_and_push.sql)
@@ -331,6 +332,15 @@ function ProfileTab({ profile, user, locationStatus, onUpdate }: { profile: Prof
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Incorrect code");
       setOtpVerified(true);
+      // "The security one" — umuhle_account's verify-account link. Always
+      // sent regardless of whatsapp_comms_enabled (see lib/whatsapp.ts).
+      // Fire-and-forget: a failed send here shouldn't block saving the
+      // number itself.
+      fetch("/api/auth/notify-account-created", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: form.full_name, phone: form.phone }),
+      }).catch(() => {});
     } catch (err: unknown) { setOtpError(err instanceof Error ? err.message : "Incorrect code"); }
     finally { setOtpVerifying(false); }
   };
@@ -354,12 +364,20 @@ function ProfileTab({ profile, user, locationStatus, onUpdate }: { profile: Prof
   };
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!form.phone.trim()) { setError("A WhatsApp number is required."); return; }
     if (phoneChanged && !otpVerified) { setError("Please verify your new WhatsApp number before saving."); return; }
     setSaving(true); setError(""); setSaved(false);
-    const { data, error: err } = await supabase.from("profiles").update({ full_name: form.full_name, phone: form.phone, updated_at: new Date().toISOString() }).eq("id", user.id).select().single();
+    const updates: Record<string, unknown> = {
+      full_name: form.full_name,
+      phone: normalizePhone(form.phone),
+      whatsapp_comms_enabled: whatsappCommsEnabled,
+      updated_at: new Date().toISOString(),
+    };
+    if (phoneChanged && otpVerified) updates.whatsapp_verified_at = new Date().toISOString();
+    const { data, error: err } = await supabase.from("profiles").update(updates).eq("id", user.id).select().single();
     setSaving(false);
     if (err) { setError(err.message); return; }
-    if (data) { onUpdate(data as Profile); setSaved(true); setPhoneChanged(false); setOtpVerified(false); setTimeout(() => setSaved(false), 3000); }
+    if (data) { onUpdate(data as Profile); setSaved(true); setPhoneChanged(false); setOtpVerified(false); setOtpSent(false); setOtpCode(""); setTimeout(() => setSaved(false), 3000); }
   };
   const handleCopyReferral = () => {
     if (!profile.referral_code) return;
@@ -421,16 +439,48 @@ function ProfileTab({ profile, user, locationStatus, onUpdate }: { profile: Prof
           <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "0.35rem" }}>Email cannot be changed.</p>
         </div>
         <div>
-          <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>WhatsApp number{otpVerified && <span style={{ marginLeft: "0.5rem", color: "var(--forest)", fontSize: "0.72rem" }}>✓ Verified</span>}</label>
+          <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>WhatsApp number{otpVerified && <span style={{ marginLeft: "0.5rem", color: "var(--forest)", fontSize: "0.72rem" }}>✓ Verified</span>}{!phoneChanged && profile.whatsapp_verified_at && <span style={{ marginLeft: "0.5rem", color: "var(--forest)", fontSize: "0.72rem" }}>✓ Verified</span>}</label>
           <div style={{ display: "flex", gap: "0.5rem" }}>
-            <input value={form.phone} onChange={e => handlePhoneChange(e.target.value)} placeholder="e.g. 082 123 4567" type="tel" style={{ flex: 1, padding: "0.75rem 1rem", borderRadius: 12, border: `1.5px solid ${phoneChanged && !otpVerified ? "var(--nude)" : "#E0E0E0"}`, fontSize: "0.9rem" }} />
+            <input value={form.phone} onChange={e => handlePhoneChange(e.target.value)} placeholder="e.g. 082 123 4567" type="tel" required style={{ flex: 1, padding: "0.75rem 1rem", borderRadius: 12, border: `1.5px solid ${phoneChanged && !otpVerified ? "var(--nude)" : "#E0E0E0"}`, fontSize: "0.9rem" }} />
             {phoneChanged && !otpVerified && (
-              <button type="button" onClick={handleSendOtp} disabled={otpLoading} style={{ flexShrink: 0, background: "var(--plum)", color: "#fff", border: "none", borderRadius: 12, padding: "0 1rem", fontSize: "0.82rem", fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap" }}>{otpLoading ? "Sending…" : otpSent ? "Resend" : "Verify"}</button>
+              <button type="button" onClick={handleSendOtp} disabled={otpSending || resendCooldown > 0} style={{ flexShrink: 0, background: "var(--plum)", color: "#fff", border: "none", borderRadius: 12, padding: "0 1rem", fontSize: "0.82rem", fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap" }}>
+                {otpSending ? "Sending…" : resendCooldown > 0 ? `Resend in ${resendCooldown}s` : otpSent ? "Resend" : "Send code"}
+              </button>
             )}
           </div>
+          {phoneChanged && otpSent && !otpVerified && (
+            <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+              <input
+                value={otpCode}
+                onChange={e => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                placeholder="6-digit code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                style={{ flex: 1, padding: "0.65rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", letterSpacing: "0.2em", textAlign: "center" }}
+              />
+              <button type="button" onClick={handleVerifyOtpCode} disabled={otpVerifying || otpCode.length !== 6} className="btn-plum" style={{ flexShrink: 0, padding: "0 1.25rem", fontSize: "0.82rem" }}>
+                {otpVerifying ? "Verifying…" : "Verify"}
+              </button>
+            </div>
+          )}
           {otpError && <p style={{ color: "#E53935", fontSize: "0.8rem", marginTop: "0.4rem" }}>{otpError}</p>}
-          {!otpSent && <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "0.35rem" }}>Used for booking notifications. Changing your number requires verification.</p>}
-          {otpSent && otpVerified && <p style={{ fontSize: "0.75rem", color: "var(--forest)", marginTop: "0.35rem" }}>We sent a WhatsApp message to this number to confirm it's reachable.</p>}
+          {!phoneChanged && <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "0.35rem" }}>Used for booking notifications and account security. Changing your number requires verification.</p>}
+        </div>
+        <div style={{ background: "#FAFAFA", borderRadius: 12, padding: "1rem", border: "1.5px solid #E0E0E0" }}>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: "0.7rem", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={whatsappCommsEnabled}
+              onChange={e => setWhatsappCommsEnabled(e.target.checked)}
+              style={{ marginTop: "0.2rem", width: 16, height: 16, flexShrink: 0, accentColor: "var(--plum)" }}
+            />
+            <span>
+              <span style={{ display: "block", fontSize: "0.85rem", fontWeight: 500, color: "var(--onyx)" }}>Send me WhatsApp updates</span>
+              <span style={{ display: "block", fontSize: "0.78rem", color: "var(--grey)", marginTop: "0.2rem" }}>
+                Booking reminders, order updates and review requests. Off by default — we&apos;ll use email instead. Security codes and appointment contact alerts always go out regardless of this setting.
+              </span>
+            </span>
+          </label>
         </div>
         {error && <p style={{ color: "#E53935", fontSize: "0.85rem" }}>{error}</p>}
         {saved && <p style={{ color: "var(--forest)", fontSize: "0.85rem" }}>Profile updated successfully.</p>}
@@ -4269,6 +4319,7 @@ function DashboardContent() {
 
   const [showWhatsAppNudge, setShowWhatsAppNudge] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [tourOpen, setTourOpen] = useState(false);
 
   // Proximity backbone — no-ops for non-artists (isArtist gate inside the hook).
   const artistLocationStatus = useArtistLocationPing(user, profile?.is_artist ?? false);
@@ -4289,8 +4340,27 @@ function DashboardContent() {
       setProfile(p);
       // Admins don't need the "add your WhatsApp number" onboarding nudge.
       if (!p.phone && !p.is_admin) setTimeout(() => setShowWhatsAppNudge(true), 1500);
+      // First-visit spotlight tour — see components/DashboardTour.tsx.
+      // Fires after the nudge above so they're not stacked; skipping the
+      // tour still marks it done via handleTourClose, so this only ever
+      // auto-opens once per account.
+      if (!p.has_completed_dashboard_tour) {
+        setTimeout(() => { setSidebarOpen(true); setTourOpen(true); }, p.phone || p.is_admin ? 1200 : 2800);
+      }
     }
     setLoading(false);
+  };
+
+  const startTour = () => { setSidebarOpen(true); setTourOpen(true); };
+
+  const handleTourClose = () => {
+    setTourOpen(false);
+    setSidebarOpen(false);
+    if (profile && !profile.has_completed_dashboard_tour) {
+      const updated = { ...profile, has_completed_dashboard_tour: true };
+      setProfile(updated);
+      supabase.from("profiles").update({ has_completed_dashboard_tour: true }).eq("id", profile.id).then(() => {});
+    }
   };
 
   const fetchWishlist = useCallback(async () => {
@@ -4372,6 +4442,9 @@ function DashboardContent() {
         </div>
       )}
 
+      {/* ── First-visit spotlight tour ── */}
+      <DashboardTour open={tourOpen} onClose={handleTourClose} />
+
       {/* ── Mobile top bar: opens the sidebar drawer ── */}
       <div className="dashboard-mobile-top">
         <button onClick={() => setSidebarOpen(true)} aria-label="Open dashboard menu">☰</button>
@@ -4393,7 +4466,7 @@ function DashboardContent() {
               {group.ids.map(id => {
                 const item = navItem(id);
                 return (
-                  <button key={id} className={`dashboard-nav-item ${tab === id ? "active" : ""}`} onClick={() => setActiveTab(id)}>
+                  <button key={id} data-tour-id={id} className={`dashboard-nav-item ${tab === id ? "active" : ""}`} onClick={() => setActiveTab(id)}>
                     <span className="dashboard-nav-icon">{item.icon}</span>
                     <span>{item.label}</span>
                   </button>
@@ -4402,6 +4475,10 @@ function DashboardContent() {
             </div>
           ))}
         </nav>
+        <button onClick={startTour} style={{ display: "flex", alignItems: "center", gap: "0.6rem", background: "none", border: "none", padding: "0.6rem 0.75rem", color: "var(--light)", fontSize: "0.82rem", cursor: "pointer", textAlign: "left" }}>
+          <span style={{ width: 18, textAlign: "center" }}>?</span>
+          <span>Take a tour</span>
+        </button>
         <button className="dashboard-nav-item dashboard-signout" onClick={handleSignOut}>
           <span className="dashboard-nav-icon">↪</span>
           <span>Sign out</span>
