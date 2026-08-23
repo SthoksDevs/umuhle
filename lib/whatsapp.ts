@@ -80,6 +80,33 @@ export async function sendTemplateMessage(
 }
 
 // -----------------------------------------------------------------------------
+// Phone verification (OTP)
+// -----------------------------------------------------------------------------
+
+// Sends a 6-digit code via the approved WABA Authentication template
+// "umuhle_number_otp" — registered on Meta with a copy-code button,
+// en_US, 10-minute expiry copy baked into the template body itself:
+// "{{code}} is your verification code. For your security, do not share
+// this code. Expires in 10 minutes." Used by both
+// app/api/auth/phone-otp/send (signup + dashboard number changes) —
+// there's no other caller, since this always fires before an open
+// session window exists, so a template message is required either way.
+export async function sendPhoneOtp(phone: string, code: string): Promise<boolean> {
+  return sendTemplateMessage(phone, "umuhle_number_otp", [
+    {
+      type: "body",
+      parameters: [{ type: "text", text: code }],
+    },
+    {
+      type: "button",
+      sub_type: "copy_code",
+      index: "0",
+      parameters: [{ type: "coupon_code", coupon_code: code }],
+    },
+  ]);
+}
+
+// -----------------------------------------------------------------------------
 // Booking notifications
 // -----------------------------------------------------------------------------
 
