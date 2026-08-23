@@ -25,6 +25,7 @@ import { useProductWishlist } from "@/lib/product-wishlist-context";
 import { PAYOUT_HOLD_DAYS, getNextPayoutDate, formatPayoutDate } from "@/lib/payouts";
 import { useGeolocation, type GeoStatus } from "@/lib/geolocation";
 import { subscribeToPush, unsubscribeFromPush } from "@/lib/push-client";
+import { normalizePhone, isValidSAMobile } from "@/lib/phone";
 
 // Refreshes the logged-in artist's stored lat/long from the browser so
 // nearby_artists() (supabase/migrations/20260727_proximity_and_push.sql)
@@ -277,6 +278,7 @@ function ProductWishlistCard({ product, onRemove }: { product: Product; onRemove
 function ProfileTab({ profile, user, locationStatus, onUpdate }: { profile: Profile; user: User; locationStatus: GeoStatus; onUpdate: (p: Profile) => void }) {
   const supabase = createClient();
   const [form, setForm] = useState({ full_name: profile.full_name ?? "", phone: profile.phone ?? "" });
+  const [whatsappCommsEnabled, setWhatsappCommsEnabled] = useState(profile.whatsapp_comms_enabled ?? false);
   const [pushState, setPushState] = useState<"idle" | "loading" | "subscribed" | "denied" | "unsupported" | "error">("idle");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -285,32 +287,52 @@ function ProfileTab({ profile, user, locationStatus, onUpdate }: { profile: Prof
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState(profile.avatar_url ?? "");
   const [phoneChanged, setPhoneChanged] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [otpVerified, setOtpVerified] = useState(false);
-  const [otpLoading, setOtpLoading] = useState(false);
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpVerifying, setOtpVerifying] = useState(false);
   const [otpError, setOtpError] = useState("");
+  const [resendCooldown, setResendCooldown] = useState(0);
   const originalPhone = profile.phone ?? "";
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const t = setInterval(() => setResendCooldown(s => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(t);
+  }, [resendCooldown]);
 
   const handlePhoneChange = (val: string) => {
     setForm(f => ({ ...f, phone: val }));
-    setPhoneChanged(val.replace(/\D/g, "") !== originalPhone.replace(/\D/g, ""));
-    setOtpSent(false); setOtpVerified(false); setOtpError("");
+    setPhoneChanged(normalizePhone(val) !== normalizePhone(originalPhone));
+    setOtpSent(false); setOtpVerified(false); setOtpError(""); setOtpCode("");
   };
-  // Uses the same "umuhle_account" WABA template that account creation used
-  // to send, instead of the old otp_verification template, which was never
-  // approved in Meta and always failed to send. This is a best-effort,
-  // reference-only send — it doesn't wait for a code back, it just confirms
-  // the number is reachable on WhatsApp.
+
+  // Real OTP now (umuhle_number_otp — see lib/whatsapp.ts + app/api/auth/
+  // phone-otp), replacing the old best-effort "mark verified on send"
+  // flow. Same send/verify endpoints AuthModal uses for signup.
   const handleSendOtp = async () => {
-    if (!form.phone) { setOtpError("Enter a WhatsApp number first."); return; }
-    setOtpLoading(true); setOtpError("");
+    if (!isValidSAMobile(form.phone)) { setOtpError("Enter a valid South African WhatsApp number."); return; }
+    setOtpSending(true); setOtpError("");
     try {
-      const res = await fetch("/api/auth/notify-account-created", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: form.full_name, phone: form.phone }) });
+      const res = await fetch("/api/auth/phone-otp/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone: form.phone }) });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to send WhatsApp message");
-      setOtpSent(true); setOtpVerified(true);
-    } catch (err: unknown) { setOtpError(err instanceof Error ? err.message : "Failed to send WhatsApp message"); }
-    finally { setOtpLoading(false); }
+      if (!res.ok) throw new Error(data.error ?? "Failed to send code");
+      setOtpSent(true); setResendCooldown(60);
+    } catch (err: unknown) { setOtpError(err instanceof Error ? err.message : "Failed to send code"); }
+    finally { setOtpSending(false); }
+  };
+
+  const handleVerifyOtpCode = async () => {
+    if (otpCode.length !== 6) { setOtpError("Enter the 6-digit code."); return; }
+    setOtpVerifying(true); setOtpError("");
+    try {
+      const res = await fetch("/api/auth/phone-otp/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone: form.phone, code: otpCode }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Incorrect code");
+      setOtpVerified(true);
+    } catch (err: unknown) { setOtpError(err instanceof Error ? err.message : "Incorrect code"); }
+    finally { setOtpVerifying(false); }
   };
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
