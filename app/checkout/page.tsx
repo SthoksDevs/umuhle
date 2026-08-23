@@ -7,6 +7,9 @@ import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Profile, Province, FulfillmentMethod } from "@/types";
 import { SA_PROVINCES } from "@/types";
+// Type-only — erased at compile time, so this doesn't pull lib/shiplogic's
+// server-side fetch/env-var code into the client bundle.
+import type { CourierRate } from "@/lib/shiplogic";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -367,6 +370,15 @@ export default function CheckoutPage() {
   const [partnerInfo, setPartnerInfo] = useState<Record<string, PartnerFulfillmentInfo>>({});
   const [fulfillmentByPartner, setFulfillmentByPartner] = useState<Record<string, FulfillmentMethod>>({});
 
+  // ── Courier Guy (Ship Logic) live rate quotes ──
+  // Keyed by partner_id, same shape POST /api/checkout/courier-rates
+  // returns. Purely for display/selection — lib/orders.ts re-quotes
+  // authoritatively at order-creation time, so a stale or missing
+  // selection here never under- or over-charges the customer.
+  const [courierQuotes, setCourierQuotes] = useState<Record<string, { rates: CourierRate[]; isMock: boolean; error?: string }>>({});
+  const [quotesLoading, setQuotesLoading] = useState(false);
+  const [selectedServiceLevel, setSelectedServiceLevel] = useState<Record<string, string>>({});
+
   // CartLine.product.partner_id is already populated on every line (products
   // are fetched with select("*") elsewhere in the app) — no extra fetch
   // needed for that part. Deduped + sorted into a stable string so the
@@ -376,7 +388,44 @@ export default function CheckoutPage() {
   const partnerIds = [...new Set(items.map((l) => l.product.partner_id).filter(Boolean))].sort();
   const partnerIdsKey = partnerIds.join(",");
 
-  const total = Math.max(0, subtotal - discount);
+  // Client-side mirror of the parcel aggregation lib/orders.ts does per
+  // courier partner group (sum weight/declared value, max each dimension)
+  // — same rough approximation, just so the preview quote below asks for
+  // (close to) the same parcel the authoritative server-side re-quote will.
+  const courierGroups = partnerIds
+    .filter((id) => (fulfillmentByPartner[id] ?? "courier") === "courier")
+    .map((id) => {
+      const lines = items.filter((l) => l.product.partner_id === id);
+      return {
+        partnerId: id,
+        weightG: lines.reduce((s, l) => s + (l.product.weight_g ?? 0) * l.quantity, 0),
+        lengthCm: Math.max(0, ...lines.map((l) => l.product.length_cm ?? 0)),
+        widthCm: Math.max(0, ...lines.map((l) => l.product.width_cm ?? 0)),
+        heightCm: Math.max(0, ...lines.map((l) => l.product.height_cm ?? 0)),
+        declaredValueCents: lines.reduce((s, l) => s + l.product.price * l.quantity, 0),
+      };
+    });
+  // Primitive key for the effect below — see the Aug 8 "search reload bug"
+  // note above: effects must key off a primitive, not array/object
+  // identity, or they re-fire every render since courierGroups is rebuilt
+  // fresh each time.
+  const courierGroupsKey = courierGroups.map((g) => `${g.partnerId}:${g.weightG}:${g.declaredValueCents}`).join("|");
+
+  const cheapestRate = (rates: CourierRate[]): CourierRate | null =>
+    rates.length === 0 ? null : rates.reduce((a, b) => (b.rateCents < a.rateCents ? b : a));
+
+  // Sum of whichever rate is selected (or cheapest, if the customer hasn't
+  // picked yet) per courier group. A group with no quote yet, or whose
+  // quote errored, contributes R0 here — same "ships with no quoted fee
+  // rather than blocking checkout" behaviour as the server.
+  const shippingFeeCents = courierGroups.reduce((sum, g) => {
+    const quote = courierQuotes[g.partnerId];
+    if (!quote) return sum;
+    const chosen = quote.rates.find((r) => r.serviceLevelCode === selectedServiceLevel[g.partnerId]) ?? cheapestRate(quote.rates);
+    return sum + (chosen?.rateCents ?? 0);
+  }, 0);
+
+  const total = Math.max(0, subtotal - discount + shippingFeeCents);
   // Drives lib/payments/eligibility.ts's Umuhle-profit-only rule: true only
   // when every line in the cart is Umuhle's own stock. products.
   // is_umuhle_product comes through on every product fetch (they all
@@ -453,6 +502,74 @@ export default function CheckoutPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partnerIdsKey]);
 
+  // Live Ship Logic (The Courier Guy) rate preview — refetches whenever the
+  // cart's courier groups or the delivery address change. Waits for a
+  // minimally complete address (city + province) and for every group's
+  // origin to have loaded from partnerInfo, and debounces so it doesn't
+  // fire on every keystroke while the customer is still typing the address.
+  useEffect(() => {
+    if (courierGroups.length === 0) { setCourierQuotes({}); return; }
+    if (!form.city.trim() || !form.province) return;
+    if (courierGroups.some((g) => !partnerInfo[g.partnerId])) return;
+
+    const timer = setTimeout(() => {
+      setQuotesLoading(true);
+      fetch("/api/checkout/courier-rates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          groups: courierGroups.map((g) => ({
+            partnerId: g.partnerId,
+            weightG: g.weightG || null,
+            lengthCm: g.lengthCm || null,
+            widthCm: g.widthCm || null,
+            heightCm: g.heightCm || null,
+            declaredValueCents: g.declaredValueCents,
+            origin: {
+              address: partnerInfo[g.partnerId]?.address ?? null,
+              suburb: partnerInfo[g.partnerId]?.suburb ?? null,
+              city: partnerInfo[g.partnerId]?.city ?? null,
+              province: partnerInfo[g.partnerId]?.province ?? null,
+              postalCode: partnerInfo[g.partnerId]?.postal_code ?? null,
+              latitude: partnerInfo[g.partnerId]?.latitude ?? null,
+              longitude: partnerInfo[g.partnerId]?.longitude ?? null,
+            },
+          })),
+          destination: {
+            addressLine1: form.address,
+            suburb: form.suburb,
+            city: form.city,
+            province: form.province,
+            postalCode: form.postalCode,
+          },
+        }),
+      })
+        .then((res) => res.json())
+        .then((data: { quotes?: Record<string, { rates: CourierRate[]; isMock: boolean; error?: string }> }) => {
+          const quotes = data.quotes ?? {};
+          setCourierQuotes(quotes);
+          // Default-select the cheapest rate for any group that doesn't have
+          // a selection yet, or whose previous selection is no longer
+          // offered (e.g. a re-quote after the address changed) — the
+          // customer can still override by tapping another service level.
+          setSelectedServiceLevel((prev) => {
+            const next = { ...prev };
+            for (const [partnerId, q] of Object.entries(quotes)) {
+              const stillOffered = q.rates.some((r) => r.serviceLevelCode === next[partnerId]);
+              const fallback = cheapestRate(q.rates);
+              if (!stillOffered && fallback) next[partnerId] = fallback.serviceLevelCode;
+            }
+            return next;
+          });
+        })
+        .catch(() => setCourierQuotes({}))
+        .finally(() => setQuotesLoading(false));
+    }, 500);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courierGroupsKey, form.address, form.suburb, form.city, form.province, form.postalCode, partnerInfo]);
+
   // Default each partner to "courier" if they offer it, else "collection" —
   // only once, when their info first loads. Left alone after that so it
   // doesn't clobber the customer's own toggle choice on a later re-render.
@@ -502,6 +619,18 @@ export default function CheckoutPage() {
       .eq("id", appliedCoupon.id);
   }, [appliedCoupon, supabase]);
 
+  // Chosen (or cheapest-fallback) service level per courier partner, in the
+  // { serviceLevelCode } shape lib/orders.ts's CourierQuoteSelection
+  // expects. A group with no live quote at all (rates never loaded, or the
+  // route errored) is simply omitted — the server just re-quotes fresh and
+  // picks its own cheapest rate rather than blocking checkout.
+  const courierQuotesPayload = courierGroups.reduce<Record<string, { serviceLevelCode: string }>>((acc, g) => {
+    const quote = courierQuotes[g.partnerId];
+    const chosen = quote?.rates.find((r) => r.serviceLevelCode === selectedServiceLevel[g.partnerId]) ?? (quote ? cheapestRate(quote.rates) : null);
+    if (chosen) acc[g.partnerId] = { serviceLevelCode: chosen.serviceLevelCode };
+    return acc;
+  }, {});
+
   const handlePayFast = async () => {
     setSubmitting(true); setError("");
     try {
@@ -513,6 +642,7 @@ export default function CheckoutPage() {
           items: items.map((l) => ({ productId: l.product.id, quantity: l.quantity })),
           shippingAddress,
           fulfillmentByPartner,
+          courierQuotes: courierQuotesPayload,
           shippingAddressLine1: form.address,
           shippingAddressLine2: "",
           shippingSuburb: form.suburb,
@@ -572,6 +702,7 @@ export default function CheckoutPage() {
           items: items.map((l) => ({ productId: l.product.id, quantity: l.quantity })),
           shippingAddress,
           fulfillmentByPartner,
+          courierQuotes: courierQuotesPayload,
           shippingAddressLine1: form.address,
           shippingAddressLine2: "",
           shippingSuburb: form.suburb,
@@ -715,6 +846,61 @@ export default function CheckoutPage() {
                             📍 {[info?.address, info?.suburb, info?.city, info?.province].filter(Boolean).join(", ") || "Pickup address available after checkout"}
                           </p>
                         )}
+                        {method === "courier" && (() => {
+                          const quote = courierQuotes[partnerId];
+                          if (!form.city.trim() || !form.province) {
+                            return (
+                              <p style={{ fontSize: "0.76rem", color: "var(--light)", marginTop: "0.5rem" }}>
+                                Add your delivery address below to see shipping rates.
+                              </p>
+                            );
+                          }
+                          if (!quote && quotesLoading) {
+                            return <p style={{ fontSize: "0.76rem", color: "var(--light)", marginTop: "0.5rem" }}>Fetching shipping rates…</p>;
+                          }
+                          if (quote?.error) {
+                            return <p style={{ fontSize: "0.76rem", color: "#C62828", marginTop: "0.5rem" }}>{quote.error}</p>;
+                          }
+                          if (!quote || quote.rates.length === 0) return null;
+                          const selectedCode = selectedServiceLevel[partnerId] ?? cheapestRate(quote.rates)?.serviceLevelCode;
+                          return (
+                            <div style={{ marginTop: "0.6rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                              {quote.isMock && (
+                                <span style={{ fontSize: "0.66rem", fontWeight: 700, color: "#B26A00", background: "#FFF3E0", borderRadius: 999, padding: "0.12rem 0.6rem", width: "fit-content" }}>
+                                  Sandbox — mock rates
+                                </span>
+                              )}
+                              {quote.rates.map((rate) => {
+                                const selected = selectedCode === rate.serviceLevelCode;
+                                return (
+                                  <button
+                                    key={rate.serviceLevelCode}
+                                    type="button"
+                                    onClick={() => setSelectedServiceLevel((prev) => ({ ...prev, [partnerId]: rate.serviceLevelCode }))}
+                                    style={{
+                                      display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem",
+                                      padding: "0.55rem 0.75rem", borderRadius: 10, textAlign: "left", width: "100%", boxSizing: "border-box",
+                                      border: selected ? "1.5px solid var(--plum)" : "1.5px solid #E0E0E0",
+                                      background: selected ? "rgba(155,127,184,0.06)" : "#fff",
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    <span>
+                                      <span style={{ fontSize: "0.82rem", fontWeight: 600, display: "block" }}>{rate.serviceLevelName}</span>
+                                      {rate.deliveryDateFrom && (
+                                        <span style={{ fontSize: "0.7rem", color: "var(--light)" }}>
+                                          Est. {new Date(rate.deliveryDateFrom).toLocaleDateString("en-ZA", { day: "numeric", month: "short" })}
+                                          {rate.deliveryDateTo ? `–${new Date(rate.deliveryDateTo).toLocaleDateString("en-ZA", { day: "numeric", month: "short" })}` : ""}
+                                        </span>
+                                      )}
+                                    </span>
+                                    <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "var(--plum)", whiteSpace: "nowrap" }}>{fmt(rate.rateCents)}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
                       </div>
                     );
                   })}
@@ -796,6 +982,12 @@ export default function CheckoutPage() {
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.88rem", color: "#2E7D32", marginBottom: "0.5rem" }}>
                     <span>Discount ({appliedCoupon?.code})</span>
                     <span>−{fmt(discount)}</span>
+                  </div>
+                )}
+                {shippingFeeCents > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.88rem", color: "var(--grey)", marginBottom: "0.5rem" }}>
+                    <span>Shipping{quotesLoading ? " (updating…)" : ""}</span>
+                    <span>{fmt(shippingFeeCents)}</span>
                   </div>
                 )}
                 <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: "1rem", marginTop: "0.5rem", paddingTop: "0.5rem", borderTop: "1px solid rgba(155,127,184,0.15)" }}>

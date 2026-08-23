@@ -4344,10 +4344,12 @@ function OrderFulfillmentManager({ user }: { user: { id: string } }) {
 // not a server route — there's nothing privileged about a partner updating
 // their own parcel's status or courier reference.
 //
-// Waybill/tracking fields are entered by hand for now — "courier API ready"
-// means the columns exist in the shape a real integration would read/write
-// (courier_provider, waybill_number, tracking_url, courier_reference,
-// courier_booked_at), not that one's wired up yet.
+// "Book with Courier Guy" / "Sync tracking" below call the real (or mock,
+// see lib/shiplogic.ts) Ship Logic integration — app/api/vendor/shipments/
+// [id]/book and .../track — which populate courier_provider/waybill_number/
+// tracking_url/courier_reference/courier_booked_at automatically. Manual
+// entry via "Update shipment" still works alongside it, as a fallback for a
+// courier arranged outside the platform.
 type ShipmentRow = OrderShipment & {
   order: {
     id: string;
@@ -4388,6 +4390,11 @@ function ShipmentsManager({ user }: { user: { id: string } }) {
   const [draft, setDraft] = useState({ status: "pending", courier_provider: "", waybill_number: "", tracking_url: "" });
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // "Book with Courier Guy" / "Sync tracking" — one id at a time each, same
+  // shape as OrderFulfillmentManager's shippingId above, so only the card
+  // being acted on shows a busy state.
+  const [bookingId, setBookingId] = useState<string | null>(null);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -4436,6 +4443,67 @@ function ShipmentsManager({ user }: { user: { id: string } }) {
     setNotice("Shipment updated.");
   };
 
+  // Books a real (or mock, see lib/shiplogic.ts) Ship Logic waybill via
+  // app/api/vendor/shipments/[id]/book — manual entry above still works as
+  // a fallback/override. Idempotent server-side, so a double-click just
+  // returns the existing waybill rather than booking twice.
+  const bookShipment = async (s: ShipmentRow) => {
+    setBookingId(s.id);
+    setNotice(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) { setNotice("Not authenticated."); return; }
+
+      const res = await fetch(`/api/vendor/shipments/${s.id}/book`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setNotice(json?.error ?? "Couldn't book with the courier — enter a waybill manually instead.");
+        return;
+      }
+      setShipments((prev) => prev.map((x) => (x.id === s.id ? { ...x, ...(json.shipment as OrderShipment) } : x)));
+      setNotice(json.alreadyBooked ? "Already booked with the courier." : "Booked with Courier Guy — the customer has been notified.");
+    } catch {
+      setNotice("Couldn't book with the courier. Please try again.");
+    } finally {
+      setBookingId(null);
+    }
+  };
+
+  // Manual, single-parcel refresh — app/api/cron/sync-courier-tracking does
+  // the same thing for every in-flight shipment every 30 min, this is just
+  // an on-demand version for one card. Never touches order_items.delivered_at
+  // (see that route's own comment) — payout stays gated on the customer's
+  // confirm-receipt click regardless of what the courier reports.
+  const syncTracking = async (s: ShipmentRow) => {
+    setSyncingId(s.id);
+    setNotice(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) { setNotice("Not authenticated."); return; }
+
+      const res = await fetch(`/api/vendor/shipments/${s.id}/track`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setNotice(json?.error ?? "Couldn't reach the courier for a tracking update.");
+        return;
+      }
+      setShipments((prev) => prev.map((x) => (x.id === s.id ? { ...x, ...(json.shipment as OrderShipment) } : x)));
+      setNotice("Tracking updated.");
+    } catch {
+      setNotice("Couldn't reach the courier for a tracking update. Please try again.");
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
   if (loading) return <p style={{ color: "var(--grey)", fontSize: "0.85rem" }}>Loading shipments…</p>;
   if (shipments.length === 0) return null;
 
@@ -4477,10 +4545,22 @@ function ShipmentsManager({ user }: { user: { id: string } }) {
                     </p>
                   )}
                   {!isEditing && s.waybill_number && (
-                    <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: "0.3rem 0 0" }}>
-                      Waybill: {s.waybill_number}{s.courier_provider ? ` (${s.courier_provider})` : ""}
+                    <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: "0.3rem 0 0", display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
+                      <span>
+                        Waybill: {s.waybill_number}
+                        {s.courier_provider ? ` (${s.courier_provider.replace(/\s*\(sandbox.*?\)\s*/i, "").trim()})` : ""}
+                      </span>
+                      {s.courier_provider?.toLowerCase().includes("mock") && (
+                        <span style={{ fontSize: "0.66rem", fontWeight: 700, color: "#B26A00", background: "#FFF3E0", borderRadius: 999, padding: "0.1rem 0.55rem" }}>
+                          Sandbox — mock
+                        </span>
+                      )}
                       {s.tracking_url && <> · <a href={s.tracking_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--plum)" }}>Track</a></>}
+                      {s.courier_status && <span style={{ color: "#aaa" }}>· {s.courier_status}</span>}
                     </p>
+                  )}
+                  {!isEditing && s.courier_error && (
+                    <p style={{ fontSize: "0.74rem", color: "#C62828", margin: "0.3rem 0 0" }}>⚠ {s.courier_error}</p>
                   )}
                 </div>
                 <span style={{ background: meta.bg, color: meta.color, borderRadius: 100, padding: "0.25rem 0.75rem", fontSize: "0.74rem", fontWeight: 600, whiteSpace: "nowrap" }}>
@@ -4522,9 +4602,21 @@ function ShipmentsManager({ user }: { user: { id: string } }) {
                   </div>
                 </div>
               ) : (
-                <button onClick={() => startEdit(s)} className="btn-outline" style={{ marginTop: "0.75rem", padding: "0.4rem 1rem", fontSize: "0.78rem" }}>
-                  Update shipment
-                </button>
+                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
+                  {s.fulfillment_method === "courier" && !s.waybill_number && (
+                    <button onClick={() => bookShipment(s)} disabled={bookingId === s.id} className="btn-plum" style={{ padding: "0.4rem 1rem", fontSize: "0.78rem" }}>
+                      {bookingId === s.id ? "Booking…" : "Book with Courier Guy"}
+                    </button>
+                  )}
+                  {s.fulfillment_method === "courier" && s.waybill_number && !["delivered", "cancelled"].includes(s.status) && (
+                    <button onClick={() => syncTracking(s)} disabled={syncingId === s.id} className="btn-outline" style={{ padding: "0.4rem 1rem", fontSize: "0.78rem" }}>
+                      {syncingId === s.id ? "Syncing…" : "Sync tracking"}
+                    </button>
+                  )}
+                  <button onClick={() => startEdit(s)} className="btn-outline" style={{ padding: "0.4rem 1rem", fontSize: "0.78rem" }}>
+                    Update shipment
+                  </button>
+                </div>
               )}
             </div>
           );
