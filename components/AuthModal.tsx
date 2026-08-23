@@ -23,6 +23,7 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { gTag, fbq, ttq } from "@/lib/analytics";
+import { normalizePhone, isValidSAMobile } from "@/lib/phone";
 
 export default function AuthModal() {
   const router       = useRouter();
@@ -38,6 +39,68 @@ export default function AuthModal() {
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState("");
   const [form, setForm]         = useState({ email: "", password: "", name: "", phone: "" });
+
+  // Real WhatsApp OTP verification, required before an account is created
+  // in register mode (same /api/auth/phone-otp/* endpoints and umuhle_number_otp
+  // template that app/dashboard/page.tsx's ProfileTab uses). This is the fix
+  // for the phone field having previously been optional and unverified at
+  // signup — see lib/phone.ts's header comment for the full history.
+  const [otpCode, setOtpCode]           = useState("");
+  const [otpSent, setOtpSent]           = useState(false);
+  const [otpVerified, setOtpVerified]   = useState(false);
+  const [otpSending, setOtpSending]     = useState(false);
+  const [otpVerifying, setOtpVerifying] = useState(false);
+  const [otpError, setOtpError]         = useState("");
+  const [resendCooldown, setResendCooldown] = useState(0);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const t = setInterval(() => setResendCooldown(s => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(t);
+  }, [resendCooldown]);
+
+  const handlePhoneInput = (val: string) => {
+    setForm(f => ({ ...f, phone: val }));
+    setOtpSent(false); setOtpVerified(false); setOtpError(""); setOtpCode("");
+  };
+
+  const handleSendRegisterOtp = async () => {
+    if (!isValidSAMobile(form.phone)) { setOtpError("Enter a valid South African WhatsApp number."); return; }
+    setOtpSending(true); setOtpError("");
+    try {
+      const res = await fetch("/api/auth/phone-otp/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: form.phone }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to send code");
+      setOtpSent(true); setResendCooldown(60);
+    } catch (err: unknown) {
+      setOtpError(err instanceof Error ? err.message : "Failed to send code");
+    } finally {
+      setOtpSending(false);
+    }
+  };
+
+  const handleVerifyRegisterOtp = async () => {
+    if (otpCode.length !== 6) { setOtpError("Enter the 6-digit code."); return; }
+    setOtpVerifying(true); setOtpError("");
+    try {
+      const res = await fetch("/api/auth/phone-otp/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: form.phone, code: otpCode }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Incorrect code");
+      setOtpVerified(true); setOtpError("");
+    } catch (err: unknown) {
+      setOtpError(err instanceof Error ? err.message : "Incorrect code");
+    } finally {
+      setOtpVerifying(false);
+    }
+  };
 
   // Reactive — this is the actual fix for bug #1. Runs every time the "auth"
   // param changes, including same-page navigations, not just on mount.
@@ -81,6 +144,10 @@ export default function AuthModal() {
 
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (mode === "register" && !otpVerified) {
+      setError("Please verify your WhatsApp number first.");
+      return;
+    }
     setLoading(true);
     setError("");
     try {
@@ -92,7 +159,7 @@ export default function AuthModal() {
           const { data: profileData } = await supabase
             .from("profiles")
             .select("email")
-            .eq("phone", identifier.replace(/\D/g, "").replace(/^0/, "27"))
+            .eq("phone", normalizePhone(identifier))
             .maybeSingle();
           if (!profileData?.email) throw new Error("No account found with that WhatsApp number.");
           const { error } = await supabase.auth.signInWithPassword({ email: profileData.email, password: form.password });
@@ -105,11 +172,15 @@ export default function AuthModal() {
         fbq("Login");
         goNext();
       } else {
+        // Phone is normalized here to exactly match what /api/auth/phone-otp/send
+        // and /verify stored the verification row under, so the handle_new_user()
+        // trigger's phone_otp_verifications lookup actually matches and the new
+        // profile's whatsapp_verified_at gets set.
         const { error } = await supabase.auth.signUp({
           email: form.email,
           password: form.password,
           options: {
-            data: { full_name: form.name, phone: form.phone, account_type: "customer" },
+            data: { full_name: form.name, phone: normalizePhone(form.phone), account_type: "customer" },
             emailRedirectTo: `${window.location.origin}/auth/callback`,
           },
         });
@@ -142,7 +213,7 @@ export default function AuthModal() {
         const { data: profileData } = await supabase
           .from("profiles")
           .select("email")
-          .eq("phone", identifier.replace(/\D/g, "").replace(/^0/, "27"))
+          .eq("phone", normalizePhone(identifier))
           .maybeSingle();
         if (!profileData?.email) throw new Error("No account found with that WhatsApp number.");
         emailToReset = profileData.email;
@@ -210,11 +281,58 @@ export default function AuthModal() {
                 style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }}
               />
               <input
-                placeholder="Phone number (e.g. 082 123 4567)"
+                placeholder="WhatsApp number (e.g. 082 123 4567)"
                 value={form.phone}
-                onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
+                onChange={e => handlePhoneInput(e.target.value)}
+                required
+                disabled={otpVerified}
                 style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }}
               />
+
+              {otpVerified ? (
+                <p style={{ color: "var(--forest)", fontSize: "0.8rem", margin: 0 }}>✓ WhatsApp number verified</p>
+              ) : !otpSent ? (
+                <button
+                  type="button"
+                  onClick={handleSendRegisterOtp}
+                  disabled={otpSending || !form.phone}
+                  style={{ padding: "0.6rem 1rem", borderRadius: 12, border: "1.5px solid var(--plum)", background: "#fff", color: "var(--plum)", fontWeight: 500, fontSize: "0.85rem", cursor: "pointer", alignSelf: "flex-start" }}
+                >
+                  {otpSending ? "Sending…" : "Send WhatsApp code"}
+                </button>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <input
+                      placeholder="6-digit code"
+                      value={otpCode}
+                      onChange={e => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                      inputMode="numeric"
+                      style={{ flex: 1, padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleVerifyRegisterOtp}
+                      disabled={otpVerifying || otpCode.length !== 6}
+                      className="btn-plum"
+                      style={{ padding: "0 1.25rem", borderRadius: 12 }}
+                    >
+                      {otpVerifying ? "Checking…" : "Verify"}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleSendRegisterOtp}
+                    disabled={resendCooldown > 0 || otpSending}
+                    style={{ background: "none", border: "none", padding: 0, textAlign: "left", color: "var(--light)", fontSize: "0.8rem", cursor: resendCooldown > 0 ? "default" : "pointer", alignSelf: "flex-start" }}
+                  >
+                    {resendCooldown > 0 ? `Resend code in ${resendCooldown}s` : "Resend code"}
+                  </button>
+                </div>
+              )}
+              {otpError && (
+                <p style={{ color: "#E53935", fontSize: "0.8rem", margin: 0 }}>{otpError}</p>
+              )}
             </>
           )}
 
@@ -255,7 +373,7 @@ export default function AuthModal() {
             </p>
           )}
 
-          <button type="submit" className="btn-plum" style={{ marginTop: "0.25rem" }} disabled={loading}>
+          <button type="submit" className="btn-plum" style={{ marginTop: "0.25rem" }} disabled={loading || (mode === "register" && !otpVerified)}>
             {loading ? "Please wait…" : mode === "login" ? "Sign in" : mode === "forgot" ? "Send reset link" : "Create account"}
           </button>
         </form>
