@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
       id,
       delivered_at,
       product:products(id, name, partner_id),
-      order:orders(client_id, contact_name, contact_whatsapp, client:profiles!client_id(full_name, phone, email))
+      order:orders(client_id, contact_name, contact_whatsapp, client:profiles!client_id(full_name, phone, email, whatsapp_comms_enabled))
     `)
     .not("delivered_at", "is", null)
     .lte("delivered_at", cutoff)
@@ -89,6 +89,7 @@ export async function GET(request: NextRequest) {
     clientName:   string;
     clientEmail:  string | null;
     clientPhone:  string | null;
+    whatsappAllowed: boolean;
     productNames: string[];
     inviteToken:  string; // any one of this client's tokens created this run
   };
@@ -125,6 +126,11 @@ export async function GET(request: NextRequest) {
           clientName:   client?.full_name ?? order.contact_name ?? "there",
           clientEmail:  client?.email ?? null,
           clientPhone:  client?.phone ?? order.contact_whatsapp ?? null,
+          // Same per-order-contact-is-its-own-opt-in reasoning as the
+          // shipped-notification routes: an explicit contact_whatsapp on
+          // the order counts as consent for that order; falling back to
+          // the account's own phone respects whatsapp_comms_enabled.
+          whatsappAllowed: !!order.contact_whatsapp || (client?.whatsapp_comms_enabled ?? false),
           productNames: [productName],
           inviteToken,
         });
@@ -149,7 +155,7 @@ export async function GET(request: NextRequest) {
         console.error(`[cron/review-invites] email error for client ${clientId}:`, e);
       }
     }
-    if (group.clientPhone) {
+    if (group.clientPhone && group.whatsappAllowed) {
       await notifyProductReviewDigest({
         phone:        group.clientPhone,
         name:         group.clientName,
