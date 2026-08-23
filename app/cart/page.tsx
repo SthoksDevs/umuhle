@@ -80,7 +80,6 @@ function WishlistShelf() {
 
 export default function CartPage() {
   const { items, count, subtotal, removeItem, setQuantity } = useCart();
-  const { isWishlisted, toggle: toggleWishlist } = useProductWishlist();
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
@@ -157,15 +156,6 @@ export default function CartPage() {
                         <button onClick={() => setQuantity(line.product.id, line.quantity + 1)} style={{ background: "none", border: "none", color: "var(--plum)", fontWeight: 700, fontSize: "1.1rem", cursor: "pointer", width: 24, height: 24, display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
                       </div>
                       <button onClick={() => removeItem(line.product.id)} style={{ background: "none", border: "none", color: "var(--light)", fontSize: "0.8rem", cursor: "pointer", textDecoration: "underline" }}>Remove</button>
-                      <button
-                        onClick={() => toggleWishlist(line.product)}
-                        aria-label={isWishlisted(line.product.id) ? "Remove from wishlist" : "Save for later"}
-                        aria-pressed={isWishlisted(line.product.id)}
-                        style={{ background: "none", border: "none", color: "#E53935", fontSize: "0.8rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.3rem" }}
-                      >
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill={isWishlisted(line.product.id) ? "#E53935" : "none"} stroke="#E53935" strokeWidth="1.75"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-                        {isWishlisted(line.product.id) ? "Saved" : "Save for later"}
-                      </button>
                     </div>
                   </div>
                   <div style={{ textAlign: "right", flexShrink: 0 }}>
