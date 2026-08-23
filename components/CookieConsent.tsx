@@ -111,8 +111,8 @@ export default function CookieConsent() {
           }}
         >
           <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--onyx)", lineHeight: 1.5 }}>
-            We use functional cookies to run Umuhle, and — with your permission — analytics cookies to
-            understand how the site is used.{" "}
+            We use functional cookies to run Umuhle, and with your permission, analytics cookies to
+            understand how the site is used for marketing purposes.{" "}
             <Link href="/privacy-policy" style={{ color: "var(--plum)", textDecoration: "underline" }}>
               Learn more
             </Link>
