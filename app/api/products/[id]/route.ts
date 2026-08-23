@@ -8,49 +8,41 @@ export async function DELETE(
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
-  if (!user) {
-    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
-  }
+  if (!user) return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
 
   const { id } = await params;
-  if (!id) {
-    return NextResponse.json({ error: "Product ID is required." }, { status: 400 });
-  }
+  if (!id) return NextResponse.json({ error: "Product ID is required." }, { status: 400 });
 
-  const { data: product, error: productError } = await supabase
+  const { data: product, error: lookupError } = await supabase
     .from("products")
     .select("id, partner_id, image_url, name")
     .eq("id", id)
     .eq("partner_id", user.id)
     .maybeSingle();
 
-  if (productError) {
-    console.error("Product delete lookup failed:", productError);
+  if (lookupError) {
+    console.error("Product delete lookup failed:", lookupError);
     return NextResponse.json({ error: "Couldn't find that product." }, { status: 500 });
   }
+  if (!product) return NextResponse.json({ error: "Product not found or you don't own it." }, { status: 404 });
 
-  if (!product) {
-    return NextResponse.json({ error: "Product not found or you don't own it." }, { status: 404 });
+  // order_items and product_wishlists are NO ACTION foreign keys. If either
+  // exists, physically deleting the product would either break order history
+  // or violate the FK. In that case "delete" means remove it from sale.
+  const [{ count: orderItemCount, error: orderError }, { count: wishlistCount, error: wishlistError }] = await Promise.all([
+    supabase.from("order_items").select("id", { count: "exact", head: true }).eq("product_id", id),
+    supabase.from("product_wishlists").select("id", { count: "exact", head: true }).eq("product_id", id),
+  ]);
+
+  if (orderError || wishlistError) {
+    console.error("Product dependency check failed:", { orderError, wishlistError });
+    return NextResponse.json({ error: "Couldn't check whether this product can be permanently deleted." }, { status: 500 });
   }
 
-  // Products that have already appeared in an order cannot be physically
-  // deleted because order_items.product_id intentionally preserves order
-  // history. Hide those products instead. New/unordered products can be
-  // permanently deleted.
-  const { count: orderItemCount, error: orderLookupError } = await supabase
-    .from("order_items")
-    .select("id", { count: "exact", head: true })
-    .eq("product_id", id);
-
-  if (orderLookupError) {
-    console.error("Product order-history lookup failed:", orderLookupError);
-    return NextResponse.json({ error: "Couldn't check whether this product has order history." }, { status: 500 });
-  }
-
-  if ((orderItemCount ?? 0) > 0) {
+  if ((orderItemCount ?? 0) > 0 || (wishlistCount ?? 0) > 0) {
     const { error } = await supabase
       .from("products")
-      .update({ is_active: false, listing_status: "deleted" })
+      .update({ is_active: false })
       .eq("id", id)
       .eq("partner_id", user.id);
 
@@ -62,7 +54,9 @@ export async function DELETE(
     return NextResponse.json({
       deleted: true,
       permanent: false,
-      message: "This product has order history, so it was removed from sale while its order history was preserved.",
+      message: (orderItemCount ?? 0) > 0
+        ? "This product has order history, so it was removed from sale while its history was preserved."
+        : "This product is saved by a customer, so it was removed from sale while that saved item is preserved.",
     });
   }
 
@@ -77,30 +71,17 @@ export async function DELETE(
     return NextResponse.json({ error: "Couldn't delete this product." }, { status: 500 });
   }
 
-  // The database row does not own the Storage object. Remove the uploaded
-  // image through the Storage API as well, so deleting a product doesn't
-  // leave an orphaned file behind.
   if (product.image_url) {
     const marker = "/storage/v1/object/public/product-images/";
     const markerIndex = product.image_url.indexOf(marker);
     if (markerIndex >= 0) {
       const objectPath = decodeURIComponent(product.image_url.slice(markerIndex + marker.length).split("?")[0]);
       if (objectPath) {
-        const { error: storageError } = await supabase.storage
-          .from("product-images")
-          .remove([objectPath]);
-        if (storageError) {
-          // The product is already deleted; don't turn a successful delete
-          // into a false failure. Log the orphan so it can be cleaned up.
-          console.error("Product image cleanup failed:", storageError);
-        }
+        const { error: storageError } = await supabase.storage.from("product-images").remove([objectPath]);
+        if (storageError) console.error("Product image cleanup failed:", storageError);
       }
     }
   }
 
-  return NextResponse.json({
-    deleted: true,
-    permanent: true,
-    message: "Product deleted successfully.",
-  });
+  return NextResponse.json({ deleted: true, permanent: true, message: "Product deleted successfully." });
 }
