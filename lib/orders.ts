@@ -6,12 +6,29 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { v4 as uuidv4 } from "uuid";
 import type { PaymentMethod, FulfillmentMethod } from "@/types";
 import { createServiceClient } from "@/lib/supabase/server";
+import {
+  getRates, buildAddress, buildParcel,
+  COURIER_PROVIDER_LABEL, COURIER_PROVIDER_LABEL_MOCK,
+} from "@/lib/shiplogic";
 
 interface OrderLine {
   product_id: string;
   quantity: number;
   unit_price: number;
   name: string;
+}
+
+// The customer's chosen courier speed (e.g. "ECO" vs "ONX"), as picked
+// from the live options POST /api/checkout/courier-rates showed at
+// checkout. Deliberately just a *selection*, not a price — the price
+// actually charged is re-quoted server-side in createPendingOrder from
+// trusted product/partner data below, since trusting a client-supplied
+// rateCents here would let a tampered request charge whatever shipping
+// fee (including R0) it liked. If the code doesn't match any currently
+// available rate (stale selection, momentary Ship Logic hiccup, etc.),
+// the cheapest fresh rate is used instead rather than failing checkout.
+export interface CourierQuoteSelection {
+  serviceLevelCode: string;
 }
 
 interface PendingOrderOptions {
@@ -25,6 +42,11 @@ interface PendingOrderOptions {
   // present in the cart) defaults to "courier", same as the client-side
   // default in app/checkout/page.tsx.
   fulfillmentByPartner?: Record<string, FulfillmentMethod>;
+  // Customer's chosen service level per courier partner group — see
+  // CourierQuoteSelection. A courier partner missing from this map (JS
+  // disabled, stale UI, etc.) just falls back to the cheapest fresh rate
+  // rather than blocking the order.
+  courierQuotesByPartner?: Record<string, CourierQuoteSelection>;
   shippingAddressLine1?: string;
   shippingAddressLine2?: string;
   shippingSuburb?: string;
@@ -38,6 +60,7 @@ type CreateOrderResult =
       result: {
         orderId: string;
         totalAmount: number;
+        shippingFeeCents: number;
         lines: OrderLine[];
         /**
          * True only when every line in the cart is Umuhle's own stock
@@ -127,12 +150,98 @@ export async function createPendingOrder(
     lines.push({ product_id: product.id, quantity: item.quantity, unit_price: product.price, name: product.name });
   }
 
+  // ── Parcel aggregation, per partner ──
+  // Built from `lines`/`products` (not order_items — those don't exist
+  // yet) so it's available before the orders row is even created, since
+  // the authoritative shipping quote below has to be summed into
+  // totalAmount before that insert. Re-walked again further down, once
+  // order_items exist, to attach shipment_id — see PartnerGroup.orderItemIds.
+  type PartnerGroup = {
+    partnerId: string;
+    method: FulfillmentMethod;
+    orderItemIds: string[];
+    weightSum: number;
+    maxLength: number;
+    maxWidth: number;
+    maxHeight: number;
+    declaredValueCents: number;
+  };
+  const groups = new Map<string, PartnerGroup>();
+  for (const line of lines) {
+    const product = products.find((p) => p.id === line.product_id);
+    if (!product?.partner_id) continue; // every product has a partner_id — defensive only
+    let group = groups.get(product.partner_id);
+    if (!group) {
+      group = {
+        partnerId: product.partner_id,
+        method: opts.fulfillmentByPartner?.[product.partner_id] ?? "courier",
+        orderItemIds: [], weightSum: 0, maxLength: 0, maxWidth: 0, maxHeight: 0, declaredValueCents: 0,
+      };
+      groups.set(product.partner_id, group);
+    }
+    group.weightSum += (product.weight_g ?? 0) * line.quantity;
+    // Aggregate parcel dims from the group's products — sum weight, take
+    // the max of each dimension across the group. Real bin-packing would
+    // do better; this is a documented rough approximation, good enough
+    // for a real waybill.
+    group.maxLength = Math.max(group.maxLength, product.length_cm ?? 0);
+    group.maxWidth = Math.max(group.maxWidth, product.width_cm ?? 0);
+    group.maxHeight = Math.max(group.maxHeight, product.height_cm ?? 0);
+    group.declaredValueCents += line.unit_price * line.quantity;
+  }
+
+  // ── Shipping fee ──
+  // Re-quote every courier group server-side (lib/shiplogic.getRates)
+  // using trusted origin/destination/parcel data rather than trusting a
+  // client-supplied price — see CourierQuoteSelection. The customer's
+  // chosen serviceLevelCode just selects which of the fresh rates to use;
+  // if it's missing or no longer offered, the cheapest fresh rate wins so
+  // checkout never blocks on a stale selection.
+  type ChosenQuote = { serviceLevelCode: string; serviceLevelName: string; rateCents: number; isMock: boolean; raw: unknown };
+  const chosenQuotes = new Map<string, ChosenQuote>();
+  let shippingFeeCents = 0;
+  for (const group of groups.values()) {
+    if (group.method !== "courier") continue;
+    const origin = partnerProfiles[group.partnerId];
+    try {
+      const { rates, isMock } = await getRates({
+        collection: buildAddress({
+          streetAddress: origin?.address ?? null, suburb: origin?.suburb ?? null,
+          city: origin?.city ?? null, province: origin?.province ?? null, postalCode: origin?.postal_code ?? null,
+          isBusiness: true,
+        }),
+        delivery: buildAddress({
+          streetAddress: opts.shippingAddressLine1 ?? null, suburb: opts.shippingSuburb ?? null,
+          city: opts.shippingCity ?? null, province: opts.shippingProvince ?? null, postalCode: opts.shippingPostalCode ?? null,
+        }),
+        collectionCoords: { lat: origin?.latitude ?? null, lng: origin?.longitude ?? null },
+        parcels: [buildParcel({ weightG: group.weightSum, lengthCm: group.maxLength, widthCm: group.maxWidth, heightCm: group.maxHeight })],
+        declaredValueCents: group.declaredValueCents,
+      });
+      if (rates.length === 0) continue; // nothing offered for this route — ships with no quoted fee, bookable by hand later
+      const requested = opts.courierQuotesByPartner?.[group.partnerId]?.serviceLevelCode;
+      const picked = rates.find((r) => r.serviceLevelCode === requested) ?? rates.reduce((a, b) => (b.rateCents < a.rateCents ? b : a));
+      chosenQuotes.set(group.partnerId, {
+        serviceLevelCode: picked.serviceLevelCode, serviceLevelName: picked.serviceLevelName,
+        rateCents: picked.rateCents, isMock, raw: picked.raw,
+      });
+      shippingFeeCents += picked.rateCents;
+    } catch (rateErr) {
+      // A courier partner whose quote fails just ships with no quoted fee
+      // rather than blocking checkout entirely — it can still be booked
+      // (and re-quoted) by hand later from the dashboard.
+      console.error(`Ship Logic rate quote failed for partner ${group.partnerId}:`, rateErr);
+    }
+  }
+  totalAmount += shippingFeeCents;
+
   const orderId = uuidv4();
 
   const { error: orderErr } = await supabase.from("orders").insert({
     id: orderId,
     client_id: userId,
     total_amount: totalAmount,
+    shipping_fee_cents: shippingFeeCents,
     status: "pending_payment",
     payment_method: opts.paymentMethod,
     shipping_address: opts.shippingAddress ?? null,
@@ -166,40 +275,26 @@ export async function createPendingOrder(
   }
 
   // ── order_shipments — one row per partner, one parcel/waybill ──
-  // Group the just-inserted order_items by product.partner_id, aggregate a
-  // rough parcel from the group's products, and snapshot origin/destination
-  // addresses. Uses the service-role client specifically for this step:
-  // after the RLS fix that scoped order_shipments' "service role" policy to
-  // `to service_role`, the customer's own session has no insert policy on
-  // order_shipments at all (by design — those rows are only ever created
-  // server-side), and order_items has no client-side UPDATE policy either.
-  type PartnerGroup = { partnerId: string; orderItemIds: string[]; weightSum: number; maxLength: number; maxWidth: number; maxHeight: number };
-  const groups = new Map<string, PartnerGroup>();
+  // `groups` was already built above (needed before the orders insert, to
+  // get an authoritative shipping total) — just backfill which order_item
+  // ids landed in each group now that they exist. Uses the service-role
+  // client specifically for this step: after the RLS fix that scoped
+  // order_shipments' "service role" policy to `to service_role`, the
+  // customer's own session has no insert policy on order_shipments at all
+  // (by design — those rows are only ever created server-side), and
+  // order_items has no client-side UPDATE policy either.
   for (const item of insertedItems ?? []) {
     const product = products.find((p) => p.id === item.product_id);
-    if (!product?.partner_id) continue; // every product has a partner_id — defensive only
-    const qty = lines.find((l) => l.product_id === item.product_id)?.quantity ?? 1;
-    let group = groups.get(product.partner_id);
-    if (!group) {
-      group = { partnerId: product.partner_id, orderItemIds: [], weightSum: 0, maxLength: 0, maxWidth: 0, maxHeight: 0 };
-      groups.set(product.partner_id, group);
-    }
-    group.orderItemIds.push(item.id);
-    group.weightSum += (product.weight_g ?? 0) * qty;
-    // Aggregate parcel dims from the group's products — sum weight, take
-    // the max of each dimension across the group. A real courier
-    // integration would do proper bin-packing; this is a documented rough
-    // approximation, good enough for a hand-entered waybill today.
-    group.maxLength = Math.max(group.maxLength, product.length_cm ?? 0);
-    group.maxWidth = Math.max(group.maxWidth, product.width_cm ?? 0);
-    group.maxHeight = Math.max(group.maxHeight, product.height_cm ?? 0);
+    if (!product?.partner_id) continue;
+    groups.get(product.partner_id)?.orderItemIds.push(item.id);
   }
 
   try {
     const serviceClient = await createServiceClient();
     for (const group of groups.values()) {
-      const method: FulfillmentMethod = opts.fulfillmentByPartner?.[group.partnerId] ?? "courier";
+      const method = group.method;
       const origin = partnerProfiles[group.partnerId];
+      const quote = chosenQuotes.get(group.partnerId);
 
       const { data: shipment, error: shipmentErr } = await serviceClient
         .from("order_shipments")
@@ -208,6 +303,16 @@ export async function createPendingOrder(
           partner_id: group.partnerId,
           fulfillment_method: method,
           status: "pending",
+          // Quote re-computed server-side above — see CourierQuoteSelection.
+          // Booking (app/api/vendor/shipments/[id]/book) re-writes
+          // courier_provider once a waybill actually exists; until then
+          // this just flags which courier the parcel is headed for.
+          courier_provider: quote ? (quote.isMock ? COURIER_PROVIDER_LABEL_MOCK : COURIER_PROVIDER_LABEL) : null,
+          service_level_code: quote?.serviceLevelCode ?? null,
+          service_level_name: quote?.serviceLevelName ?? null,
+          quoted_rate_cents: quote?.rateCents ?? null,
+          rate_quoted_at: quote ? new Date().toISOString() : null,
+          last_rate_quote: (quote?.raw as Record<string, unknown> | undefined) ?? null,
           origin_address: origin?.address ?? null,
           origin_suburb: origin?.suburb ?? null,
           origin_city: origin?.city ?? null,
@@ -253,5 +358,5 @@ export async function createPendingOrder(
     return { error: "Could not finalise delivery details for this order. Please try again." };
   }
 
-  return { result: { orderId, totalAmount, lines, isUmuhleProfitOnly } };
+  return { result: { orderId, totalAmount, shippingFeeCents, lines, isUmuhleProfitOnly } };
 }

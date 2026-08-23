@@ -367,17 +367,34 @@ export interface OrderShipment {
   parcel_length_cm: number | null;
   parcel_width_cm: number | null;
   parcel_height_cm: number | null;
-  // Courier API readiness — filled in by hand today (see
-  // app/dashboard/page.tsx's OrderFulfillmentManager); shaped so a real
-  // courier integration can populate/read the same columns later.
+  // Courier API fields — courier_provider/waybill_number/tracking_url/
+  // courier_reference/courier_booked_at were originally hand-filled (see
+  // app/dashboard/page.tsx's OrderFulfillmentManager); as of the Ship
+  // Logic (The Courier Guy) integration (lib/shiplogic.ts), booking one of
+  // these via ShipmentsManager populates them automatically instead —
+  // manual entry still works as a fallback/override.
   courier_provider: string | null;
   waybill_number: string | null;
   tracking_url: string | null;
-  courier_reference: string | null;
+  courier_reference: string | null; // Ship Logic's own shipment id
   courier_booked_at: string | null;
   collected_at: string | null;
   delivered_at: string | null;
   created_at: string;
+  // Rate quote captured at checkout (lib/orders.ts) — the price the
+  // customer actually paid for this parcel's shipping, and the service
+  // level booking should honour rather than re-shop at ship time.
+  service_level_code: string | null;
+  service_level_name: string | null;
+  quoted_rate_cents: number | null;
+  rate_quoted_at: string | null;
+  last_rate_quote: Record<string, unknown> | null; // full provider rate response, for support/debugging
+  // Tracking sync (manual "Sync tracking" button + the courier-tracking-sync
+  // cron) — courier_status is the provider's own raw status string;
+  // `status` (above) is our normalised ShipmentStatus.
+  courier_status: string | null;
+  courier_synced_at: string | null;
+  courier_error: string | null; // last booking/sync failure message, if any
 }
 
 // Ads (a separate paid promotional-content entity) were removed in

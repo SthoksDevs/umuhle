@@ -17,7 +17,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildPaymentParams, PAYFAST_URL } from "@/lib/payfast";
 import { createClient } from "@/lib/supabase/server";
-import { createPendingOrder } from "@/lib/orders";
+import { createPendingOrder, type CourierQuoteSelection } from "@/lib/orders";
 import { createBookingIntent } from "@/lib/bookings";
 import { isGatewayEnabled, gatewayLabel } from "@/lib/payments/gateways";
 import { isGatewayEligible, whyPayFastIneligible } from "@/lib/payments/eligibility";
@@ -168,6 +168,7 @@ async function initiateOrder(
     items, shippingAddress, contactName, contactWhatsapp,
     fulfillmentByPartner, shippingAddressLine1, shippingAddressLine2,
     shippingSuburb, shippingCity, shippingProvince, shippingPostalCode,
+    courierQuotes,
   } = body as {
     items: { productId: string; quantity: number }[];
     shippingAddress: string;
@@ -180,6 +181,10 @@ async function initiateOrder(
     shippingCity?: string;
     shippingProvince?: string;
     shippingPostalCode?: string;
+    // Live Ship Logic quote per courier partner, fetched by the checkout
+    // page via POST /api/checkout/courier-rates just before submit — see
+    // CourierQuoteSelection in lib/orders.ts.
+    courierQuotes?: Record<string, CourierQuoteSelection>;
   };
 
   const created = await createPendingOrder(supabase, userId, items, {
@@ -188,6 +193,7 @@ async function initiateOrder(
     contactName,
     contactWhatsapp,
     fulfillmentByPartner,
+    courierQuotesByPartner: courierQuotes,
     shippingAddressLine1,
     shippingAddressLine2,
     shippingSuburb,

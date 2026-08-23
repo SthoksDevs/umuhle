@@ -13,7 +13,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createOzowPaymentRequest } from "@/lib/ozow";
-import { createPendingOrder } from "@/lib/orders";
+import { createPendingOrder, type CourierQuoteSelection } from "@/lib/orders";
 import { createBookingIntent } from "@/lib/bookings";
 import { randomUUID } from "crypto";
 import { isGatewayEnabled, gatewayLabel } from "@/lib/payments/gateways";
@@ -136,6 +136,7 @@ async function initiateOrder(
     items, shippingAddress, contactName, contactWhatsapp,
     fulfillmentByPartner, shippingAddressLine1, shippingAddressLine2,
     shippingSuburb, shippingCity, shippingProvince, shippingPostalCode,
+    courierQuotes,
   } = body as {
     items: { productId: string; quantity: number }[];
     shippingAddress: string;
@@ -148,6 +149,7 @@ async function initiateOrder(
     shippingCity?: string;
     shippingProvince?: string;
     shippingPostalCode?: string;
+    courierQuotes?: Record<string, CourierQuoteSelection>;
   };
 
   const created = await createPendingOrder(supabase, userId, items, {
@@ -156,6 +158,7 @@ async function initiateOrder(
     contactName,
     contactWhatsapp,
     fulfillmentByPartner,
+    courierQuotesByPartner: courierQuotes,
     shippingAddressLine1,
     shippingAddressLine2,
     shippingSuburb,
