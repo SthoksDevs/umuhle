@@ -105,6 +105,7 @@ export interface Profile {
   // gated by this and always go out over WhatsApp regardless.
   whatsapp_comms_enabled: boolean;
   whatsapp_verified_at: string | null; // set by handle_new_user() at signup, or by a dashboard number-change verify
+  has_completed_dashboard_tour: boolean; // first-visit spotlight tour — components/DashboardTour.tsx
   created_at: string;
   updated_at: string;
 }
