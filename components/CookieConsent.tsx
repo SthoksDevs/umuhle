@@ -95,24 +95,22 @@ export default function CookieConsent() {
           aria-label="Cookie notice"
           style={{
             position: "fixed",
-            left: "1rem",
-            right: "1rem",
-            bottom: "1rem",
+            right: "1.25rem",
+            bottom: "1.25rem",
             zIndex: 1000,
-            maxWidth: 560,
-            margin: "0 auto",
+            width: 300,
+            maxWidth: "calc(100vw - 2.5rem)",
             background: "#fff",
             border: "1.5px solid rgba(155,127,184,0.25)",
             borderRadius: 16,
             boxShadow: "0 8px 30px rgba(26,26,26,0.12)",
-            padding: "1.1rem 1.25rem",
+            padding: "1.25rem",
             display: "flex",
-            flexWrap: "wrap",
-            alignItems: "center",
-            gap: "0.9rem",
+            flexDirection: "column",
+            gap: "1rem",
           }}
         >
-          <p style={{ flex: "1 1 240px", margin: 0, fontSize: "0.85rem", color: "var(--onyx)", lineHeight: 1.5 }}>
+          <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--onyx)", lineHeight: 1.5 }}>
             We use functional cookies to run Umuhle, and — with your permission — analytics cookies to
             understand how the site is used.{" "}
             <Link href="/privacy-policy" style={{ color: "var(--plum)", textDecoration: "underline" }}>
@@ -120,20 +118,20 @@ export default function CookieConsent() {
             </Link>
             .
           </p>
-          <div style={{ display: "flex", gap: "0.6rem", flexShrink: 0 }}>
-            <button
-              onClick={() => decide("rejected")}
-              className="btn-outline"
-              style={{ padding: "0.6rem 1.1rem", fontSize: "0.85rem" }}
-            >
-              Reject
-            </button>
+          <div style={{ display: "flex", gap: "0.6rem" }}>
             <button
               onClick={() => decide("accepted")}
               className="btn-plum"
-              style={{ padding: "0.6rem 1.4rem", fontSize: "0.85rem" }}
+              style={{ flex: 1, padding: "0.6rem 0.5rem", fontSize: "0.85rem" }}
             >
               Accept
+            </button>
+            <button
+              onClick={() => decide("rejected")}
+              className="btn-outline"
+              style={{ flex: 1, padding: "0.6rem 0.5rem", fontSize: "0.85rem" }}
+            >
+              Reject
             </button>
           </div>
         </div>
