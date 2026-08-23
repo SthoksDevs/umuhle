@@ -77,7 +77,7 @@ function formatDate(dateStr: string) {
 // Dashboard navigation: business management is grouped under My Business.
 // Legacy my-store/my-services/my-shop query links are mapped to the relevant
 // My Business subsection so existing bookmarks continue to work.
-type Tab = "bookings" | "my-orders" | "wishlist" | "profile" | "my-business" | "invite" | "wallet";
+type Tab = "dashboard" | "bookings" | "my-orders" | "wishlist" | "profile" | "my-business" | "invite" | "wallet";
 
 const SERVICE_TYPES = [
   { id: "hair",   label: "Hair",  banner: "/banners/hair.jpg",   description: "From protective styles to blowouts, braids to colour — let clients know exactly what you specialise in." },
@@ -120,100 +120,6 @@ const ORDER_STATUS_STYLES: Record<string, { bg: string; color: string; label: st
   delivered:       { bg: "#E8F5E9", color: "#2E7D32", label: "Delivered" },
   cancelled:       { bg: "#FAFAFA", color: "#757575", label: "Cancelled" },
 };
-
-// ─── Scroll-arrow pill nav ─────────────────────────────────────────────────────
-function PillNav<T extends string>({
-  tabs,
-  active,
-  onChange,
-}: {
-  tabs: { id: T; label: string; icon?: string }[];
-  active: T;
-  onChange: (id: T) => void;
-}) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [canScrollLeft, setCanScrollLeft] = useState(false);
-  const [canScrollRight, setCanScrollRight] = useState(false);
-
-  const checkScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    setCanScrollLeft(el.scrollLeft > 4);
-    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
-  };
-
-  useEffect(() => {
-    checkScroll();
-    const el = scrollRef.current;
-    if (!el) return;
-    el.addEventListener("scroll", checkScroll);
-    window.addEventListener("resize", checkScroll);
-    return () => { el.removeEventListener("scroll", checkScroll); window.removeEventListener("resize", checkScroll); };
-  }, []);
-
-  const scrollLeft = () => {
-    scrollRef.current?.scrollBy({ left: -160, behavior: "smooth" });
-  };
-
-  const scrollRight = () => {
-    scrollRef.current?.scrollBy({ left: 160, behavior: "smooth" });
-  };
-
-  return (
-    <div style={{ position: "relative", marginBottom: "1.75rem" }}>
-      <div
-        ref={scrollRef}
-        style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", scrollbarWidth: "none", msOverflowStyle: "none" }}
-      >
-        <div style={{ display: "flex", gap: "0.25rem", background: "#fff", borderRadius: 100, padding: "0.3rem", border: "1.5px solid rgba(155,127,184,0.12)", width: "max-content", minWidth: "100%" }}>
-          {tabs.map(t => (
-            <button
-              key={t.id}
-              onClick={() => onChange(t.id)}
-              style={{
-                borderRadius: 100, border: "none", cursor: "pointer",
-                padding: "0.5rem 1.1rem", fontSize: "0.85rem", fontWeight: active === t.id ? 500 : 400,
-                background: active === t.id ? "var(--plum)" : "transparent",
-                color: active === t.id ? "#fff" : "var(--grey)",
-                transition: "all 0.18s", whiteSpace: "nowrap",
-              }}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      {canScrollLeft && (
-        <button
-          onClick={scrollLeft}
-          aria-label="Scroll tabs left"
-          style={{
-            position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)",
-            background: "linear-gradient(to right, #fff 60%, transparent)",
-            border: "none", cursor: "pointer", padding: "0.35rem 1.5rem 0.35rem 0.5rem",
-            color: "var(--plum)", fontSize: "1rem", lineHeight: 1, display: "flex", alignItems: "center",
-          }}
-        >
-          ‹
-        </button>
-      )}
-      {canScrollRight && (
-        <button
-          onClick={scrollRight}
-          aria-label="Scroll tabs right"
-          style={{
-            position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)",
-            background: "linear-gradient(to left, #fff 60%, transparent)",
-            border: "none", cursor: "pointer", padding: "0.35rem 0.5rem 0.35rem 1.5rem",
-            color: "var(--plum)", fontSize: "1rem", lineHeight: 1, display: "flex", alignItems: "center",
-          }}
-        >
-          ›
-        </button>
-      )}
-    </div>
-  );
-}
 
 // ─── Booking card ─────────────────────────────────────────────────────────────
 function BookingCard({ booking, myReview, onRate }: {
@@ -4228,6 +4134,72 @@ function MyOrdersTab({ user }: { user: User }) {
   );
 }
 
+// ─── Dashboard home (sidebar landing page) ─────────────────────────────────────
+function DashboardHome({ user, profile, onNavigate }: {
+  user: User;
+  profile: Profile;
+  onNavigate: (tab: Tab, section?: BusinessSection) => void;
+}) {
+  const supabase = createClient();
+  const [stats, setStats] = useState({ bookings: 0, orders: 0, stores: 0 });
+
+  useEffect(() => {
+    let mounted = true;
+    Promise.all([
+      supabase.from("bookings").select("id", { count: "exact", head: true }).eq("client_id", user.id),
+      supabase.from("orders").select("id", { count: "exact", head: true }).eq("client_id", user.id),
+      supabase.from("partner_salons").select("id", { count: "exact", head: true }).eq("partner_id", user.id),
+    ]).then(([b, o, s]) => {
+      if (mounted) setStats({ bookings: b.count ?? 0, orders: o.count ?? 0, stores: s.count ?? 0 });
+    });
+    return () => { mounted = false; };
+  }, [user.id]);
+
+  const cards = [
+    { label: "Bookings",  value: stats.bookings, action: "bookings" as Tab },
+    { label: "Orders",    value: stats.orders,   action: "my-orders" as Tab },
+    { label: "My Stores", value: stats.stores,   action: "my-business" as Tab, section: "stores" as BusinessSection },
+  ];
+
+  return (
+    <section>
+      <div className="dashboard-welcome">
+        <div>
+          <p className="dashboard-eyebrow">Welcome back</p>
+          <h1>{profile.full_name?.split(" ")[0] ?? "Beautiful"}</h1>
+          <p>{user.email}</p>
+        </div>
+        <button className="btn-plum" onClick={() => onNavigate("my-business", "stores")}>+ Add store</button>
+      </div>
+      <div className="dashboard-stat-grid">
+        {cards.map(c => (
+          <button key={c.label} className="dashboard-stat-card" onClick={() => onNavigate(c.action, c.section)}>
+            <span>{c.label}</span>
+            <strong>{c.value}</strong>
+            <small>Open {c.label.toLowerCase()} →</small>
+          </button>
+        ))}
+      </div>
+      <div className="dashboard-home-grid">
+        <div className="dashboard-card">
+          <h2>Quick actions</h2>
+          <div className="quick-actions">
+            <button onClick={() => onNavigate("my-business", "stores")}>+ Add a store</button>
+            <button onClick={() => onNavigate("my-business", "services")}>+ Add a service</button>
+            <button onClick={() => onNavigate("my-business", "products")}>+ Add a product</button>
+            <button onClick={() => onNavigate("bookings")}>View bookings</button>
+          </div>
+        </div>
+        <div className="dashboard-card">
+          <h2>My business</h2>
+          <p>Manage your locations, services, products and orders from one place.</p>
+          <button className="text-link" onClick={() => onNavigate("my-business", "stores")}>Manage My Business →</button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 // ─── Main dashboard ────────────────────────────────────────────────────────────
 function DashboardContent() {
   const router = useRouter();
@@ -4236,7 +4208,7 @@ function DashboardContent() {
 
   const [user, setUser]       = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [tab, setTab]         = useState<Tab>("bookings");
+  const [tab, setTab]         = useState<Tab>("dashboard");
   const [businessSection, setBusinessSection] = useState<BusinessSection>("overview");
   const [loading, setLoading] = useState(true);
 
@@ -4274,7 +4246,7 @@ function DashboardContent() {
   }, [searchParams]);
 
   const [showWhatsAppNudge, setShowWhatsAppNudge] = useState(false);
-  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Proximity backbone — no-ops for non-artists (isArtist gate inside the hook).
   const artistLocationStatus = useArtistLocationPing(user, profile?.is_artist ?? false);
@@ -4329,25 +4301,38 @@ function DashboardContent() {
 
   if (!user || !profile) return null;
 
-  const TAB_CONFIG: { id: Tab; label: string }[] = [
-    { id: "bookings",    label: "Bookings" },
-    { id: "my-orders",   label: "My Orders" },
-    { id: "wishlist",    label: "Wishlist" },
-    { id: "my-business", label: "My Business" },
-    { id: "invite",      label: "Invite" },
-    { id: "wallet",      label: "Wallet" },
-    { id: "profile",     label: "Profile" },
+  const TAB_CONFIG: { id: Tab; label: string; icon: string }[] = [
+    { id: "dashboard",   label: "Dashboard",   icon: "⌂" },
+    { id: "bookings",    label: "Bookings",    icon: "▣" },
+    { id: "my-orders",   label: "Orders",      icon: "▤" },
+    { id: "wishlist",    label: "Saved",       icon: "♡" },
+    { id: "my-business", label: "My Business", icon: "▥" },
+    { id: "invite",      label: "Referrals",   icon: "↗" },
+    { id: "wallet",      label: "Wallet",      icon: "R" },
+    { id: "profile",     label: "Account",     icon: "○" },
   ];
 
-  // Suppress unused-var warning — kept for potential header use
-  void handleSignOut;
+  // Sidebar groups — order controls how items are grouped/headed in the left nav.
+  const groups: { title: string; ids: Tab[] }[] = [
+    { title: "",             ids: ["dashboard"] },
+    { title: "My activity",  ids: ["bookings", "my-orders", "wishlist"] },
+    { title: "My business",  ids: ["my-business"] },
+    { title: "Money",        ids: ["wallet", "invite"] },
+    { title: "Account",      ids: ["profile"] },
+  ];
+  const navItem = (id: Tab) => TAB_CONFIG.find(x => x.id === id)!;
 
-  // Primary tabs shown in bottom action bar (mobile) — most used
-  const PRIMARY_TABS: Tab[] = ["bookings", "wishlist", "my-business", "profile"];
-  const MORE_TABS = TAB_CONFIG.filter(t => !PRIMARY_TABS.includes(t.id));
+  // Closes the mobile sidebar drawer on navigation; a no-op on desktop.
+  const setActiveTab = (next: Tab) => { setTab(next); setSidebarOpen(false); };
+  // Used by DashboardHome's quick-action cards, which also need to land on a
+  // specific My Business section (e.g. "+ Add store" -> My Business > Stores).
+  const goToTab = (next: Tab, section?: BusinessSection) => {
+    if (section) setBusinessSection(section);
+    setActiveTab(next);
+  };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh", background: "#FAFAFA" }}>
+    <div className="dashboard-app">
       <SiteHeader initialUser={user} initialProfile={profile} />
 
       {/* ── WhatsApp incomplete nudge ── */}
@@ -4365,34 +4350,45 @@ function DashboardContent() {
         </div>
       )}
 
-      {/* ── More menu overlay (mobile) ── */}
-      {showMoreMenu && (
-        <div className="modal-overlay" onClick={() => setShowMoreMenu(false)} style={{ alignItems: "flex-end", padding: 0 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: "20px 20px 0 0", padding: "1.25rem 1rem 2rem", width: "100%", maxWidth: 480, boxShadow: "0 -8px 40px rgba(0,0,0,0.12)" }}>
-            <div style={{ width: 40, height: 4, background: "#E0E0E0", borderRadius: 2, margin: "0 auto 1.25rem" }} />
-            <p style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--grey)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "0.75rem", paddingLeft: "0.5rem" }}>More</p>
-            {MORE_TABS.map(t => (
-              <button key={t.id} onClick={() => { setTab(t.id); setShowMoreMenu(false); }}
-                style={{ width: "100%", display: "flex", alignItems: "center", gap: "1rem", padding: "0.85rem 0.75rem", borderRadius: 14, border: "none", background: tab === t.id ? "var(--plum-t)" : "transparent", cursor: "pointer", textAlign: "left", transition: "background 0.15s" }}>
-                <span style={{ fontSize: "0.95rem", fontWeight: tab === t.id ? 600 : 400, color: tab === t.id ? "var(--plum)" : "var(--onyx)" }}>{t.label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* ── Mobile top bar: opens the sidebar drawer ── */}
+      <div className="dashboard-mobile-top">
+        <button onClick={() => setSidebarOpen(true)} aria-label="Open dashboard menu">☰</button>
+        <span>Dashboard</span>
+        <button onClick={() => setActiveTab("profile")} aria-label="Open account">○</button>
+      </div>
+      {sidebarOpen && <div className="dashboard-sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
 
-      <main style={{ flex: 1, maxWidth: 900, margin: "0 auto", padding: "2rem 1.5rem 6rem", width: "100%", boxSizing: "border-box" }}>
-        {/* ── Header ── */}
-        <div style={{ marginBottom: "2rem" }}>
-          <p style={{ fontFamily: "var(--font-display)", fontSize: "0.75rem", letterSpacing: "0.3em", color: "var(--nude)", textTransform: "uppercase", marginBottom: "0.5rem" }}>Welcome back</p>
-          <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "clamp(1.75rem,4vw,2.5rem)", color: "var(--onyx)", marginBottom: "0.5rem" }}>{profile.full_name?.split(" ")[0] ?? "Beautiful"}</h1>
-          <p style={{ color: "var(--grey)", fontSize: "0.9rem" }}>{user.email}</p>
+      {/* ── Left sidebar nav ── */}
+      <aside className={`dashboard-sidebar ${sidebarOpen ? "is-open" : ""}`}>
+        <div className="dashboard-sidebar-brand">
+          <Image src={ICON} alt="Umuhle" width={34} height={34} style={{ borderRadius: "50%" }} />
+          <span>umuhle</span>
         </div>
+        <nav className="dashboard-sidebar-nav">
+          {groups.map(group => (
+            <div key={group.title || "home"} className="dashboard-nav-group">
+              {group.title && <div className="dashboard-nav-heading">{group.title}</div>}
+              {group.ids.map(id => {
+                const item = navItem(id);
+                return (
+                  <button key={id} className={`dashboard-nav-item ${tab === id ? "active" : ""}`} onClick={() => setActiveTab(id)}>
+                    <span className="dashboard-nav-icon">{item.icon}</span>
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </nav>
+        <button className="dashboard-nav-item dashboard-signout" onClick={handleSignOut}>
+          <span className="dashboard-nav-icon">↪</span>
+          <span>Sign out</span>
+        </button>
+      </aside>
 
-        {/* ── Desktop Tabs (hidden on mobile) ── */}
-        <div className="dashboard-desktop-tabs">
-          <PillNav tabs={TAB_CONFIG} active={tab} onChange={setTab} />
-        </div>
+      <main className="dashboard-main">
+        {/* ── Dashboard home ── */}
+        {tab === "dashboard" && <DashboardHome user={user} profile={profile} onNavigate={goToTab} />}
 
         {/* ── Bookings tab ── */}
         {tab === "bookings" && <BookingsTab user={user} profile={profile} onUpdateProfile={p => { setProfile(p); if (p.phone) setShowWhatsAppNudge(false); }} />}
@@ -4464,12 +4460,6 @@ function DashboardContent() {
         {/* ── Profile tab ── */}
         {tab === "profile" && <section><ProfileTab profile={profile} user={user} locationStatus={artistLocationStatus} onUpdate={(p) => { setProfile(p); if (p.phone) setShowWhatsAppNudge(false); }} /></section>}
 
-        {/* ── My Salon tab ── */}
-        
-
-        {/* ── My Services tab ── */}
-        
-
         {/* ── Invite tab ── */}
         {tab === "invite" && <section><InviteTab profile={profile} /></section>}
 
@@ -4488,32 +4478,6 @@ function DashboardContent() {
           />
         )}
       </main>
-
-      {/* ── Mobile Bottom Action Bar ── */}
-      <nav className="dashboard-bottom-bar">
-        {PRIMARY_TABS.map(id => {
-          const t = TAB_CONFIG.find(x => x.id === id)!;
-          const isActive = tab === t.id;
-          return (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{
-              flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-              gap: "0.2rem", padding: "0.6rem 0.25rem", border: "none", background: "transparent",
-              cursor: "pointer", borderRadius: 12, transition: "background 0.15s",
-            }}>
-              <span style={{ fontSize: "0.68rem", fontWeight: isActive ? 600 : 400, color: isActive ? "var(--plum)" : "var(--grey)", letterSpacing: "0.01em" }}>{t.label}</span>
-              {isActive && <div style={{ width: 4, height: 4, borderRadius: "50%", background: "var(--plum)", marginTop: "0.1rem" }} />}
-            </button>
-          );
-        })}
-        {/* More button */}
-        <button onClick={() => setShowMoreMenu(true)} style={{
-          flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-          gap: "0.2rem", padding: "0.6rem 0.25rem", border: "none", background: "transparent", cursor: "pointer", borderRadius: 12,
-        }}>
-          <span style={{ fontSize: "1.35rem", lineHeight: 1 }}>⋯</span>
-          <span style={{ fontSize: "0.68rem", fontWeight: 400, color: "var(--grey)" }}>More</span>
-        </button>
-      </nav>
 
       <Footer />
     </div>
