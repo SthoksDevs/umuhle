@@ -124,6 +124,12 @@ interface BookingNotifyOpts {
   clientPocPhone?: string;
   artistPocName?: string;
   artistPocPhone?: string;
+  // Non-essential booking sends respect each party's own whatsapp_comms_enabled
+  // preference — see call sites in lib/payments/fulfillment.ts and
+  // app/api/notifications/route.ts. POC messages above are meeting logistics,
+  // not marketing, and always go out regardless of these flags.
+  clientWhatsappEnabled?: boolean;
+  artistWhatsappEnabled?: boolean;
 }
 
 export async function notifyBookingCreated(
@@ -156,10 +162,13 @@ export async function notifyBookingCreated(
     `${durationLine}\n\n` +
     `Open your dashboard to manage this booking.`;
 
-  const promises: Promise<boolean>[] = [
-    sendTextMessage(opts.clientPhone, clientMsg),
-    sendTextMessage(opts.artistPhone, artistMsg),
-  ];
+  const promises: Promise<boolean>[] = [];
+  if (opts.clientWhatsappEnabled) {
+    promises.push(sendTextMessage(opts.clientPhone, clientMsg));
+  }
+  if (opts.artistWhatsappEnabled) {
+    promises.push(sendTextMessage(opts.artistPhone, artistMsg));
+  }
 
   if (opts.clientPocPhone) {
     const pocMsg =
@@ -208,17 +217,19 @@ export async function notifyBookingReminder(
     month: "long",
   });
 
-  const clientSent = await sendTemplateMessage(opts.clientPhone, "umuhle_booking_reminder", [
-    {
-      type: "body",
-      parameters: [
-        { type: "text", text: opts.clientName },
-        { type: "text", text: opts.artistName },
-        { type: "text", text: formattedDate },
-        { type: "text", text: opts.time },
-      ],
-    },
-  ]);
+  const clientSent = opts.clientWhatsappEnabled
+    ? await sendTemplateMessage(opts.clientPhone, "umuhle_booking_reminder", [
+        {
+          type: "body",
+          parameters: [
+            { type: "text", text: opts.clientName },
+            { type: "text", text: opts.artistName },
+            { type: "text", text: formattedDate },
+            { type: "text", text: opts.time },
+          ],
+        },
+      ])
+    : false;
 
   const promises: Promise<boolean>[] = [];
 
