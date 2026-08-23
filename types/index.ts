@@ -96,6 +96,15 @@ export interface Profile {
   longitude: number | null;
   allow_collection: boolean; // offers in-person collection instead of courier
   allow_courier: boolean;    // ships via courier — default true, so existing sellers keep working unchanged
+  // ── WhatsApp comms preference ──
+  // Email is the default, always-on channel. WABA messaging costs money
+  // per conversation, so non-essential WhatsApp sends (booking/order
+  // updates, reminders, referral rewards) are opt-in via this flag —
+  // see lib/whatsapp.ts and app/dashboard/page.tsx's ProfileTab. Security
+  // sends (phone OTP, point-of-contact booking notifications) are never
+  // gated by this and always go out over WhatsApp regardless.
+  whatsapp_comms_enabled: boolean;
+  whatsapp_verified_at: string | null; // set by handle_new_user() at signup, or by a dashboard number-change verify
   created_at: string;
   updated_at: string;
 }
