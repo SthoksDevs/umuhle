@@ -125,10 +125,10 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
         .select(`
           id,
           service:services(name),
-          client:profiles!bookings_client_id_fkey(id, full_name, phone, email),
+          client:profiles!bookings_client_id_fkey(id, full_name, phone, email, whatsapp_comms_enabled),
           artist:artists!bookings_artist_id_fkey(
             id, display_name, profile_id,
-            profile:profiles!artists_profile_id_fkey(full_name, phone, email)
+            profile:profiles!artists_profile_id_fkey(full_name, phone, email, whatsapp_comms_enabled)
           )
         `)
         .eq("id", bookingId)
@@ -162,7 +162,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
           } catch (e) {
             console.error("[bookings/status] client review-invite email error:", e);
           }
-          if (clientRow.phone) {
+          if (clientRow.phone && (clientRow.whatsapp_comms_enabled ?? false)) {
             await notifyReviewInvite({
               phone:      clientRow.phone,
               name:       clientRow.full_name ?? "there",
@@ -194,7 +194,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
           } catch (e) {
             console.error("[bookings/status] artist review-invite email error:", e);
           }
-          if (artistProfileRow?.phone) {
+          if (artistProfileRow?.phone && (artistProfileRow?.whatsapp_comms_enabled ?? false)) {
             await notifyReviewInvite({
               phone:      artistProfileRow.phone,
               name:       artistName,
