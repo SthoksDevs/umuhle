@@ -191,7 +191,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   // better, but that's a template-level follow-up, not blocking here.
   const { data: client } = await service
     .from("profiles")
-    .select("full_name, email, phone")
+    .select("full_name, email, phone, whatsapp_comms_enabled")
     .eq("id", order.client_id)
     .single();
 
@@ -220,7 +220,10 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
           productName: product.name, quantity: item.quantity, confirmToken,
         });
       }
-      if (clientPhone && product) {
+      // Order-shipped is a status update, not a point-of-contact or security
+      // message, so it respects the client's whatsapp_comms_enabled preference
+      // (same as notifyOrderPaid in lib/payments/fulfillment.ts).
+      if (clientPhone && product && client?.whatsapp_comms_enabled) {
         await notifyOrderItemShipped({
           clientName, clientPhone, orderId: order.id,
           productName: product.name, quantity: item.quantity, confirmToken,
