@@ -43,8 +43,8 @@ export default function ProductDeleteButton({
 
     const confirmed = window.confirm(
       productName
-        ? `Delete “${productName}”?\n\nIf this product has order history or is saved by a customer, it will be removed from sale instead so those records remain intact.`
-        : "Delete this product?\n\nIf it has order history or is saved by a customer, it will be removed from sale instead so those records remain intact."
+        ? `Delete "${productName}"?`
+        : "Delete this product?"
     );
     if (!confirmed) return;
 
