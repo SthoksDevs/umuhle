@@ -42,7 +42,7 @@ export async function DELETE(
   if ((orderItemCount ?? 0) > 0 || (wishlistCount ?? 0) > 0) {
     const { error } = await supabase
       .from("products")
-      .update({ is_active: false })
+      .update({ is_active: false, deleted_at: new Date().toISOString() })
       .eq("id", id)
       .eq("partner_id", user.id);
 

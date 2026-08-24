@@ -48,6 +48,7 @@ interface PartnerProductRow {
   listing_package_id: string | null;
   starts_at: string | null;
   expires_at: string | null;
+  deleted_at: string | null;
 }
 
 const fmtShop = (cents: number) => `R${(cents / 100).toFixed(0)}`;
@@ -101,6 +102,7 @@ function ProductsManager({ user, partnerProvince }: { user: { id: string }; part
       starts_at: base?.starts_at ?? null,
       expires_at: base?.expires_at ?? null,
       listing_package_id: base?.listing_package_id ?? null,
+      deleted_at: base?.deleted_at ?? null,
     });
 
     setProducts(prev => {
