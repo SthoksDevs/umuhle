@@ -68,6 +68,7 @@ function ProductsManager({ user, partnerProvince }: { user: { id: string }; part
       .from("products")
       .select("*")
       .eq("partner_id", user.id)
+      .is("deleted_at", null)
       .order("created_at", { ascending: false });
     setProducts((data ?? []) as PartnerProductRow[]);
     setProdLoading(false);
@@ -123,6 +124,13 @@ function ProductsManager({ user, partnerProvince }: { user: { id: string }; part
   };
 
   const modBadge = (p: PartnerProductRow) => {
+    if (!p.is_active) {
+      return (
+        <span style={{ background: "#F5F5F5", color: "#757575", borderRadius: 100, padding: "0.2rem 0.65rem", fontSize: "0.7rem", fontWeight: 600 }}>
+          Hidden
+        </span>
+      );
+    }
     const map: Record<string, { bg: string; color: string; label: string }> = {
       approved: { bg: "#E8F5E9", color: "#2E7D32", label: "Live" },
       scanning: { bg: "#FFF3E0", color: "#E65100", label: "Under review" },
@@ -185,7 +193,7 @@ function ProductsManager({ user, partnerProvince }: { user: { id: string }; part
         <div style={{ textAlign: "center", padding: "3rem", background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.12)" }}>
           <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>🛍️</div>
           <p style={{ fontFamily: "var(--font-display)", fontSize: "1.05rem", marginBottom: "0.5rem" }}>No products yet</p>
-          <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>Add your first product — it&apos;s free — to start selling on Umuhle.</p>
+          <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>Add your first product — it's free — to start selling on Umuhle.</p>
           <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.75rem 2rem" }}>Add a product</button>
         </div>
       ) : (
