@@ -17,6 +17,7 @@ import { createPendingOrder, type CourierQuoteSelection } from "@/lib/orders";
 import { createBookingIntent } from "@/lib/bookings";
 import { randomUUID } from "crypto";
 import { isGatewayEnabled, gatewayLabel } from "@/lib/payments/gateways";
+import { calculateSalonRegistrationPrice } from "@/lib/salon-pricing";
 import type { FulfillmentMethod } from "@/types";
 
 type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
@@ -294,34 +295,73 @@ async function initiateStoreBookingDeposit(
 }
 
 // ── Salon ─────────────────────────────────────────────────────────────────────
-// Always 100% Umuhle revenue — see lib/payments/eligibility.ts.
+// Always 100% Umuhle revenue — see lib/payments/eligibility.ts. One payment
+// can cover many salons at once (see app/api/salons/import/route.ts's CSV
+// batch import) — the cliff-tier rate for the whole count applies, see
+// lib/salon-pricing.ts. salon_subscription_payment_salons is the join table
+// fulfillSalon (lib/payments/fulfillment.ts) reads to know which salons a
+// given payment activates; salon_id on the payment row itself is left null.
 
 async function initiateSalon(
   supabase: SupabaseServerClient,
   userId: string,
   profile: OzowProfile,
-  body: Record<string, string>,
+  body: Record<string, unknown>,
   baseUrl: string
 ) {
-  const { salonId } = body;
-  const SALON_PRICE = 3500; // R35 in cents
+  const rawIds = body.salonIds ?? (body.salonId ? [body.salonId] : []);
+  const salonIds = Array.isArray(rawIds)
+    ? Array.from(new Set(rawIds.filter((id): id is string => typeof id === "string" && id.length > 0)))
+    : [];
+
+  if (salonIds.length === 0) {
+    return NextResponse.json({ error: "No salons to register." }, { status: 400 });
+  }
+
+  // Confirm every salon belongs to the caller — stops a tampered request
+  // charging for (or activating) salons that aren't this partner's.
+  const { data: ownedSalons } = await supabase
+    .from("partner_salons")
+    .select("id")
+    .eq("partner_id", userId)
+    .in("id", salonIds);
+
+  const ownedIds = new Set((ownedSalons ?? []).map((s) => s.id));
+  if (salonIds.some((id) => !ownedIds.has(id))) {
+    return NextResponse.json({ error: "One or more salons could not be found." }, { status: 404 });
+  }
+
+  const pricing = calculateSalonRegistrationPrice(salonIds.length);
 
   const paymentId = randomUUID();
   const webhookSecret = randomUUID();
 
-  await supabase.from("salon_subscription_payments").insert({
+  const { error: paymentError } = await supabase.from("salon_subscription_payments").insert({
     id:         paymentId,
-    salon_id:   salonId,
     partner_id: userId,
-    amount:     SALON_PRICE,
+    amount:     pricing.totalCents,
     status:     "pending",
     gateway_webhook_secret: webhookSecret,
   });
+  if (paymentError) {
+    console.error("Salon payment insert failed:", paymentError);
+    return NextResponse.json({ error: "Could not start salon payment." }, { status: 500 });
+  }
+
+  const { error: linkError } = await supabase
+    .from("salon_subscription_payment_salons")
+    .insert(salonIds.map((salon_id) => ({ payment_id: paymentId, salon_id })));
+  if (linkError) {
+    // Cascades: deleting the payment row also removes any linked rows above.
+    await supabase.from("salon_subscription_payments").delete().eq("id", paymentId);
+    console.error("Salon payment linking failed:", linkError);
+    return NextResponse.json({ error: "Could not start salon payment." }, { status: 500 });
+  }
 
   const result = await createOzowPaymentRequest({
     transactionReference: paymentId,
     bankReference: `UMUHLESUB${paymentId.replace(/-/g, "").slice(0, 11)}`,
-    amountCents: SALON_PRICE,
+    amountCents: pricing.totalCents,
     cancelUrl: `${baseUrl}/payment/cancelled?ref=${paymentId}&type=salon&method=ozow`,
     errorUrl: `${baseUrl}/payment/failed?ref=${paymentId}&type=salon&method=ozow`,
     successUrl: `${baseUrl}/payment/success?ref=${paymentId}&type=salon&method=ozow`,
@@ -337,5 +377,5 @@ async function initiateSalon(
     await supabase.from("salon_subscription_payments").update({ gateway_order_id: result.ozowTransactionId }).eq("id", paymentId);
   }
 
-  return NextResponse.json({ redirectUrl: result.redirectUrl });
+  return NextResponse.json({ redirectUrl: result.redirectUrl, amountCents: pricing.totalCents });
 }

@@ -428,24 +428,38 @@ async function fulfillSalon(supabase: SupabaseClient, event: PaymentEvent, tag: 
     })
     .eq("id", event.referenceId)
     .eq("status", "pending")
-    .select("salon_id, amount, partner_id, partner:profiles!partner_id(full_name, email)")
+    .select("id, amount, partner_id, partner:profiles!partner_id(full_name, email)")
     .single();
 
-  if (!payment?.salon_id) {
+  if (!payment?.id) {
     console.warn(`${tag} salon payment not found or already processed`, event.referenceId);
     return { ok: true, message: "Already processed or unknown salon payment" };
+  }
+
+  // A payment can cover one salon or a whole CSV batch (cliff-tier bulk
+  // registration — see lib/salon-pricing.ts). Always resolve via the join
+  // table rather than a single salon_id column, so this is one code path
+  // for both cases.
+  const { data: links } = await supabase
+    .from("salon_subscription_payment_salons")
+    .select("salon_id")
+    .eq("payment_id", payment.id);
+
+  const salonIds = (links ?? []).map((l) => l.salon_id);
+  if (salonIds.length === 0) {
+    console.warn(`${tag} salon payment has no linked salons`, event.referenceId);
+    return { ok: true, message: "Salon payment had no linked salons" };
   }
 
   await supabase
     .from("partner_salons")
     .update({ subscription_until: oneYear.toISOString() })
-    .eq("id", payment.salon_id);
+    .in("id", salonIds);
 
-  const { data: salon } = await supabase
+  const { data: salons } = await supabase
     .from("partner_salons")
     .select("name")
-    .eq("id", payment.salon_id)
-    .single();
+    .in("id", salonIds);
 
   await maybeTriggerReferralReward(supabase, {
     referredPartnerId: payment.partner_id,
@@ -455,12 +469,14 @@ async function fulfillSalon(supabase: SupabaseClient, event: PaymentEvent, tag: 
   });
 
   const partnerRow = Array.isArray(payment.partner) ? payment.partner[0] : payment.partner;
+  const salonNames = (salons ?? []).map((s) => s.name).filter(Boolean);
+  const salonLabel = salonNames.length === 1 ? salonNames[0] : `${salonIds.length} salons`;
   try {
     await sendSalonPaidEmail({
       paymentId: event.referenceId,
       clientName: (partnerRow as { full_name: string } | undefined)?.full_name ?? "Partner",
       clientEmail: (partnerRow as { email: string } | undefined)?.email ?? "",
-      salonName: salon?.name ?? "Your salon",
+      salonName: salonLabel || "Your salon",
       amount: (payment as { amount?: number }).amount ?? 3500,
       expiresAt: oneYear.toISOString(),
     });
@@ -468,7 +484,7 @@ async function fulfillSalon(supabase: SupabaseClient, event: PaymentEvent, tag: 
     console.error(`${tag} salon paid email error`, e);
   }
 
-  return { ok: true, message: "Salon subscription activated" };
+  return { ok: true, message: `Salon subscription activated for ${salonIds.length} salon(s)` };
 }
 
 // ── Store booking deposit ────────────────────────────────────────────────────

@@ -2186,13 +2186,15 @@ function MySalonTab({ user }: { user: { id: string } }) {
   };
 
   // CSV store import is now server-side. Keep this UI thin: the backend owns
-  // validation, partner ownership and insertion. Refresh after a successful
-  // import so the existing store list immediately reflects the new records.
+  // validation, partner ownership and insertion. No auto-reload here —
+  // StoreCsvImport shows a "pay to activate" prompt after a successful
+  // import (bulk cliff-tier pricing, lib/salon-pricing.ts) and reloading
+  // immediately would wipe that out before the partner can pay. The list
+  // picks up the new (still pending-review, pending-payment) rows next time
+  // this page loads, e.g. when they return from Ozow.
   const storeCsvImporter = (
     <div style={{ marginBottom: "1.25rem" }}>
-      <StoreCsvImport onImported={(result) => {
-        if (result.inserted > 0) window.location.reload();
-      }} />
+      <StoreCsvImport />
     </div>
   );
  
