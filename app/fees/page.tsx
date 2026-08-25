@@ -51,43 +51,30 @@ export default function FeesPage() {
             </p>
           </Section>
 
-          <Section title="Listing a Product — from R20">
+          <Section title="Listing a Product — Free">
             <p>
               To keep the shop genuine and reviewed, every product listing runs on a simple package price.
               Buying a package with more than one product slot means the rest are banked on your account — use
               them on other products any time, at no extra charge. There&apos;s no separate &ldquo;advertising&rdquo;
               fee on top — listing a product is what promotes it.
             </p>
-            <div className="mt-2 divide-y divide-[#f0eaf7] rounded-2xl border border-[#f0eaf7] px-4">
-              <Row label="Starter" value="R20" sub="1 product · 6 weeks — the minimum" />
-              <Row label="Growth" value="R45" sub="3 products · 3 months each" />
-              <Row label="Business" value="R75" sub="6 products · 4 months each" />
-              <Row label="Premium" value="R115" sub="10 products · 6 months each" />
-            </div>
-            <p className="text-sm text-slate-500">
-              Picking a longer package just means not having to renew as often — it doesn&apos;t change what you
-              keep from a sale (see service fee, below). When a listing expires it&apos;s automatically hidden
-              from the shop until it&apos;s renewed.
-            </p>
           </Section>
 
           <Section title="Selling a Product — R5 or 10% Service Fee">
             <p>
               Separate from the listing fee, Umuhle takes a service fee on the sale price whenever a product
-              actually sells: a flat <strong>R5</strong>, or <strong>10%</strong> of the price — whichever is
-              higher. In practice that&apos;s a flat R5 on anything up to R50, and 10% above that — you keep
-              the rest. This is deducted automatically; there&apos;s nothing to invoice or pay out of pocket.
-              If a product doesn&apos;t sell, you&apos;re never charged a service fee on it — only the original
-              listing fee applies. Because of this fee, products must be priced at <strong>R35 or more</strong>.
+              actually sells: a flat R5, or 10% of the price — whichever is
+              higher. In practice that&apos;s a flat R5 on anything up to R50, and 10% above that. 
+              Products must be priced at R35 or more.
             </p>
           </Section>
 
           <Section title="Bookings (Artists) — R5 or 10% Service Fee">
             <p>
-              The same service fee — a flat <strong>R5</strong>, or <strong>10%</strong> of the price, whichever
+              The same service fee — a flat R5, or 10% of the price, whichever
               is higher — applies to completed bookings; you keep the rest, credited to your wallet automatically
               once the booking is marked complete. There&apos;s no fee to create a profile or list your services.
-              Services must be priced at <strong>R35 or more</strong>.
+              Services must be priced at R35 or more.
             </p>
           </Section>
 
