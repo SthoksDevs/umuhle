@@ -81,14 +81,14 @@ export default function FeesPage() {
           <Section title="Salon Listing — R35 / year">
             <p>
               If you want a discoverable salon/store profile with its own page and location, a salon listing
-              is <strong>R35 per year</strong>. This is entirely optional — you can take bookings and sell
+              is R35 per year. This is entirely optional — you can take bookings and sell
               products without one.
             </p>
           </Section>
 
           <Section title="Salon Gallery Photos — R5 each">
             <p>
-              Direct photo uploads to your salon gallery are <strong>R5 per image</strong> to cover storage
+              Direct photo uploads to your salon gallery are R5 per image to cover storage
               costs. Connecting your Instagram is free and syncs your gallery automatically — most partners use
               this instead of paying per photo.
             </p>
@@ -105,7 +105,7 @@ export default function FeesPage() {
 
           <Section title="Referral Rewards — Earn, Don&apos;t Pay">
             <p>
-              Refer a beauty professional and earn <strong>R10</strong> once they pay to list their first
+              Refer a beauty professional and earn 5% once they pay to list their first
               product — no cap on referrals. This is money Umuhle pays <em>you</em>, not a fee. See{" "}
               <Link href="/earn" className="text-[#9b7fb8] underline">how referrals work</Link> for the full breakdown.
             </p>
@@ -114,11 +114,10 @@ export default function FeesPage() {
           <Section title="Everything at a Glance">
             <div className="divide-y divide-[#f0eaf7] rounded-2xl border border-[#f0eaf7] px-4">
               <Row label="Browsing, booking, buying" value="Free" />
-              <Row label="Product listing" value="From R20" sub="1–10 products per package, minimum 6 weeks each" />
+              <Row label="Product listing" value="Free" />
               <Row label="Service fee on sales &amp; bookings" value="R5 or 10%" sub="Whichever is higher — only charged when something actually sells" />
               <Row label="Minimum product/service price" value="R35" />
               <Row label="Salon listing" value="R35 / year" sub="Optional" />
-              <Row label="Salon gallery photo" value="R5 each" sub="Free via Instagram sync" />
               <Row label="Returns" value="Free" />
               <Row label="Minimum withdrawal" value="R100" />
             </div>
