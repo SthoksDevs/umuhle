@@ -4457,10 +4457,6 @@ function DashboardContent() {
 
       {/* ── Left sidebar nav ── */}
       <aside className={`dashboard-sidebar ${sidebarOpen ? "is-open" : ""}`}>
-        <div className="dashboard-sidebar-brand">
-          <Image src={ICON} alt="Umuhle" width={34} height={34} style={{ borderRadius: "50%" }} />
-          <span>umuhle</span>
-        </div>
         <nav className="dashboard-sidebar-nav">
           {groups.map(group => (
             <div key={group.title || "home"} className="dashboard-nav-group">
