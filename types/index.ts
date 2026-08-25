@@ -187,8 +187,8 @@ export interface Booking {
   completed_at: string | null;
   reminder_sent: boolean;
   created_at: string;
-  commission_cents: number | null; // Umuhle's 5.5% cut, recorded at payment time
-  payout_cents: number | null;     // artist's 94.5% share
+  commission_cents: number | null; // Umuhle's service fee (R5 flat, or 10% above R50), recorded at payment time
+  payout_cents: number | null;     // artist's share after the service fee
   payout_credited_at: string | null; // set once the payout has been credited to the artist's wallet
   payout_via: "wallet" | "instant_split"; // 'instant_split' = already paid straight to the artist via PayFast, see lib/payments/split.ts
   // Relations
@@ -320,8 +320,8 @@ export interface OrderItem {
   product_id: string;
   quantity: number;
   unit_price: number;
-  commission_cents: number | null; // Umuhle's 5.5% cut, recorded at payment time
-  payout_cents: number | null;     // partner's 94.5% share
+  commission_cents: number | null; // Umuhle's service fee (R5 flat, or 10% above R50), recorded at payment time
+  payout_cents: number | null;     // partner's share after the service fee
   payout_credited_at: string | null; // set once the payout has been credited to the partner's wallet
   shipped_at: string | null;    // set when the partner marks this item dispatched
   delivered_at: string | null;  // set when the customer confirms receipt via their confirm link

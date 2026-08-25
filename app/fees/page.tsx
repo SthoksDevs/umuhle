@@ -34,7 +34,7 @@ export default function FeesPage() {
             Umuhle is free to browse, book and shop. Below is every fee a partner or artist might come across —
             no hidden charges, and nothing beyond what&apos;s listed here.
           </p>
-          <p className="mt-2 text-sm text-slate-400">Last updated: July 2026</p>
+          <p className="mt-2 text-sm text-slate-400">Last updated: August 2026</p>
         </div>
 
         <div className="space-y-6">
@@ -66,25 +66,28 @@ export default function FeesPage() {
             </div>
             <p className="text-sm text-slate-500">
               Picking a longer package just means not having to renew as often — it doesn&apos;t change what you
-              keep from a sale (see commission, below). When a listing expires it&apos;s automatically hidden
+              keep from a sale (see service fee, below). When a listing expires it&apos;s automatically hidden
               from the shop until it&apos;s renewed.
             </p>
           </Section>
 
-          <Section title="Selling a Product — 5.5% Commission">
+          <Section title="Selling a Product — R5 or 10% Service Fee">
             <p>
-              Separate from the listing fee, Umuhle takes a <strong>5.5% commission</strong> on the sale price
-              whenever a product actually sells — you keep <strong>94.5%</strong>. This is deducted automatically;
-              there&apos;s nothing to invoice or pay out of pocket. If a product doesn&apos;t sell, you&apos;re
-              never charged commission on it — only the original listing fee applies.
+              Separate from the listing fee, Umuhle takes a service fee on the sale price whenever a product
+              actually sells: a flat <strong>R5</strong>, or <strong>10%</strong> of the price — whichever is
+              higher. In practice that&apos;s a flat R5 on anything up to R50, and 10% above that — you keep
+              the rest. This is deducted automatically; there&apos;s nothing to invoice or pay out of pocket.
+              If a product doesn&apos;t sell, you&apos;re never charged a service fee on it — only the original
+              listing fee applies. Because of this fee, products must be priced at <strong>R35 or more</strong>.
             </p>
           </Section>
 
-          <Section title="Bookings (Artists) — 5.5% Commission">
+          <Section title="Bookings (Artists) — R5 or 10% Service Fee">
             <p>
-              The same <strong>5.5% commission</strong> applies to completed bookings — you keep{" "}
-              <strong>94.5%</strong> of the service price, credited to your wallet automatically once the
-              booking is marked complete. There&apos;s no fee to create a profile or list your services.
+              The same service fee — a flat <strong>R5</strong>, or <strong>10%</strong> of the price, whichever
+              is higher — applies to completed bookings; you keep the rest, credited to your wallet automatically
+              once the booking is marked complete. There&apos;s no fee to create a profile or list your services.
+              Services must be priced at <strong>R35 or more</strong>.
             </p>
           </Section>
 
@@ -125,7 +128,8 @@ export default function FeesPage() {
             <div className="divide-y divide-[#f0eaf7] rounded-2xl border border-[#f0eaf7] px-4">
               <Row label="Browsing, booking, buying" value="Free" />
               <Row label="Product listing" value="From R20" sub="1–10 products per package, minimum 6 weeks each" />
-              <Row label="Commission on sales &amp; bookings" value="5.5%" sub="Only charged when something actually sells" />
+              <Row label="Service fee on sales &amp; bookings" value="R5 or 10%" sub="Whichever is higher — only charged when something actually sells" />
+              <Row label="Minimum product/service price" value="R35" />
               <Row label="Salon listing" value="R35 / year" sub="Optional" />
               <Row label="Salon gallery photo" value="R5 each" sub="Free via Instagram sync" />
               <Row label="Returns" value="Free" />

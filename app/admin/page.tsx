@@ -10,6 +10,7 @@ import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
 import type { Profile } from "@/types";
 import ProductForm, { productToForm, type ProductFormData } from "@/components/ProductForm";
+import { splitCommission } from "@/lib/payouts";
 
 const ICON = "/umuhle-icon.png";
 const SUPER_ADMIN_EMAIL = "info@umuhle.co.za";
@@ -1359,7 +1360,6 @@ function OrdersTab({ supabase }: { supabase: ReturnType<typeof createClient> }) 
 
 const BOOKING_FILTERS = ["all", "pending_payment", "confirmed", "in_progress", "completed", "cancelled", "no_show"] as const;
 type BookingFilter = typeof BOOKING_FILTERS[number];
-const COMMISSION_RATE = 0.055;
 
 interface BookingRow {
   id: string;
@@ -1450,7 +1450,7 @@ function BookingsTab({ supabase }: { supabase: ReturnType<typeof createClient> }
         Bookings
       </h2>
       <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-        Service bookings sold through Umuhle. Marking a booking completed credits the artist&apos;s wallet with their 94.5% share (5.5% commission kept by Umuhle) — it then clears to their available balance after the standard payout hold window.
+        Service bookings sold through Umuhle. Marking a booking completed credits the artist&apos;s wallet with the price less Umuhle&apos;s service fee (R5 flat, or 10% on bookings above R50) — it then clears to their available balance after the standard payout hold window.
       </p>
 
       {error && (
@@ -1490,7 +1490,7 @@ function BookingsTab({ supabase }: { supabase: ReturnType<typeof createClient> }
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
           {bookings.map((b) => {
-            const payoutCents = b.payout_cents ?? Math.round(b.total_amount * (1 - COMMISSION_RATE));
+            const payoutCents = b.payout_cents ?? splitCommission(b.total_amount).payoutCents;
             const busy = actionLoading === b.id;
             return (
               <div key={b.id} style={{ background: "#fff", borderRadius: 16, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.1rem 1.25rem" }}>

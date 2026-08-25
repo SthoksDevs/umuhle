@@ -3,9 +3,19 @@
 // Marketplace payouts for bookings, store booking deposits, and product sales.
 //
 // Rules:
-//   - Umuhle takes a 5.5% commission on every booking, every store booking
-//     deposit, and every product sale. The remaining 94.5% belongs to the
-//     artist / salon / store partner.
+//   - Umuhle takes a service fee on every booking, every store booking
+//     deposit, and every product sale: a flat R5, or 10% of the price —
+//     whichever is higher (replaces the old flat 5.5% commission, confirmed
+//     2026-08-25). Below R50 the R5 floor wins (10% of R50 is exactly R5);
+//     at and above R50 the 10% cut takes over. The remaining amount belongs
+//     to the artist / salon / store partner. See SERVICE_FEE_FLAT_CENTS /
+//     SERVICE_FEE_RATE / splitCommission() below.
+//   - Because the R5 floor is a bigger bite of a cheap item than of an
+//     expensive one, nothing this fee is computed on — a product's price,
+//     an artist's service price, or a salon booking deposit — can be
+//     listed below MIN_PRICE_CENTS (R35), enforced both client-side
+//     (ProductForm.tsx, the service forms in app/dashboard/page.tsx) and
+//     at the database level (see supabase/migrations/20260825_service_fee_min_price.sql).
 //   - Ads and salon subscriptions never go through this module — that
 //     revenue is 100% Umuhle's, always.
 //   - The split is computed and stored as soon as payment clears (called
@@ -37,12 +47,22 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { maybeTriggerReferralReward, sumOrderCommissionForPartner } from "@/lib/referrals";
 
-export const COMMISSION_RATE = 0.055; // 5.5%
+export const SERVICE_FEE_FLAT_CENTS = 500; // R5.00 flat minimum
+export const SERVICE_FEE_RATE = 0.10; // 10%
+
+// Floor for anything the service fee above is computed against — a
+// product's price, an artist's service price, or a salon booking deposit.
+// Below this the flat R5 would represent a disproportionate cut.
+export const MIN_PRICE_CENTS = 3500; // R35.00
+
 export const PAYOUT_HOLD_DAYS = 2; // turnaround target (was 7) — see note above re: returns-window overlap
 
 export function splitCommission(grossCents: number): { commissionCents: number; payoutCents: number } {
   const gross = Math.max(Math.round(grossCents), 0);
-  const commissionCents = Math.round(gross * COMMISSION_RATE);
+  // Flat R5, or 10% of the price — whichever is higher — but never more
+  // than the gross itself (matters only for pre-existing amounts under R5
+  // from before this floor was enforced).
+  const commissionCents = Math.min(gross, Math.max(SERVICE_FEE_FLAT_CENTS, Math.round(gross * SERVICE_FEE_RATE)));
   return { commissionCents, payoutCents: gross - commissionCents };
 }
 
@@ -145,7 +165,7 @@ export async function creditBookingPayout(
   const { data: creditedFlag, error: rpcError } = await supabase.rpc("credit_wallet_earning", {
     p_profile_id: artistRow.profile_id,
     p_amount_cents: payoutCents,
-    p_description: `Booking payout${artistRow.display_name ? ` — ${artistRow.display_name}` : ""} (${fmtR(booking.total_amount)} less 5.5% Umuhle commission)`,
+    p_description: `Booking payout${artistRow.display_name ? ` — ${artistRow.display_name}` : ""} (${fmtR(booking.total_amount)} less ${fmtR(commissionCents)} Umuhle service fee)`,
     p_source_type: "booking",
     p_source_id: bookingId,
     p_hold_days: PAYOUT_HOLD_DAYS,
@@ -259,7 +279,7 @@ export async function creditStoreBookingDepositPayout(
   const { data: creditedFlag, error: rpcError } = await supabase.rpc("credit_wallet_earning", {
     p_profile_id: salonRow.partner_id,
     p_amount_cents: payoutCents,
-    p_description: `Booking deposit payout${salonRow.name ? ` — ${salonRow.name}` : ""} (${fmtR(booking.deposit_amount)} less 5.5% Umuhle commission)`,
+    p_description: `Booking deposit payout${salonRow.name ? ` — ${salonRow.name}` : ""} (${fmtR(booking.deposit_amount)} less ${fmtR(commissionCents)} Umuhle service fee)`,
     p_source_type: "store_booking_deposit",
     p_source_id: storeBookingId,
     p_hold_days: PAYOUT_HOLD_DAYS,
@@ -450,7 +470,7 @@ export async function creditOrderItemPayout(
     await supabase.rpc("credit_wallet_earning", {
       p_profile_id: product.partner_id,
       p_amount_cents: payoutCents,
-      p_description: `Order payout — ${product.name} × ${item.quantity} (${fmtR(lineGross)} less 5.5% Umuhle commission)`,
+      p_description: `Order payout — ${product.name} × ${item.quantity} (${fmtR(lineGross)} less ${fmtR(commissionCents)} Umuhle service fee)`,
       p_source_type: "order_item",
       p_source_id: item.id,
       p_hold_days: PAYOUT_HOLD_DAYS,
@@ -579,7 +599,7 @@ export async function creditOrderPayouts(
     const { data: creditedFlag, error: rpcError } = await supabase.rpc("credit_wallet_earning", {
       p_profile_id: product.partner_id,
       p_amount_cents: payoutCents,
-      p_description: `Order payout — ${productName} × ${item.quantity} (${fmtR(lineGross)} less 5.5% Umuhle commission)`,
+      p_description: `Order payout — ${productName} × ${item.quantity} (${fmtR(lineGross)} less ${fmtR(commissionCents)} Umuhle service fee)`,
       p_source_type: "order_item",
       p_source_id: item.id,
       p_hold_days: PAYOUT_HOLD_DAYS,

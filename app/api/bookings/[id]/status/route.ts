@@ -2,8 +2,9 @@
 //
 // Server-side booking status transitions. This is the hook point for
 // booking payouts: the moment a booking is marked "completed", the artist's
-// 94.5% share (5.5% Umuhle commission already deducted) is credited to
-// their wallet, pending the standard payout hold window. See lib/payouts.ts.
+// share (Umuhle's service fee — R5 flat, or 10% above R50 — already
+// deducted) is credited to their wallet, pending the standard payout hold
+// window. See lib/payouts.ts.
 //
 // Callable by:
 //   - an admin, via the same Bearer-token pattern used elsewhere in /api/admin/*

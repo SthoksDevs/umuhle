@@ -146,7 +146,7 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
       return { ok: false, message: "Failed to create booking from intent" };
     }
 
-    // Record the 5.5% commission / 94.5% artist payout split now, at the
+    // Record the Umuhle service fee / artist payout split now, at the
     // point of sale. This does NOT touch the artist's wallet yet — that
     // only happens once the booking is marked "completed" (see
     // lib/payouts.ts and /api/bookings/[id]/status).
@@ -323,7 +323,7 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
       }
     }
 
-    // Record each item's 5.5% commission / 94.5% partner payout split now
+    // Record each item's Umuhle service fee / partner payout split now
     // that payment has cleared. Wallets aren't credited until the order is
     // later marked "delivered" — see lib/payouts.ts.
     try {

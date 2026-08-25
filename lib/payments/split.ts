@@ -3,8 +3,8 @@
 // Decides whether a payment can settle as an INSTANT PayFast split
 // (money goes straight to the partner's own PayFast account at the moment
 // of payment) instead of the default WALLET path (Umuhle gets the full
-// amount, the partner's 94.5% share sits in their wallet under a 2-day
-// hold until withdrawal — see lib/payouts.ts).
+// amount, the partner's share (after Umuhle's service fee) sits in their
+// wallet under a 2-day hold until withdrawal — see lib/payouts.ts).
 //
 // ⚠️  Real financial-risk tradeoff, not just a technical one: once a
 // split fires, the money has left Umuhle's account immediately — there is

@@ -322,7 +322,7 @@ export default function AdminOrderDetailPage() {
           </button>
           {statusDraft === "delivered" && order.status !== "delivered" && (
             <p style={{ width: "100%", fontSize: "0.78rem", color: "var(--grey)", margin: 0 }}>
-              Marking this delivered will credit each partner&apos;s wallet with their 94.5% share (5.5% commission kept by Umuhle).
+              Marking this delivered will credit each partner&apos;s wallet with the price less Umuhle&apos;s service fee (R5 flat, or 10% on line items above R50).
             </p>
           )}
           {order.status === "delivered" && (

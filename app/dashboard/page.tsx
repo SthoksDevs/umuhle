@@ -1979,6 +1979,7 @@ function ServiceManager({ salonId, salonCategories, ownerId }: { salonId: string
     if (form.depositRand.trim()) {
       const depositNum = parseFloat(form.depositRand);
       if (!Number.isFinite(depositNum) || depositNum <= 0) { setError("Enter a valid deposit amount, or leave it blank for no deposit."); return; }
+      if (depositNum < 35) { setError("Deposits must be at least R35 (or leave it blank for no deposit)."); return; }
       if (depositNum > priceNum) { setError("The deposit can't be more than the price."); return; }
       depositCents = Math.round(depositNum * 100);
     }
@@ -2036,8 +2037,8 @@ function ServiceManager({ salonId, salonCategories, ownerId }: { salonId: string
           <input type="number" min="0" step="1" value={form.priceRand} onChange={e => setForm(f => f && ({ ...f, priceRand: e.target.value }))} placeholder="150" style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem" }} />
         </div>
         <div>
-          <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Deposit (ZAR, optional)</label>
-          <input type="number" min="0" step="1" value={form.depositRand} onChange={e => setForm(f => f && ({ ...f, depositRand: e.target.value }))} placeholder="Leave blank for no deposit" style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem" }} />
+          <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Deposit (ZAR, optional — R35 minimum if set)</label>
+          <input type="number" min="35" step="1" value={form.depositRand} onChange={e => setForm(f => f && ({ ...f, depositRand: e.target.value }))} placeholder="Leave blank for no deposit" style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem" }} />
         </div>
       </div>
 
@@ -2396,7 +2397,7 @@ function PricedServicesManager({ user, categories, refreshSignal }: { user: User
     if (!artistId || !form) return;
     const priceNum = parseFloat(form.priceRand);
     if (!form.name.trim()) { setError("Give the service a name."); return; }
-    if (!Number.isFinite(priceNum) || priceNum <= 0) { setError("Enter a valid price."); return; }
+    if (!Number.isFinite(priceNum) || priceNum < 35) { setError("Price must be at least R35."); return; }
     if (!form.duration_minutes || form.duration_minutes <= 0) { setError("Enter a valid duration."); return; }
 
     setSaving(true); setError("");
@@ -2490,8 +2491,8 @@ function PricedServicesManager({ user, categories, refreshSignal }: { user: User
               </select>
             </div>
             <div>
-              <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Price (ZAR)</label>
-              <input type="number" min="0" step="1" value={form.priceRand} onChange={e => setForm(f => f && ({ ...f, priceRand: e.target.value }))} placeholder="350" style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem" }} />
+              <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Price (ZAR, R35 minimum)</label>
+              <input type="number" min="35" step="1" value={form.priceRand} onChange={e => setForm(f => f && ({ ...f, priceRand: e.target.value }))} placeholder="350" style={{ width: "100%", padding: "0.55rem 0.8rem", borderRadius: 8, border: "1.5px solid #E0E0E0", fontSize: "0.85rem" }} />
             </div>
             <div>
               <label style={{ display: "block", fontSize: "0.75rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Duration</label>
@@ -2600,7 +2601,7 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
     const priceRand = styleInputs[cat].priceRand;
     const tags = styleInputs[cat].tags;
     if (!val) return;
-    if (!priceRand || !(parseFloat(priceRand) > 0)) { setError(`Add a price for "${val}" before adding it.`); return; }
+    if (!priceRand || !(parseFloat(priceRand) >= 35)) { setError(`"${val}" needs a price of at least R35.`); return; }
     if (styles[cat].some(e => e.style.toLowerCase() === val.toLowerCase())) { setStyleInputs(i => ({ ...i, [cat]: { style: "", priceRand: "", tags: [] } })); return; }
     setError("");
     setStyles(s => ({ ...s, [cat]: [...s[cat], { style: val, priceRand, tags }] }));
@@ -2633,11 +2634,11 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
   const handleSave = async () => {
     setSaving(true); setError(""); setSaved(false);
     try {
-      // Every listed style needs a price before we save anything.
+      // Every listed style needs a price of at least R35 before we save anything.
       for (const cat of selected as ServiceTypeId[]) {
         for (const entry of styles[cat]) {
-          if (!entry.priceRand || !(parseFloat(entry.priceRand) > 0)) {
-            throw new Error(`Add a price for "${entry.style}" before saving.`);
+          if (!entry.priceRand || !(parseFloat(entry.priceRand) >= 35)) {
+            throw new Error(`"${entry.style}" needs a price of at least R35.`);
           }
         }
       }
@@ -2801,7 +2802,7 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
                               <span style={{ flex: 1, fontSize: "0.85rem", fontWeight: 500, color: "var(--plum)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.style}</span>
                               <span style={{ fontSize: "0.8rem", color: "var(--plum)", flexShrink: 0 }}>R</span>
                               <input
-                                type="number" min="0" step="1" value={entry.priceRand}
+                                type="number" min="35" step="1" value={entry.priceRand}
                                 onChange={e => updateStylePrice(s.id, idx, e.target.value)}
                                 placeholder="price"
                                 style={{ width: 70, flexShrink: 0, padding: "0.3rem 0.5rem", borderRadius: 8, border: !entry.priceRand ? "1.5px solid #E53935" : "1.5px solid rgba(155,127,184,0.3)", fontSize: "0.82rem" }}
@@ -2844,11 +2845,11 @@ function MyServicesTab({ profile, user, onUpdate }: { profile: Profile; user: Us
                         style={{ flex: 1, padding: "0.6rem 0.9rem", borderRadius: 10, border: "1.5px solid #E0E0E0", fontSize: "0.88rem" }}
                       />
                       <input
-                        type="number" min="0" step="1"
+                        type="number" min="35" step="1"
                         value={styleInputs[s.id].priceRand}
                         onChange={e => setStyleInputs(i => ({ ...i, [s.id]: { ...i[s.id], priceRand: e.target.value } }))}
                         onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addStyle(s.id); } }}
-                        placeholder="R price"
+                        placeholder="R price (min 35)"
                         style={{ width: 100, flexShrink: 0, padding: "0.6rem 0.9rem", borderRadius: 10, border: "1.5px solid #E0E0E0", fontSize: "0.88rem" }}
                       />
                       <button
@@ -3104,7 +3105,7 @@ function WalletTab({ user }: { user: User }) {
     <div style={{ maxWidth: 560 }}>
       <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", marginBottom: "0.5rem" }}>Wallet</h2>
       <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem", lineHeight: 1.6 }}>
-        Your earnings from completed bookings and delivered orders land here (Umuhle keeps a 5.5% commission; you keep 94.5%), along with any referral rewards. New earnings sit in <strong>Pending</strong> for {PAYOUT_HOLD_DAYS} days after completion before moving to your available balance — withdraw once that reaches R100. Payouts are processed every Monday, Wednesday and Friday.
+        Your earnings from completed bookings and delivered orders land here (Umuhle keeps a service fee — R5 flat, or 10% on amounts above R50 — and you keep the rest), along with any referral rewards. New earnings sit in <strong>Pending</strong> for {PAYOUT_HOLD_DAYS} days after completion before moving to your available balance — withdraw once that reaches R100. Payouts are processed every Monday, Wednesday and Friday.
       </p>
 
       {loadError && (

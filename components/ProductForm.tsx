@@ -225,15 +225,15 @@ export default function ProductForm({
   const validate = (): string | null => {
     if (!form.name.trim()) return "Product name is required.";
     if (!isVariable) {
-      if (!form.price || isNaN(Number(form.price)) || Number(form.price) <= 0)
-        return "A valid price is required.";
+      if (!form.price || isNaN(Number(form.price)) || Number(form.price) < 35)
+        return "Price must be at least R35.";
     } else {
       if (form.variants.length === 0)
         return "Add at least one variant (e.g. size or colour).";
       for (const v of form.variants) {
         if (!v.label.trim()) return "All variants need a label (e.g. \"250ml\").";
-        if (!v.price || isNaN(Number(v.price)) || Number(v.price) <= 0)
-          return "All variants need a valid price.";
+        if (!v.price || isNaN(Number(v.price)) || Number(v.price) < 35)
+          return "All variants need a price of at least R35.";
       }
     }
     return null;
@@ -467,8 +467,8 @@ export default function ProductForm({
       {!isVariable && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginTop: "0.85rem" }}>
           <div>
-            <label style={{ ...labelStyle, marginTop: 0 }}>Price (R) *</label>
-            <input type="number" min="0" step="0.01" value={form.price}
+            <label style={{ ...labelStyle, marginTop: 0 }}>Price (R) * — R35 minimum</label>
+            <input type="number" min="35" step="0.01" value={form.price}
               onChange={e => setForm(f => ({ ...f, price: e.target.value }))}
               placeholder="149.99" style={inputStyle} />
           </div>
@@ -491,7 +491,7 @@ export default function ProductForm({
           {/* Header row */}
           {form.variants.length > 0 && (
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1.2fr 32px", gap: "0.5rem", marginBottom: "0.35rem" }}>
-              {["Label *", "Price (R) *", "Stock", "SKU (optional)", ""].map((h, i) => (
+              {["Label *", "Price (R) * — min R35", "Stock", "SKU (optional)", ""].map((h, i) => (
                 <span key={i} style={{ fontSize: "0.7rem", fontWeight: 600, color: "#aaa", textTransform: "uppercase", letterSpacing: "0.05em" }}>{h}</span>
               ))}
             </div>
@@ -502,7 +502,7 @@ export default function ProductForm({
               <input value={v.label} placeholder="e.g. 250ml"
                 onChange={e => updateVariant(i, { label: e.target.value })}
                 style={smallInputStyle} />
-              <input type="number" min="0" step="0.01" value={v.price} placeholder="49.99"
+              <input type="number" min="35" step="0.01" value={v.price} placeholder="49.99"
                 onChange={e => updateVariant(i, { price: e.target.value })}
                 style={smallInputStyle} />
               <input type="number" min="0" value={v.stock_count}

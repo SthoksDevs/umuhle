@@ -4,9 +4,10 @@
 // `supabase.from("orders").update({ status })` call that used to live in
 // app/admin/orders/[id]/page.tsx — moving it server-side is what lets us
 // safely credit partner payouts in the same request: the moment an order
-// is marked "delivered", every partner in that order gets their 94.5% share
-// (5.5% Umuhle commission already deducted) credited to their wallet,
-// pending the standard payout hold window. See lib/payouts.ts.
+// is marked "delivered", every partner in that order gets their share
+// (Umuhle's service fee — R5 flat, or 10% above R50 — already deducted)
+// credited to their wallet, pending the standard payout hold window. See
+// lib/payouts.ts.
 //
 // Uses the same Bearer-token admin auth pattern as
 // app/api/admin/email-log/route.ts.

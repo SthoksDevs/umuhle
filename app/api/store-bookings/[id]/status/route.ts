@@ -74,8 +74,8 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   }
 
   if (status === "completed") {
-    // Credits the salon owner's wallet with their 94.5% of the deposit —
-    // own try/catch, independent of everything else here. Safe to call
+    // Credits the salon owner's wallet with the deposit less Umuhle's
+    // service fee — own try/catch, independent of everything else here. Safe to call
     // repeatedly (creditStoreBookingDepositPayout no-ops once already
     // credited, including when it was already settled instantly via a
     // PayFast split — see lib/payouts.ts).
