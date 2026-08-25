@@ -73,7 +73,7 @@ export default function FeesPage() {
             <p>
               The same service fee — a flat R5, or 10% of the price, whichever
               is higher — applies to completed bookings; you keep the rest, credited to your wallet automatically
-              once the booking is marked complete. There&apos;s no fee to create a profile or list your services.
+              once the booking is marked complete. There is no fee to create a profile or list your services.
               Services must be priced at R35 or more.
             </p>
           </Section>
@@ -125,9 +125,9 @@ export default function FeesPage() {
 
           <Section title="Questions">
             <p>
-              If anything here is unclear, reach out at{" "}
+              If anything here is unclear, contact us at{" "}
               <a href="mailto:info@umuhle.co.za" className="text-[#9b7fb8] underline">info@umuhle.co.za</a> —
-              we&apos;re happy to walk through how fees apply to your specific situation.
+              we will be happy to walk through how fees apply to your specific situation.
             </p>
           </Section>
 
