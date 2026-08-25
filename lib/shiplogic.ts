@@ -81,6 +81,20 @@ export function isMockMode(): boolean {
   return !API_KEY;
 }
 
+// ── Global courier pause ─────────────────────────────────────────────────────
+// Lets checkout stop quoting/charging for Ship Logic courier platform-wide
+// (e.g. while rates are too high, or a courier application is pending)
+// without touching anything else here — booking (createShipment) and
+// tracking (getTracking) still work as before for shipments already placed,
+// and this flips back with an env var, no code change. Checked at the two
+// courier-checkout call sites: app/api/checkout/courier-rates/route.ts and
+// lib/orders.ts's createPendingOrder. NEXT_PUBLIC_ so the same flag also
+// gates the client-side checkout UI (see app/checkout/page.tsx) without a
+// second variable to keep in sync.
+export function isCourierCheckoutEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_COURIER_CHECKOUT_ENABLED !== "false";
+}
+
 function authHeaders(): Record<string, string> {
   return {
     "Content-Type": "application/json",

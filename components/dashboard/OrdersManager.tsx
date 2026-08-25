@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { OrderShipment, FulfillmentMethod } from "@/types";
+import { deliveryArrangementOption } from "@/lib/deliveryArrangement";
 import Image from "next/image";
 
 /**
@@ -452,6 +453,12 @@ function ShipmentsManager({ user }: { user: { id: string } }) {
                     <p style={{ fontSize: "0.74rem", color: "#aaa", margin: "0.2rem 0 0" }}>
                       Parcel: {s.parcel_weight_g ? `${s.parcel_weight_g}g` : ""}
                       {s.parcel_length_cm ? ` · ${s.parcel_length_cm}×${s.parcel_width_cm ?? "?"}×${s.parcel_height_cm ?? "?"}cm` : ""}
+                    </p>
+                  )}
+                  {!isEditing && !s.waybill_number && s.delivery_arrangement_method && (
+                    <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: "0.3rem 0 0" }}>
+                      📦 {deliveryArrangementOption(s.delivery_arrangement_method)?.label ?? "Custom arrangement"}
+                      {s.delivery_arrangement_note ? ` — ${s.delivery_arrangement_note}` : ""}
                     </p>
                   )}
                   {!isEditing && s.waybill_number && (

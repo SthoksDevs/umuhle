@@ -7,7 +7,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { PaymentMethod, FulfillmentMethod } from "@/types";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
-  getRates, buildAddress, buildParcel,
+  getRates, buildAddress, buildParcel, isCourierCheckoutEnabled,
   COURIER_PROVIDER_LABEL, COURIER_PROVIDER_LABEL_MOCK,
 } from "@/lib/shiplogic";
 
@@ -105,12 +105,15 @@ export async function createPendingOrder(
   const partnerIds = [...new Set(products.map((p) => p.partner_id).filter(Boolean))];
   const partnerProfiles: Record<
     string,
-    { address: string | null; suburb: string | null; city: string | null; province: string | null; postal_code: string | null; latitude: number | null; longitude: number | null }
+    {
+      address: string | null; suburb: string | null; city: string | null; province: string | null; postal_code: string | null; latitude: number | null; longitude: number | null;
+      delivery_arrangement_method: string | null; delivery_arrangement_note: string | null;
+    }
   > = {};
   if (partnerIds.length > 0) {
     const { data: profilesData } = await supabase
       .from("profiles")
-      .select("id, address, suburb, city, province, postal_code, latitude, longitude")
+      .select("id, address, suburb, city, province, postal_code, latitude, longitude, delivery_arrangement_method, delivery_arrangement_note")
       .in("id", partnerIds);
     (profilesData ?? []).forEach((p) => { partnerProfiles[p.id] = p; });
   }
@@ -202,6 +205,12 @@ export async function createPendingOrder(
   let shippingFeeCents = 0;
   for (const group of groups.values()) {
     if (group.method !== "courier") continue;
+    // Courier is paused platform-wide — see lib/shiplogic.ts. Same fallback
+    // as a failed/empty quote below: ships with no fee, bookable by hand
+    // later. The customer already saw the partner's own delivery
+    // arrangement (see the order_shipments insert further down) instead of
+    // a rate at checkout.
+    if (!isCourierCheckoutEnabled()) continue;
     const origin = partnerProfiles[group.partnerId];
     try {
       const { rates, isMock } = await getRates({
@@ -332,6 +341,11 @@ export async function createPendingOrder(
           parcel_length_cm: group.maxLength || null,
           parcel_width_cm: group.maxWidth || null,
           parcel_height_cm: group.maxHeight || null,
+          // Snapshot of the partner's own "how delivery will work" statement
+          // (app/dashboard/page.tsx's PartnerFulfillmentSettings) at order
+          // time — irrelevant/null for collection, same as destination_*.
+          delivery_arrangement_method: method === "courier" ? origin?.delivery_arrangement_method ?? null : null,
+          delivery_arrangement_note: method === "courier" ? origin?.delivery_arrangement_note ?? null : null,
         })
         .select("id")
         .single();

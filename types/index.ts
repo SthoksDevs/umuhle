@@ -96,6 +96,13 @@ export interface Profile {
   longitude: number | null;
   allow_collection: boolean; // offers in-person collection instead of courier
   allow_courier: boolean;    // ships via courier — default true, so existing sellers keep working unchanged
+  // ── Delivery arrangement (courier pause) ──
+  // How this partner will actually get a "courier" order to the customer
+  // while there's no live Ship Logic rate/booking — see
+  // lib/deliveryArrangement.ts and NEXT_PUBLIC_COURIER_CHECKOUT_ENABLED in
+  // lib/shiplogic.ts. Only meaningful when allow_courier is true.
+  delivery_arrangement_method: string | null;
+  delivery_arrangement_note: string | null;
   // ── WhatsApp comms preference ──
   // Email is the default, always-on channel. WABA messaging costs money
   // per conversation, so non-essential WhatsApp sends (booking/order
@@ -405,6 +412,11 @@ export interface OrderShipment {
   courier_status: string | null;
   courier_synced_at: string | null;
   courier_error: string | null; // last booking/sync failure message, if any
+  // Snapshot of the partner's own delivery arrangement at order time — see
+  // Profile.delivery_arrangement_method and lib/deliveryArrangement.ts.
+  // Null for collection.
+  delivery_arrangement_method: string | null;
+  delivery_arrangement_note: string | null;
 }
 
 // Ads (a separate paid promotional-content entity) were removed in

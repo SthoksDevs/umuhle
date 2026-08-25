@@ -27,6 +27,13 @@ import { useGeolocation, type GeoStatus } from "@/lib/geolocation";
 import { subscribeToPush, unsubscribeFromPush } from "@/lib/push-client";
 import { normalizePhone, isValidSAMobile } from "@/lib/phone";
 import DashboardTour from "@/components/DashboardTour";
+import { DELIVERY_ARRANGEMENT_OPTIONS, type DeliveryArrangementMethod } from "@/lib/deliveryArrangement";
+
+// Mirrors lib/shiplogic.ts's isCourierCheckoutEnabled() — see
+// app/checkout/page.tsx's copy of the same flag for why this is a plain env
+// read here rather than an import (lib/shiplogic.ts pulls in server-only
+// fetch code that shouldn't ship in the client bundle).
+const COURIER_CHECKOUT_ENABLED = process.env.NEXT_PUBLIC_COURIER_CHECKOUT_ENABLED !== "false";
 
 // Refreshes the logged-in artist's stored lat/long from the browser so
 // nearby_artists() (supabase/migrations/20260727_proximity_and_push.sql)
@@ -549,9 +556,19 @@ function PartnerFulfillmentSettings({ profile, onUpdate }: { profile: Profile; o
   );
   const [allowCollection, setAllowCollection] = useState(profile.allow_collection);
   const [allowCourier, setAllowCourier] = useState(profile.allow_courier);
+  const [deliveryMethod, setDeliveryMethod] = useState<DeliveryArrangementMethod | "">(
+    (profile.delivery_arrangement_method as DeliveryArrangementMethod | null) ?? ""
+  );
+  const [deliveryNote, setDeliveryNote] = useState(profile.delivery_arrangement_note ?? "");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+
+  // Courier's paused platform-wide (see lib/shiplogic.ts) — a partner who
+  // still offers it needs to say how delivery will actually work so
+  // checkout doesn't leave customers guessing. Irrelevant once courier's
+  // back on, or if this partner only offers collection anyway.
+  const arrangementRequired = !COURIER_CHECKOUT_ENABLED && allowCourier;
 
   const handleAddressSelect = (r: GeocodeSuggestion) => {
     setAddress(r.street || r.displayName);
@@ -570,6 +587,14 @@ function PartnerFulfillmentSettings({ profile, onUpdate }: { profile: Profile; o
       setError("Turn on at least one of courier or collection — otherwise customers have no way to actually get an order from you.");
       return;
     }
+    if (arrangementRequired && !deliveryMethod) {
+      setError("Courier's paused for now — choose how you'll handle delivery so customers know what to expect.");
+      return;
+    }
+    if (arrangementRequired && deliveryMethod === "custom" && !deliveryNote.trim()) {
+      setError("Add a short message for customers describing how delivery will work.");
+      return;
+    }
     setSaving(true); setError(""); setSaved(false);
     const { data, error: err } = await supabase
       .from("profiles")
@@ -583,6 +608,10 @@ function PartnerFulfillmentSettings({ profile, onUpdate }: { profile: Profile; o
         longitude: coords?.longitude ?? null,
         allow_collection: allowCollection,
         allow_courier: allowCourier,
+        // Cleared entirely once collection-only, so a stale arrangement
+        // doesn't linger from before they turned courier off.
+        delivery_arrangement_method: allowCourier ? deliveryMethod || null : null,
+        delivery_arrangement_note: allowCourier ? deliveryNote.trim() || null : null,
         updated_at: new Date().toISOString(),
       })
       .eq("id", profile.id)
@@ -651,6 +680,49 @@ function PartnerFulfillmentSettings({ profile, onUpdate }: { profile: Profile; o
           <div style={{ fontSize: "0.72rem", color: "#999", marginTop: "0.15rem" }}>They fetch it from you</div>
         </button>
       </div>
+
+      {arrangementRequired && (
+        <div style={{ marginTop: "1.1rem", background: "#FFF8E1", border: "1.5px solid #F0C766", borderRadius: 14, padding: "1.1rem" }}>
+          <p style={{ fontSize: "0.85rem", fontWeight: 600, color: "#8A6100", marginBottom: "0.3rem" }}>🚚 Courier is paused for now</p>
+          <p style={{ fontSize: "0.8rem", color: "#7A5A00", lineHeight: 1.5, marginBottom: "0.9rem" }}>
+            We're not quoting or charging Ship Logic courier rates at checkout right now. Customers will still be able to choose delivery and give you their address — pick how you'll actually get it to them.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+            {DELIVERY_ARRANGEMENT_OPTIONS.map((opt) => (
+              <label
+                key={opt.id}
+                style={{
+                  display: "flex", gap: "0.6rem", alignItems: "flex-start", padding: "0.65rem 0.85rem", borderRadius: 10, cursor: "pointer",
+                  border: deliveryMethod === opt.id ? "1.5px solid var(--plum)" : "1.5px solid #E0E0E0",
+                  background: deliveryMethod === opt.id ? "rgba(155,127,184,0.08)" : "#fff",
+                }}
+              >
+                <input
+                  type="radio"
+                  name="delivery-arrangement"
+                  checked={deliveryMethod === opt.id}
+                  onChange={() => setDeliveryMethod(opt.id)}
+                  style={{ marginTop: "0.2rem" }}
+                />
+                <span>
+                  <span style={{ display: "block", fontSize: "0.85rem", fontWeight: 600, color: "#333" }}>{opt.label}</span>
+                  <span style={{ display: "block", fontSize: "0.75rem", color: "#888", marginTop: "0.1rem" }}>{opt.description}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          <label style={{ ...smallLabel, marginTop: "0.9rem" }}>
+            {deliveryMethod === "custom" ? "Message for customers *" : "Add a note for customers (optional)"}
+          </label>
+          <textarea
+            value={deliveryNote}
+            onChange={(e) => setDeliveryNote(e.target.value)}
+            placeholder={deliveryMethod === "custom" ? "e.g. \"I'll message you on WhatsApp within a day to arrange a time.\"" : "Extra detail shown alongside the option above"}
+            rows={2}
+            style={{ ...smallInput, resize: "vertical" }}
+          />
+        </div>
+      )}
 
       {error && <p style={{ color: "#E53935", fontSize: "0.85rem", marginTop: "0.75rem" }}>{error}</p>}
       {saved && <p style={{ color: "var(--forest)", fontSize: "0.85rem", marginTop: "0.75rem" }}>Fulfillment settings saved.</p>}
@@ -4426,9 +4498,30 @@ function DashboardContent() {
     setActiveTab(next);
   };
 
+  // Courier's paused platform-wide (see lib/shiplogic.ts) — nag any partner
+  // who still offers it and hasn't said how they'll handle delivery yet
+  // (see PartnerFulfillmentSettings). Goes quiet the moment they save one.
+  const needsDeliveryArrangement =
+    profile.is_partner && profile.allow_courier && !COURIER_CHECKOUT_ENABLED && !profile.delivery_arrangement_method;
+
   return (
     <div className="dashboard-app">
       <SiteHeader initialUser={user} initialProfile={profile} />
+
+      {/* ── Courier paused — delivery arrangement required ── */}
+      {needsDeliveryArrangement && (
+        <div style={{ background: "#FFF3E0", borderBottom: "1.5px solid #F0C766", padding: "0.85rem 1.5rem", display: "flex", alignItems: "center", justifyContent: "center", gap: "1rem", flexWrap: "wrap" }}>
+          <p style={{ margin: 0, fontSize: "0.85rem", color: "#8A6100", fontWeight: 500, textAlign: "center" }}>
+            🚚 Courier is paused for now — let customers know how you&apos;ll handle delivery.
+          </p>
+          <button
+            onClick={() => setActiveTab("profile")}
+            style={{ background: "#8A6100", color: "#fff", border: "none", borderRadius: 999, padding: "0.4rem 1rem", fontSize: "0.8rem", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
+          >
+            Set it now
+          </button>
+        </div>
+      )}
 
       {/* ── WhatsApp incomplete nudge ── */}
       {showWhatsAppNudge && (

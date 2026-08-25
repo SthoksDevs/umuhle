@@ -10,6 +10,7 @@ import { SA_PROVINCES } from "@/types";
 // Type-only — erased at compile time, so this doesn't pull lib/shiplogic's
 // server-side fetch/env-var code into the client bundle.
 import type { CourierRate } from "@/lib/shiplogic";
+import { formatDeliveryArrangement } from "@/lib/deliveryArrangement";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -19,6 +20,13 @@ import AuthModal from "@/components/AuthModal";
 const ICON = "/umuhle-icon.png";
 const fmt = (cents: number) => `R${(cents / 100).toFixed(0)}`;
 type PayMethod = "payfast" | "ozow";
+
+// Mirrors lib/shiplogic.ts's isCourierCheckoutEnabled() — duplicated as a
+// plain env read (rather than imported) since that file also pulls in
+// server-only fetch code that shouldn't ship in the client bundle (see the
+// CourierRate type-only import above). Keep both in sync if this ever
+// changes name.
+const COURIER_CHECKOUT_ENABLED = process.env.NEXT_PUBLIC_COURIER_CHECKOUT_ENABLED !== "false";
 
 // ── Coupon types ──────────────────────────────────────────────────────────────
 interface Coupon {
@@ -313,6 +321,8 @@ interface PartnerFulfillmentInfo {
   longitude: number | null;
   allow_collection: boolean;
   allow_courier: boolean;
+  delivery_arrangement_method: string | null;
+  delivery_arrangement_note: string | null;
 }
 
 /**
@@ -491,7 +501,7 @@ export default function CheckoutPage() {
     const ids = partnerIdsKey.split(",");
     supabase
       .from("profiles")
-      .select("id, full_name, address, suburb, city, province, postal_code, latitude, longitude, allow_collection, allow_courier")
+      .select("id, full_name, address, suburb, city, province, postal_code, latitude, longitude, allow_collection, allow_courier, delivery_arrangement_method, delivery_arrangement_note")
       .in("id", ids)
       .then(({ data }) => {
         if (!data) return;
@@ -508,6 +518,10 @@ export default function CheckoutPage() {
   // origin to have loaded from partnerInfo, and debounces so it doesn't
   // fire on every keystroke while the customer is still typing the address.
   useEffect(() => {
+    // Courier is paused platform-wide — see lib/shiplogic.ts. Each
+    // partner's own delivery arrangement is shown instead (rendered below),
+    // so there's no rate to fetch here at all.
+    if (!COURIER_CHECKOUT_ENABLED) { setCourierQuotes({}); return; }
     if (courierGroups.length === 0) { setCourierQuotes({}); return; }
     if (!form.city.trim() || !form.province) return;
     if (courierGroups.some((g) => !partnerInfo[g.partnerId])) return;
@@ -831,13 +845,13 @@ export default function CheckoutPage() {
                                     cursor: "pointer",
                                   }}
                                 >
-                                  {m === "courier" ? "🚚 Courier" : "🏠 Collection"}
+                                  {m === "courier" ? (COURIER_CHECKOUT_ENABLED ? "🚚 Courier" : "📦 Delivery") : "🏠 Collection"}
                                 </button>
                               ))}
                             </div>
                           ) : (
                             <span style={{ fontSize: "0.78rem", color: "var(--light)" }}>
-                              {method === "courier" ? "Ships via courier" : `Collect in person from ${partnerName}`}
+                              {method === "courier" ? (COURIER_CHECKOUT_ENABLED ? "Ships via courier" : "Delivery arranged with seller") : `Collect in person from ${partnerName}`}
                             </span>
                           )}
                         </div>
@@ -846,7 +860,12 @@ export default function CheckoutPage() {
                             📍 {[info?.address, info?.suburb, info?.city, info?.province].filter(Boolean).join(", ") || "Pickup address available after checkout"}
                           </p>
                         )}
-                        {method === "courier" && (() => {
+                        {method === "courier" && !COURIER_CHECKOUT_ENABLED && (
+                          <p style={{ fontSize: "0.78rem", color: "var(--grey)", marginTop: "0.5rem", lineHeight: 1.5 }}>
+                            📦 {formatDeliveryArrangement(info?.delivery_arrangement_method, info?.delivery_arrangement_note)}
+                          </p>
+                        )}
+                        {method === "courier" && COURIER_CHECKOUT_ENABLED && (() => {
                           const quote = courierQuotes[partnerId];
                           if (!form.city.trim() || !form.province) {
                             return (
@@ -911,7 +930,12 @@ export default function CheckoutPage() {
             {/* Shipping */}
             {anyCourier ? (
               <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 16, padding: "1.5rem" }}>
-                <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: "1.25rem" }}>Delivery address</h3>
+                <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.1rem", marginBottom: COURIER_CHECKOUT_ENABLED ? "1.25rem" : "0.5rem" }}>Delivery address</h3>
+                {!COURIER_CHECKOUT_ENABLED && (
+                  <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginBottom: "1rem" }}>
+                    We'll pass this on to the seller so they can arrange delivery with you directly.
+                  </p>
+                )}
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
                   <input placeholder="Street address *" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} style={inputStyle} />
                   <div className="checkout-field-row">

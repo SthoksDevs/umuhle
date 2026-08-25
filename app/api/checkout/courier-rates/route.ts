@@ -16,7 +16,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getRates, buildAddress, buildParcel, type CourierRate } from "@/lib/shiplogic";
+import { getRates, buildAddress, buildParcel, isCourierCheckoutEnabled, type CourierRate } from "@/lib/shiplogic";
 
 interface GroupInput {
   partnerId: string;
@@ -48,6 +48,13 @@ export async function POST(req: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
+
+  // Courier is paused platform-wide — see lib/shiplogic.ts. No point calling
+  // Ship Logic for a rate nothing will charge; the checkout page shows each
+  // partner's own delivery arrangement instead (see lib/deliveryArrangement.ts).
+  if (!isCourierCheckoutEnabled()) {
+    return NextResponse.json({ quotes: {} });
+  }
 
   const body = await req.json();
   const { groups, destination } = body as { groups: GroupInput[]; destination: DestinationInput };
