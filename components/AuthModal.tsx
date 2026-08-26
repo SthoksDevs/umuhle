@@ -24,6 +24,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { gTag, fbq, ttq } from "@/lib/analytics";
 import { normalizePhone, isValidSAMobile } from "@/lib/phone";
+import { CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION } from "@/lib/legal";
 
 export default function AuthModal() {
   const router       = useRouter();
@@ -52,6 +53,14 @@ export default function AuthModal() {
   const [otpVerifying, setOtpVerifying] = useState(false);
   const [otpError, setOtpError]         = useState("");
   const [resendCooldown, setResendCooldown] = useState(0);
+
+  // Required, explicit acceptance — not just the passive footer link this
+  // replaced. terms_version/privacy_version travel through signUp()'s
+  // options.data the same way full_name/phone/account_type already do, and
+  // handle_new_user() (see the 20260826 migration) stamps them onto the new
+  // profile row plus a terms_acceptance_log entry, in the same transaction
+  // that creates the account.
+  const [termsAccepted, setTermsAccepted] = useState(false);
 
   useEffect(() => {
     if (resendCooldown <= 0) return;
@@ -134,6 +143,10 @@ export default function AuthModal() {
   };
 
   const handleOAuth = async (provider: "google" | "facebook") => {
+    if (mode === "register" && !termsAccepted) {
+      setError("Please accept the Terms & Conditions and Privacy Policy first.");
+      return;
+    }
     setLoading(true);
     const dest = nextParam && nextParam.startsWith("/") ? nextParam : pathname;
     await supabase.auth.signInWithOAuth({
@@ -146,6 +159,10 @@ export default function AuthModal() {
     e.preventDefault();
     if (mode === "register" && !otpVerified) {
       setError("Please verify your WhatsApp number first.");
+      return;
+    }
+    if (mode === "register" && !termsAccepted) {
+      setError("Please accept the Terms & Conditions and Privacy Policy first.");
       return;
     }
     setLoading(true);
@@ -180,7 +197,10 @@ export default function AuthModal() {
           email: form.email,
           password: form.password,
           options: {
-            data: { full_name: form.name, phone: normalizePhone(form.phone), account_type: "customer" },
+            data: {
+              full_name: form.name, phone: normalizePhone(form.phone), account_type: "customer",
+              terms_version: CURRENT_TERMS_VERSION, privacy_version: CURRENT_PRIVACY_VERSION,
+            },
             emailRedirectTo: `${window.location.origin}/auth/callback`,
           },
         });
@@ -242,9 +262,26 @@ export default function AuthModal() {
           {mode === "login" ? "Sign in to book your next appointment." : mode === "forgot" ? "Enter your email or WhatsApp number to receive a reset link." : "Join Umuhle — it's free."}
         </p>
 
+        {mode === "register" && (
+          <label style={{ display: "flex", alignItems: "flex-start", gap: "0.6rem", marginBottom: "1.25rem", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={termsAccepted}
+              onChange={e => setTermsAccepted(e.target.checked)}
+              style={{ marginTop: "0.2rem", flexShrink: 0 }}
+            />
+            <span style={{ fontSize: "0.8rem", color: "var(--grey)", lineHeight: 1.5 }}>
+              I have read and agree to the{" "}
+              <Link href="/terms-and-conditions" target="_blank" style={{ color: "var(--plum)" }}>Terms &amp; Conditions</Link>
+              {" "}and{" "}
+              <Link href="/privacy-policy" target="_blank" style={{ color: "var(--plum)" }}>Privacy Policy</Link>.
+            </span>
+          </label>
+        )}
+
         {mode !== "forgot" && (
           <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1.5rem" }}>
-            <button onClick={() => handleOAuth("google")} disabled={loading} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "1.5px solid #E0E0E0", background: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}>
+            <button onClick={() => handleOAuth("google")} disabled={loading || (mode === "register" && !termsAccepted)} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "1.5px solid #E0E0E0", background: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}>
               <svg width="20" height="20" viewBox="0 0 48 48">
                 <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.2l6.7-6.7C35.8 2.4 30.2 0 24 0 14.8 0 6.9 5.4 3 13.3l7.8 6.1C12.6 13.1 17.9 9.5 24 9.5z"/>
                 <path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.5c-.5 2.8-2.1 5.2-4.5 6.8l7 5.4c4.1-3.8 6.5-9.4 6.5-16.2z"/>
@@ -253,7 +290,7 @@ export default function AuthModal() {
               </svg>
               Continue with Google
             </button>
-            <button onClick={() => handleOAuth("facebook")} disabled={loading} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "none", background: "#1877F2", color: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}>
+            <button onClick={() => handleOAuth("facebook")} disabled={loading || (mode === "register" && !termsAccepted)} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "none", background: "#1877F2", color: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff">
                 <path d="M24 12a12 12 0 1 0-13.875 11.85v-8.385H7.08V12h3.045V9.356c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874V12h3.328l-.532 3.465h-2.796v8.385A12 12 0 0 0 24 12z"/>
               </svg>
@@ -373,7 +410,7 @@ export default function AuthModal() {
             </p>
           )}
 
-          <button type="submit" className="btn-plum" style={{ marginTop: "0.25rem" }} disabled={loading || (mode === "register" && !otpVerified)}>
+          <button type="submit" className="btn-plum" style={{ marginTop: "0.25rem" }} disabled={loading || (mode === "register" && (!otpVerified || !termsAccepted))}>
             {loading ? "Please wait…" : mode === "login" ? "Sign in" : mode === "forgot" ? "Send reset link" : "Create account"}
           </button>
         </form>
@@ -385,12 +422,14 @@ export default function AuthModal() {
           </button>
         </p>
 
-        <p style={{ textAlign: "center", marginTop: "0.75rem", fontSize: "0.75rem", color: "var(--light)" }}>
-          By continuing you agree to our{" "}
-          <Link href="/terms-and-conditions" style={{ color: "var(--plum)" }} onClick={close}>Terms</Link>
-          {" "}and{" "}
-          <Link href="/privacy-policy" style={{ color: "var(--plum)" }} onClick={close}>Privacy Policy</Link>
-        </p>
+        {mode !== "register" && (
+          <p style={{ textAlign: "center", marginTop: "0.75rem", fontSize: "0.75rem", color: "var(--light)" }}>
+            By continuing you agree to our{" "}
+            <Link href="/terms-and-conditions" style={{ color: "var(--plum)" }} onClick={close}>Terms</Link>
+            {" "}and{" "}
+            <Link href="/privacy-policy" style={{ color: "var(--plum)" }} onClick={close}>Privacy Policy</Link>
+          </p>
+        )}
       </div>
     </div>
   );

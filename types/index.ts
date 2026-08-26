@@ -103,6 +103,14 @@ export interface Profile {
   // lib/shiplogic.ts. Only meaningful when allow_courier is true.
   delivery_arrangement_method: string | null;
   delivery_arrangement_note: string | null;
+  // ── Terms/Privacy acceptance ──
+  // See lib/legal.ts for the current versions and app/api/legal/accept for
+  // how a stale version gets re-accepted. terms_acceptance_log (not
+  // modelled here — write-mostly) holds the full history.
+  terms_accepted: boolean;
+  terms_accepted_at: string | null;
+  terms_version: string | null;
+  privacy_version: string | null;
   // ── WhatsApp comms preference ──
   // Email is the default, always-on channel. WABA messaging costs money
   // per conversation, so non-essential WhatsApp sends (booking/order

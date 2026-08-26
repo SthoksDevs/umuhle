@@ -35,6 +35,7 @@ export default function Footer() {
 
           {/* Legal links */}
           <div style={{ display: "flex", gap: "1.25rem", alignItems: "center", flexWrap: "wrap" }}>
+            <Link href="/how-it-works" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>How It Works</Link>
             <Link href="/privacy-policy" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>Privacy Policy</Link>
             <Link href="/terms-and-conditions" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>Terms</Link>
             <Link href="/returns" style={{ fontSize: "0.78rem", color: "var(--grey)", textDecoration: "none" }}>Returns Policy</Link>

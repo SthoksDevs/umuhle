@@ -28,6 +28,7 @@ import { subscribeToPush, unsubscribeFromPush } from "@/lib/push-client";
 import { normalizePhone, isValidSAMobile } from "@/lib/phone";
 import DashboardTour from "@/components/DashboardTour";
 import { DELIVERY_ARRANGEMENT_OPTIONS, type DeliveryArrangementMethod } from "@/lib/deliveryArrangement";
+import { CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION, needsLegalReacceptance } from "@/lib/legal";
 
 // Mirrors lib/shiplogic.ts's isCourierCheckoutEnabled() — see
 // app/checkout/page.tsx's copy of the same flag for why this is a plain env
@@ -4393,6 +4394,8 @@ function DashboardContent() {
   }, [searchParams]);
 
   const [showWhatsAppNudge, setShowWhatsAppNudge] = useState(false);
+  const [acceptingLegal, setAcceptingLegal] = useState(false);
+  const [legalError, setLegalError] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
 
@@ -4413,8 +4416,10 @@ function DashboardContent() {
     if (data) {
       const p = data as Profile;
       setProfile(p);
-      // Admins don't need the "add your WhatsApp number" onboarding nudge.
-      if (!p.phone && !p.is_admin) setTimeout(() => setShowWhatsAppNudge(true), 1500);
+      // Admins don't need the "add your WhatsApp number" onboarding nudge,
+      // and the legal re-acceptance modal (if needed) takes priority — no
+      // point stacking two modals.
+      if (!p.phone && !p.is_admin && !needsLegalReacceptance(p)) setTimeout(() => setShowWhatsAppNudge(true), 1500);
       // First-visit spotlight tour — see components/DashboardTour.tsx.
       // Fires after the nudge above so they're not stacked; skipping the
       // tour still marks it done via handleTourClose, so this only ever
@@ -4435,6 +4440,26 @@ function DashboardContent() {
       const updated = { ...profile, has_completed_dashboard_tour: true };
       setProfile(updated);
       supabase.from("profiles").update({ has_completed_dashboard_tour: true }).eq("id", profile.id).then(() => {});
+    }
+  };
+
+  // Terms/Privacy updated since this profile last accepted (or it never
+  // has, for accounts created before this existed / via OAuth, which
+  // doesn't carry the signup-time metadata AuthModal sets — see
+  // lib/legal.ts). Logs to terms_acceptance_log via the API route, not a
+  // direct profiles update, so there's a proper audit trail entry.
+  const handleAcceptLegal = async () => {
+    setAcceptingLegal(true);
+    setLegalError("");
+    try {
+      const res = await fetch("/api/legal/accept", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Something went wrong");
+      setProfile(p => p ? { ...p, terms_accepted: true, terms_accepted_at: data.terms_accepted_at, terms_version: data.terms_version, privacy_version: data.privacy_version } : p);
+    } catch (err: unknown) {
+      setLegalError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setAcceptingLegal(false);
     }
   };
 
@@ -4524,6 +4549,30 @@ function DashboardContent() {
       )}
 
       {/* ── WhatsApp incomplete nudge ── */}
+      {/* ── Terms/Privacy re-acceptance — blocking, not dismissible via
+           backdrop click, since this is a required gate rather than a
+           nudge. Takes priority over the WhatsApp nudge below (rendered
+           first, so it's on top if both would otherwise show). ── */}
+      {profile && needsLegalReacceptance(profile) && (
+        <div className="modal-overlay">
+          <div style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 420, boxShadow: "0 24px 80px rgba(0,0,0,0.15)", textAlign: "center" }}>
+            <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>📋</div>
+            <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", marginBottom: "0.5rem" }}>Our Terms &amp; Privacy Policy have been updated</h3>
+            <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem", lineHeight: 1.6 }}>
+              Please have a look and confirm you're happy to continue on Umuhle under the current version.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", marginBottom: "1.5rem" }}>
+              <Link href="/terms-and-conditions" target="_blank" style={{ color: "var(--plum)", fontSize: "0.85rem" }}>Read Terms &amp; Conditions →</Link>
+              <Link href="/privacy-policy" target="_blank" style={{ color: "var(--plum)", fontSize: "0.85rem" }}>Read Privacy Policy →</Link>
+            </div>
+            {legalError && <p style={{ color: "#E53935", fontSize: "0.8rem", marginBottom: "1rem" }}>{legalError}</p>}
+            <button className="btn-plum" onClick={handleAcceptLegal} disabled={acceptingLegal} style={{ width: "100%", padding: "0.75rem" }}>
+              {acceptingLegal ? "Please wait…" : "I agree — continue"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {showWhatsAppNudge && (
         <div className="modal-overlay" onClick={() => setShowWhatsAppNudge(false)}>
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 380, boxShadow: "0 24px 80px rgba(0,0,0,0.15)", textAlign: "center" }}>
