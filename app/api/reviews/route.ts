@@ -25,6 +25,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 
 const MAX_COMMENT_LENGTH = 500;
+const NOT_REBOOK_REASONS = ["price", "quality", "punctuality", "communication", "cleanliness", "other"] as const;
 
 export async function POST(req: NextRequest) {
   const session = await createClient();
@@ -36,6 +37,15 @@ export async function POST(req: NextRequest) {
   const rating = Number(body?.rating);
   const comment = typeof body?.comment === "string" ? body.comment.trim().slice(0, MAX_COMMENT_LENGTH) : null;
 
+  // Satisfaction survey — only meaningful for client_to_artist, enforced
+  // below once we know reviewType. All optional; skipping any of them
+  // (e.g. no rebookIntervalDays) is a valid, common answer, not an error.
+  const wouldRebook = typeof body?.wouldRebook === "boolean" ? body.wouldRebook : null;
+  const notRebookReason = NOT_REBOOK_REASONS.includes(body?.notRebookReason) ? body.notRebookReason : null;
+  const rebookIntervalDays = Number.isInteger(body?.rebookIntervalDays) && body.rebookIntervalDays > 0 && body.rebookIntervalDays <= 730
+    ? body.rebookIntervalDays : null;
+  const npsScore = Number.isInteger(body?.npsScore) && body.npsScore >= 0 && body.npsScore <= 10 ? body.npsScore : null;
+
   if (!bookingId || !Number.isInteger(rating) || rating < 1 || rating > 5) {
     return NextResponse.json({ error: "A booking and a star rating from 1 to 5 are required." }, { status: 400 });
   }
@@ -44,7 +54,7 @@ export async function POST(req: NextRequest) {
 
   const { data: booking } = await service
     .from("bookings")
-    .select("id, status, client_id, artist_id, artist:artists(profile_id)")
+    .select("id, status, client_id, artist_id, service_id, completed_at, artist:artists(profile_id)")
     .eq("id", bookingId)
     .single();
 
@@ -82,6 +92,14 @@ export async function POST(req: NextRequest) {
       rating,
       comment,
       review_type: reviewType,
+      // reviews_survey_scope_check requires these to be null for anything
+      // other than client_to_artist — only send them through on that path.
+      ...(reviewType === "client_to_artist" ? {
+        would_rebook: wouldRebook,
+        not_rebook_reason: notRebookReason,
+        rebook_interval_days: rebookIntervalDays,
+        nps_score: npsScore,
+      } : {}),
     })
     .select("id, rating, comment, review_type, created_at")
     .single();
@@ -92,6 +110,28 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "You've already reviewed this booking." }, { status: 409 });
     }
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  // Loyalty rebooking engine — a renewal row only gets created when the
+  // client actually gave an interval (skipping the question, or a "no" on
+  // would_rebook with no interval, means don't nudge them). Best-effort:
+  // this shouldn't block the review response if it fails.
+  if (reviewType === "client_to_artist" && rebookIntervalDays && booking.completed_at) {
+    try {
+      const dueAt = new Date(booking.completed_at);
+      dueAt.setDate(dueAt.getDate() + rebookIntervalDays);
+      await service.from("booking_renewals").insert({
+        client_id: user.id,
+        artist_id: booking.artist_id,
+        service_id: booking.service_id,
+        source_booking_id: bookingId,
+        review_id: review.id,
+        interval_days: rebookIntervalDays,
+        due_at: dueAt.toISOString().slice(0, 10),
+      });
+    } catch (e) {
+      console.error("[reviews] booking_renewals insert error:", e);
+    }
   }
 
   return NextResponse.json({ review });

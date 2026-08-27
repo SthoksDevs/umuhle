@@ -265,6 +265,75 @@ export async function notifyBookingReminder(
   return { clientSent };
 }
 
+// 15-minute no-show nudge (see app/api/cron/no-show-check/route.ts).
+// Uses "umuhle_no_show_check" — NOT YET an approved WABA template as of
+// this writing (see the loyalty-retention spec, Section 5, for the draft
+// copy to submit). Calling sendTemplateMessage with an unrecognised
+// template name fails loudly (Meta rejects it server-side, unlike a
+// free-text send past the 24h window which just silently vanishes) — the
+// cron catches that and logs it rather than treating it as a crash, so
+// this is safe to ship ahead of approval and it'll just start working
+// once the template goes live, no code change needed.
+export async function notifyNoShowCheck(opts: {
+  clientPhone: string;
+  clientName: string;
+  artistName: string;
+  rescheduleToken: string;
+}): Promise<boolean> {
+  return sendTemplateMessage(opts.clientPhone, "umuhle_no_show_check", [
+    {
+      type: "body",
+      parameters: [
+        { type: "text", text: opts.clientName },
+        { type: "text", text: opts.artistName },
+      ],
+    },
+    {
+      type: "button",
+      sub_type: "url",
+      index: "0",
+      parameters: [{ type: "text", text: opts.rescheduleToken }], // umuhle.co.za/reschedule/{{1}}
+    },
+  ]);
+}
+
+// Renewal ("time to rebook") nudge — see app/api/cron/renewal-nudge/route.ts.
+// Uses "umuhle_renewal_reminder" — also NOT YET an approved template (same
+// caveat as notifyNoShowCheck above), and Marketing rather than Utility
+// category, since it solicits a new purchase rather than relating to an
+// open transaction — Meta will price/deliver it differently, and it
+// should only ever go to whatsapp_comms_enabled clients (checked by the
+// caller before this is invoked, not inside it, matching how the rest of
+// this file treats that preference as the caller's responsibility).
+export async function notifyRenewalReminder(opts: {
+  clientPhone: string;
+  clientName: string;
+  serviceName: string;
+  artistName: string;
+  suggestedDate: string;
+  suggestedTime: string;
+  rebookUrl: string;
+}): Promise<boolean> {
+  return sendTemplateMessage(opts.clientPhone, "umuhle_renewal_reminder", [
+    {
+      type: "body",
+      parameters: [
+        { type: "text", text: opts.clientName },
+        { type: "text", text: opts.serviceName },
+        { type: "text", text: opts.artistName },
+        { type: "text", text: opts.suggestedDate },
+        { type: "text", text: opts.suggestedTime },
+      ],
+    },
+    {
+      type: "button",
+      sub_type: "url",
+      index: "0",
+      parameters: [{ type: "text", text: opts.rebookUrl }],
+    },
+  ]);
+}
+
 // Store/salon booking reminder. Reuses the same approved
 // "umuhle_booking_reminder" template (it's just {name, provider, date,
 // time} params — no schema tie to "artist" specifically), with the salon
