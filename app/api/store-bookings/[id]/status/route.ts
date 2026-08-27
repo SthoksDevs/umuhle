@@ -19,8 +19,9 @@ import { createReviewInvite, buildReviewUrl } from "@/lib/review-invites";
 import { sendReviewInviteEmail } from "@/lib/email";
 import { notifyReviewInvite } from "@/lib/whatsapp";
 import { creditStoreBookingDepositPayout } from "@/lib/payouts";
+import { isLateCancellation } from "@/lib/reliability";
 
-const STORE_BOOKING_STATUSES = ["pending", "confirmed", "completed", "cancelled"] as const;
+const STORE_BOOKING_STATUSES = ["pending", "confirmed", "completed", "cancelled", "no_show"] as const;
 type StoreBookingStatusValue = typeof STORE_BOOKING_STATUSES[number];
 
 function serviceClient() {
@@ -51,7 +52,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
 
   const { data: booking, error: bookingError } = await service
     .from("store_bookings")
-    .select("id, salon_id, client_id, client_name, client_phone, salon:partner_salons(id, name, partner_id)")
+    .select("id, salon_id, client_id, client_name, client_phone, booking_date, booking_time, salon:partner_salons(id, name, partner_id)")
     .eq("id", bookingId)
     .single();
 
@@ -62,15 +63,44 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     return NextResponse.json({ error: "Booking not found" }, { status: 404 });
   }
 
+  // Only the salon can call this route (see the auth check above), so any
+  // cancellation made through it is salon-initiated by definition, and any
+  // no-show reported through it is necessarily the customer's — a salon
+  // doesn't travel anywhere to fail to show up. See the 20260827_store_
+  // booking_reliability migration for the reasoning.
+  const now = new Date();
+  const cancelledBy = status === "cancelled" ? "salon" : null;
+  const lateCancellation = status === "cancelled" ? isLateCancellation(booking.booking_date, booking.booking_time, now) : null;
+
   const { data: updated, error } = await service
     .from("store_bookings")
-    .update({ status })
+    .update({
+      status,
+      ...(status === "cancelled" ? { cancelled_by: cancelledBy, cancelled_at: now.toISOString(), late_cancellation: lateCancellation } : {}),
+      ...(status === "no_show" ? { no_show_at: now.toISOString() } : {}),
+    })
     .eq("id", bookingId)
     .select("id, status, payment_method")
     .single();
 
   if (error || !updated) {
     return NextResponse.json({ error: error?.message ?? "Booking not found" }, { status: 404 });
+  }
+
+  // Reliability tracking (see lib/reliability.ts) — best-effort, same as
+  // the mobile-artist status route.
+  try {
+    if (status === "completed") {
+      await service.rpc("record_salon_booking_outcome", { p_salon_id: booking.salon_id, p_outcome: "completed" });
+      if (booking.client_id) await service.rpc("record_client_booking_outcome", { p_client_id: booking.client_id, p_outcome: "completed" });
+    } else if (status === "cancelled") {
+      await service.rpc("record_salon_booking_outcome", { p_salon_id: booking.salon_id, p_outcome: lateCancellation ? "late_cancelled" : "cancelled" });
+    } else if (status === "no_show") {
+      await service.rpc("record_salon_booking_outcome", { p_salon_id: booking.salon_id, p_outcome: "no_show" });
+      if (booking.client_id) await service.rpc("record_client_booking_outcome", { p_client_id: booking.client_id, p_outcome: "no_show" });
+    }
+  } catch (e) {
+    console.error("[store-bookings/status] reliability recording error:", e);
   }
 
   if (status === "completed") {

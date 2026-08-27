@@ -1778,10 +1778,16 @@ function SalonBookingsInbox({ salonId }: { salonId: string }) {
               </div>
             )}
             {b.status === "confirmed" && (
-              <button onClick={() => updateStatus(b.id, "completed")}
-                style={{ padding: "0.4rem 1rem", borderRadius: 100, border: "none", background: "#E6F1FB", color: "#185FA5", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer" }}>
-                Mark completed
-              </button>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button onClick={() => updateStatus(b.id, "completed")}
+                  style={{ padding: "0.4rem 1rem", borderRadius: 100, border: "none", background: "#E6F1FB", color: "#185FA5", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer" }}>
+                  Mark completed
+                </button>
+                <button onClick={() => updateStatus(b.id, "no_show")}
+                  style={{ padding: "0.4rem 1rem", borderRadius: 100, border: "none", background: "#FCEBEB", color: "#A32D2D", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer" }}>
+                  Customer no-show
+                </button>
+              </div>
             )}
           </div>
         );
