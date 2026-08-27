@@ -11,8 +11,16 @@ export const LATE_CANCELLATION_WINDOW_HOURS = 24;
 // booked appointment time — the client/artist-facing threshold from the
 // original brief. `at` defaults to now, but the status route passes an
 // explicit timestamp so this stays a pure function.
+//
+// SAST (Africa/Johannesburg) is UTC+2 year-round — no DST — so the
+// explicit +02:00 offset is required here: without it, a date-time string
+// with no timezone designator parses as the *runtime's* local time (UTC
+// on Vercel), not SAST, which would silently misclassify anything within
+// 2 hours of the boundary. Same convention as bookingDateTime() in
+// app/api/notifications/route.ts — kept in sync with that, not imported
+// from it, since that file also pulls in server-only notification code.
 export function isLateCancellation(bookingDate: string, bookingTime: string, at: Date = new Date()): boolean {
-  const appointment = new Date(`${bookingDate}T${bookingTime}`);
+  const appointment = new Date(`${bookingDate}T${bookingTime}+02:00`);
   if (Number.isNaN(appointment.getTime())) return false;
   const hoursUntil = (appointment.getTime() - at.getTime()) / (1000 * 60 * 60);
   return hoursUntil < LATE_CANCELLATION_WINDOW_HOURS;
