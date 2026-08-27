@@ -111,6 +111,13 @@ export interface Profile {
   terms_accepted_at: string | null;
   terms_version: string | null;
   privacy_version: string | null;
+  // ── Reliability, client side (see lib/reliability.ts) ──
+  // Maintained only by record_client_booking_outcome() — the fairness
+  // counterpart to Artist's completed_bookings_count etc.
+  client_completed_bookings_count: number;
+  client_cancelled_count: number;
+  client_late_cancelled_count: number;
+  client_no_show_count: number;
   // ── WhatsApp comms preference ──
   // Email is the default, always-on channel. WABA messaging costs money
   // per conversation, so non-essential WhatsApp sends (booking/order
@@ -147,6 +154,14 @@ export interface Artist {
   status: "pending" | "approved" | "rejected";
   moderation_score: number | null;
   created_at: string;
+  // ── Reliability (see lib/reliability.ts) ──
+  // Maintained only by record_artist_booking_outcome() — never written to
+  // directly from application code.
+  completed_bookings_count: number;
+  cancelled_count: number;
+  late_cancelled_count: number;
+  no_show_count: number;
+  visibility_reduced: boolean; // 3+ late-cancel/no-show incidents in the trailing 90 days — see nearby_artists()
   // Relations
   profile?: Profile;
   services?: Service[];
@@ -206,6 +221,16 @@ export interface Booking {
   payout_cents: number | null;     // artist's share after the service fee
   payout_credited_at: string | null; // set once the payout has been credited to the artist's wallet
   payout_via: "wallet" | "instant_split"; // 'instant_split' = already paid straight to the artist via PayFast, see lib/payments/split.ts
+  // ── Reliability (see lib/reliability.ts) ──
+  // Set once, server-side, at the moment of the event — see
+  // app/api/bookings/[id]/status/route.ts. Who cancelled/no-showed is
+  // derived from the caller's identity relative to the booking, never
+  // taken as-is from the request body.
+  cancelled_by: "client" | "artist" | "admin" | null;
+  cancelled_at: string | null;
+  late_cancellation: boolean | null;
+  no_show_party: "client" | "artist" | null;
+  no_show_at: string | null;
   // Relations
   client?: Profile;
   artist?: Artist;

@@ -29,6 +29,7 @@ import { normalizePhone, isValidSAMobile } from "@/lib/phone";
 import DashboardTour from "@/components/DashboardTour";
 import { DELIVERY_ARRANGEMENT_OPTIONS, type DeliveryArrangementMethod } from "@/lib/deliveryArrangement";
 import { CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION, needsLegalReacceptance } from "@/lib/legal";
+import { computeReliabilityScore } from "@/lib/reliability";
 
 // Mirrors lib/shiplogic.ts's isCourierCheckoutEnabled() — see
 // app/checkout/page.tsx's copy of the same flag for why this is a plain env
@@ -132,10 +133,13 @@ const ORDER_STATUS_STYLES: Record<string, { bg: string; color: string; label: st
 };
 
 // ─── Booking card ─────────────────────────────────────────────────────────────
-function BookingCard({ booking, myReview, onRate }: {
+function BookingCard({ booking, myReview, onRate, onCancel, onReportNoShow, actionLoading }: {
   booking: BookingWithRelations;
   myReview?: { rating: number; comment: string | null } | null;
   onRate?: () => void;
+  onCancel?: () => void;
+  onReportNoShow?: () => void;
+  actionLoading?: boolean;
 }) {
   const status = STATUS_STYLES[booking.status] ?? STATUS_STYLES.confirmed;
   const artist = booking.artist;
@@ -181,6 +185,21 @@ function BookingCard({ booking, myReview, onRate }: {
             <p style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--plum)" }}>{fmt(booking.total_amount)}</p>
           </div>
         </div>
+
+        {booking.status === "confirmed" && (onCancel || onReportNoShow) && (
+          <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.85rem", paddingTop: "0.85rem", borderTop: "1px dashed rgba(155,127,184,0.2)" }}>
+            {onCancel && (
+              <button onClick={onCancel} disabled={actionLoading} className="btn-outline" style={{ padding: "0.4rem 1.1rem", fontSize: "0.8rem" }}>
+                Cancel booking
+              </button>
+            )}
+            {onReportNoShow && (
+              <button onClick={onReportNoShow} disabled={actionLoading} className="btn-outline" style={{ padding: "0.4rem 1.1rem", fontSize: "0.8rem", borderColor: "#E53935", color: "#E53935" }}>
+                Artist didn't arrive
+              </button>
+            )}
+          </div>
+        )}
 
         {booking.status === "completed" && (myReview || onRate) && (
           <div style={{ marginTop: "0.85rem", paddingTop: "0.85rem", borderTop: "1px dashed rgba(155,127,184,0.2)" }}>
@@ -3584,6 +3603,8 @@ function BookingsTab({ user, profile, onUpdateProfile }: { user: User; profile: 
   const [pocSaving, setPocSaving] = useState(false);
   const [myReviews, setMyReviews] = useState<MyReviewMap>({});
   const [reviewTarget, setReviewTarget] = useState<BookingWithRelations | null>(null);
+  const [bookingActionId, setBookingActionId] = useState<string | null>(null);
+  const [bookingActionError, setBookingActionError] = useState("");
 
   const hasPoc = !!(profile.poc_name && profile.poc_phone);
 
@@ -3615,6 +3636,28 @@ function BookingsTab({ user, profile, onUpdateProfile }: { user: User; profile: 
   const handleReviewSubmitted = (bookingId: string, review: SubmittedReview) => {
     setMyReviews(prev => ({ ...prev, [bookingId]: { ...review, created_at: new Date().toISOString() } }));
     setReviewTarget(null);
+  };
+
+  // Cancelling or reporting a no-show as the client — see
+  // app/api/bookings/[id]/status/route.ts, which derives cancelled_by/
+  // no_show_party from the caller's identity rather than trusting the body.
+  const handleBookingAction = async (id: string, status: "cancelled" | "no_show") => {
+    setBookingActionId(id);
+    setBookingActionError("");
+    try {
+      const res = await fetch(`/api/bookings/${id}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Couldn't update this booking.");
+      setBookings(prev => prev.map(b => b.id === id ? { ...b, status } : b));
+    } catch (e) {
+      setBookingActionError(e instanceof Error ? e.message : "Something went wrong");
+    } finally {
+      setBookingActionId(null);
+    }
   };
 
   const handleSavePoc = async (name: string, phone: string) => {
@@ -3737,10 +3780,15 @@ function BookingsTab({ user, profile, onUpdateProfile }: { user: User; profile: 
           <Link href="/"><button className="btn-plum" style={{ padding: "0.75rem 2rem" }}>Find an artist</button></Link>
         </div>
       )}
+      {bookingActionError && <p style={{ color: "#E53935", fontSize: "0.85rem", marginBottom: "0.75rem" }}>{bookingActionError}</p>}
       {!bookingsLoading && bookings.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
           {bookings.map(b => (
-            <BookingCard key={b.id} booking={b} myReview={myReviews[b.id] ?? null} onRate={() => setReviewTarget(b)} />
+            <BookingCard key={b.id} booking={b} myReview={myReviews[b.id] ?? null} onRate={() => setReviewTarget(b)}
+              onCancel={() => handleBookingAction(b.id, "cancelled")}
+              onReportNoShow={() => handleBookingAction(b.id, "no_show")}
+              actionLoading={bookingActionId === b.id}
+            />
           ))}
         </div>
       )}
@@ -3780,7 +3828,7 @@ function ClientBookingCard({ booking, myReview, onRate, onMarkStatus, actionLoad
   booking: BookingWithRelations;
   myReview?: { rating: number; comment: string | null } | null;
   onRate: () => void;
-  onMarkStatus: (id: string, status: "completed" | "no_show") => void;
+  onMarkStatus: (id: string, status: "completed" | "no_show" | "cancelled") => void;
   actionLoading: boolean;
 }) {
   const status = STATUS_STYLES[booking.status] ?? STATUS_STYLES.confirmed;
@@ -3833,6 +3881,9 @@ function ClientBookingCard({ booking, myReview, onRate, onMarkStatus, actionLoad
             <button onClick={() => onMarkStatus(booking.id, "completed")} disabled={actionLoading} className="btn-plum" style={{ padding: "0.4rem 1.1rem", fontSize: "0.8rem" }}>
               Mark completed
             </button>
+            <button onClick={() => onMarkStatus(booking.id, "cancelled")} disabled={actionLoading} className="btn-outline" style={{ padding: "0.4rem 1.1rem", fontSize: "0.8rem" }}>
+              Cancel booking
+            </button>
             <button onClick={() => onMarkStatus(booking.id, "no_show")} disabled={actionLoading} className="btn-outline" style={{ padding: "0.4rem 1.1rem", fontSize: "0.8rem", borderColor: "#E53935", color: "#E53935" }}>
               Client no-show
             </button>
@@ -3867,6 +3918,10 @@ function ClientBookingsPanel({ user }: { user: User }) {
   const [reviewTarget, setReviewTarget] = useState<BookingWithRelations | null>(null);
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [reliability, setReliability] = useState<{
+    completed_bookings_count: number; cancelled_count: number; late_cancelled_count: number;
+    no_show_count: number; visibility_reduced: boolean; account_status: string;
+  } | null>(null);
 
   const fetchBookings = useCallback(async () => {
     setLoading(true);
@@ -3876,6 +3931,7 @@ function ClientBookingsPanel({ user }: { user: User }) {
     const data = await res.json();
     const rows = (data.bookings ?? []) as BookingWithRelations[];
     setHasArtistProfile(!!data.artistId);
+    setReliability(data.reliability ?? null);
     setBookings(rows);
     setLoading(false);
 
@@ -3888,7 +3944,7 @@ function ClientBookingsPanel({ user }: { user: User }) {
 
   useEffect(() => { fetchBookings(); }, [fetchBookings]);
 
-  const handleMarkStatus = async (id: string, status: "completed" | "no_show") => {
+  const handleMarkStatus = async (id: string, status: "completed" | "no_show" | "cancelled") => {
     setActionLoadingId(id);
     setError("");
     try {
@@ -3929,6 +3985,49 @@ function ClientBookingsPanel({ user }: { user: User }) {
           ))}
         </div>
       </div>
+
+      {reliability && (() => {
+        const score = computeReliabilityScore(reliability.completed_bookings_count, reliability.cancelled_count, reliability.no_show_count);
+        const incidents = reliability.late_cancelled_count + reliability.no_show_count;
+        const underReview = reliability.account_status === "pending_review";
+        return (
+          <div style={{ background: "#fff", border: "1.5px solid rgba(155,127,184,0.15)", borderRadius: 18, padding: "1.25rem 1.5rem", marginBottom: "1.5rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "1rem" }}>
+              <div style={{ display: "flex", gap: "1.75rem", flexWrap: "wrap" }}>
+                <div>
+                  <p style={{ fontSize: "0.72rem", color: "var(--light)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.15rem" }}>Completed</p>
+                  <p style={{ fontSize: "1.1rem", fontWeight: 600 }}>{reliability.completed_bookings_count}</p>
+                </div>
+                <div>
+                  <p style={{ fontSize: "0.72rem", color: "var(--light)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.15rem" }}>Cancellations</p>
+                  <p style={{ fontSize: "1.1rem", fontWeight: 600 }}>{reliability.cancelled_count}</p>
+                </div>
+                <div>
+                  <p style={{ fontSize: "0.72rem", color: "var(--light)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.15rem" }}>No-shows</p>
+                  <p style={{ fontSize: "1.1rem", fontWeight: 600 }}>{reliability.no_show_count}</p>
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <p style={{ fontSize: "0.72rem", color: "var(--light)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.15rem" }}>Reliability</p>
+                <p style={{ fontSize: "1.4rem", fontWeight: 700, color: "var(--plum)" }}>{score === null ? "—" : `${score}%`}</p>
+              </div>
+            </div>
+            {underReview ? (
+              <p style={{ fontSize: "0.8rem", color: "#A32D2D", background: "#FCEBEB", borderRadius: 10, padding: "0.6rem 0.85rem", marginTop: "1rem", lineHeight: 1.5 }}>
+                Your account is flagged for review after repeated late cancellations or no-shows. Reach out to info@umuhle.co.za if you'd like to talk it through.
+              </p>
+            ) : reliability.visibility_reduced ? (
+              <p style={{ fontSize: "0.8rem", color: "#8A6100", background: "#FFF8E1", borderRadius: 10, padding: "0.6rem 0.85rem", marginTop: "1rem", lineHeight: 1.5 }}>
+                Repeated late cancellations or no-shows in the last 90 days mean you're showing up lower in search results for now. This lifts on its own as those age out.
+              </p>
+            ) : incidents >= 1 ? (
+              <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginTop: "1rem", lineHeight: 1.5 }}>
+                Heads up — you have a late cancellation or no-show on record. Honouring confirmed bookings keeps your visibility and standing healthy.
+              </p>
+            ) : null}
+          </div>
+        );
+      })()}
 
       {error && <p style={{ color: "#E53935", fontSize: "0.85rem", marginBottom: "1rem" }}>{error}</p>}
 

@@ -6,14 +6,25 @@
 // deducted) is credited to their wallet, pending the standard payout hold
 // window. See lib/payouts.ts.
 //
+// It's also the hook point for reliability tracking (see
+// lib/reliability.ts and the 20260827 migration): completing, cancelling
+// or no-showing a booking records an outcome against whichever party
+// caused it, via record_artist_booking_outcome/record_client_booking_outcome.
+// Who cancelled or no-showed is always derived from the caller's identity
+// relative to the booking (never taken from the request body) so this
+// can't be spoofed by either side.
+//
 // Callable by:
 //   - an admin, via the same Bearer-token pattern used elsewhere in /api/admin/*
 //   - the artist who owns the booking, via their normal cookie session
+//   - for "cancelled"/"no_show" only: the client who owns the booking too —
+//     nobody could self-serve cancel a booking before this, so this route
+//     is now the only place that happens for either side.
 //
 // Direct client-side writes to `bookings.status` should go through this
 // route instead of `supabase.from("bookings").update(...)`, the same way
 // order status changes now go through /api/admin/orders/[id]/status —
-// otherwise payouts never get triggered.
+// otherwise payouts and reliability tracking never get triggered.
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
@@ -22,9 +33,11 @@ import { creditBookingPayout } from "@/lib/payouts";
 import { createReviewInvite, buildReviewUrl } from "@/lib/review-invites";
 import { sendReviewInviteEmail } from "@/lib/email";
 import { notifyReviewInvite } from "@/lib/whatsapp";
+import { isLateCancellation } from "@/lib/reliability";
 
 const BOOKING_STATUSES = ["confirmed", "in_progress", "completed", "cancelled", "no_show"] as const;
 type BookingStatusValue = typeof BOOKING_STATUSES[number];
+type Actor = "client" | "artist" | "admin";
 
 function adminServiceClient() {
   return createSupabaseClient(
@@ -64,13 +77,16 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   }
 
   // Try admin (Bearer token) first, then fall back to the owning artist's
-  // own cookie session.
+  // or client's own cookie session.
   let service = await tryAdmin(req);
+  let actor: Actor | null = service ? "admin" : null;
+  let sessionUserId: string | null = null;
 
   if (!service) {
     const session = await createSessionClient();
     const { data: { user } } = await session.auth.getUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    sessionUserId = user.id;
 
     // Identity is already verified above via auth.getUser() (cookie-backed,
     // doesn't depend on table RLS). The lookup below only needs to read the
@@ -80,16 +96,55 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     // doesn't happen to permit reading a booking where they're the artist
     // but not the client.
     service = await createServiceClient();
+  }
 
-    const { data: booking } = await service
-      .from("bookings")
-      .select("id, artist:artists(profile_id)")
-      .eq("id", bookingId)
-      .single();
+  const { data: booking } = await service
+    .from("bookings")
+    .select("id, client_id, artist_id, booking_date, booking_time, artist:artists(profile_id)")
+    .eq("id", bookingId)
+    .single();
+  if (!booking) return NextResponse.json({ error: "Booking not found" }, { status: 404 });
 
-    const artistRow = Array.isArray(booking?.artist) ? booking?.artist[0] : booking?.artist;
-    if (!booking || artistRow?.profile_id !== user.id) {
+  if (actor !== "admin") {
+    const artistRow = Array.isArray(booking.artist) ? booking.artist[0] : booking.artist;
+    if (artistRow?.profile_id === sessionUserId) {
+      actor = "artist";
+    } else if (booking.client_id === sessionUserId) {
+      // The client who owns this booking — only allowed to cancel it or
+      // report the artist as a no-show. Marking "completed"/"in_progress"
+      // stays artist/admin-only.
+      if (status !== "cancelled" && status !== "no_show") {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      actor = "client";
+    } else {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
+
+  // Who cancelled / who no-showed — derived from the caller's identity
+  // relative to the booking, never taken as-is from the request body,
+  // except for admin (who isn't "the client" or "the artist" and must say
+  // explicitly who they're recording the outcome against).
+  const now = new Date();
+  let cancelledBy: Actor | null = null;
+  let noShowParty: "client" | "artist" | null = null;
+  let lateCancellation: boolean | null = null;
+
+  if (status === "cancelled") {
+    if (actor === "admin") {
+      cancelledBy = body?.cancelledBy === "client" || body?.cancelledBy === "artist" ? body.cancelledBy : "admin";
+    } else {
+      cancelledBy = actor;
+    }
+    lateCancellation = isLateCancellation(booking.booking_date, booking.booking_time, now);
+  } else if (status === "no_show") {
+    if (actor === "admin") {
+      noShowParty = body?.noShowParty === "client" || body?.noShowParty === "artist" ? body.noShowParty : null;
+    } else {
+      // Whoever is calling isn't the one being reported — an artist can
+      // only report a client no-show, and vice versa.
+      noShowParty = actor === "artist" ? "client" : "artist";
     }
   }
 
@@ -97,8 +152,10 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     .from("bookings")
     .update({
       status,
-      ...(status === "in_progress" ? { started_at: new Date().toISOString() } : {}),
-      ...(status === "completed" ? { completed_at: new Date().toISOString() } : {}),
+      ...(status === "in_progress" ? { started_at: now.toISOString() } : {}),
+      ...(status === "completed" ? { completed_at: now.toISOString() } : {}),
+      ...(status === "cancelled" ? { cancelled_by: cancelledBy, cancelled_at: now.toISOString(), late_cancellation: lateCancellation } : {}),
+      ...(status === "no_show" ? { no_show_party: noShowParty, no_show_at: now.toISOString() } : {}),
     })
     .eq("id", bookingId)
     .select("id, status, payment_method")
@@ -106,6 +163,25 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
 
   if (error || !updated) {
     return NextResponse.json({ error: error?.message ?? "Booking not found" }, { status: 404 });
+  }
+
+  // Reliability tracking (see lib/reliability.ts) — best-effort. The status
+  // change itself is what the caller is waiting on, so a recording failure
+  // here shouldn't turn into a failed response.
+  try {
+    if (status === "completed") {
+      await service.rpc("record_artist_booking_outcome", { p_artist_id: booking.artist_id, p_outcome: "completed" });
+      await service.rpc("record_client_booking_outcome", { p_client_id: booking.client_id, p_outcome: "completed" });
+    } else if (status === "cancelled" && cancelledBy && cancelledBy !== "admin") {
+      const outcome = lateCancellation ? "late_cancelled" : "cancelled";
+      if (cancelledBy === "artist") await service.rpc("record_artist_booking_outcome", { p_artist_id: booking.artist_id, p_outcome: outcome });
+      else await service.rpc("record_client_booking_outcome", { p_client_id: booking.client_id, p_outcome: outcome });
+    } else if (status === "no_show" && noShowParty) {
+      if (noShowParty === "artist") await service.rpc("record_artist_booking_outcome", { p_artist_id: booking.artist_id, p_outcome: "no_show" });
+      else await service.rpc("record_client_booking_outcome", { p_client_id: booking.client_id, p_outcome: "no_show" });
+    }
+  } catch (e) {
+    console.error("[bookings/status] reliability recording error:", e);
   }
 
   let payout: { credited: boolean; reason?: string } | null = null;

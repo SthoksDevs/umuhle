@@ -25,9 +25,15 @@ export async function GET(req: NextRequest) {
 
   const service = await createServiceClient();
 
+  const { data: callerProfile } = await service
+    .from("profiles")
+    .select("account_status")
+    .eq("id", user.id)
+    .single();
+
   const { data: artist } = await service
     .from("artists")
-    .select("id")
+    .select("id, completed_bookings_count, cancelled_count, late_cancelled_count, no_show_count, visibility_reduced")
     .eq("profile_id", user.id)
     .maybeSingle();
 
@@ -54,5 +60,16 @@ export async function GET(req: NextRequest) {
   const { data, error } = await query.limit(50);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json({ bookings: data ?? [], artistId: artist.id });
+  return NextResponse.json({
+    bookings: data ?? [],
+    artistId: artist.id,
+    reliability: {
+      completed_bookings_count: artist.completed_bookings_count,
+      cancelled_count: artist.cancelled_count,
+      late_cancelled_count: artist.late_cancelled_count,
+      no_show_count: artist.no_show_count,
+      visibility_reduced: artist.visibility_reduced,
+      account_status: callerProfile?.account_status ?? "active",
+    },
+  });
 }
