@@ -551,7 +551,74 @@ function ProfileTab({ profile, user, locationStatus, onUpdate }: { profile: Prof
         )}
       </div>
 
+      {(profile.is_artist || profile.is_partner) && <ReviewInsightsCard />}
+
       {profile.is_partner && <PartnerFulfillmentSettings profile={profile} onUpdate={onUpdate} />}
+    </div>
+  );
+}
+
+// ── ReviewInsightsCard ───────────────────────────────────────────────────────
+// Paid feature (see 20260827_feature_subscriptions.sql): a weekly digest
+// of what clients said, grouped into what's working and what's not.
+// Only the free-trial-signup half is built — converting a lapsed trial
+// into an actual paid subscription needs a real price decision and a
+// PayFast flow of its own, so "past trial with no payment" just quietly
+// stops sending rather than trying to charge anyone yet.
+function ReviewInsightsCard() {
+  const [subscription, setSubscription] = useState<{ status: string; trial_ends_at: string | null; valid_until: string | null } | null | undefined>(undefined);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    fetch("/api/feature-subscriptions/review-insights")
+      .then(res => res.json())
+      .then(data => setSubscription(data.subscription))
+      .catch(() => setSubscription(null));
+  }, []);
+
+  const handleStartTrial = async () => {
+    setStarting(true);
+    setError("");
+    try {
+      const res = await fetch("/api/feature-subscriptions/review-insights", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Couldn't start your trial.");
+      setSubscription(data.subscription);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong");
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  if (subscription === undefined) return null; // still loading — avoid a flash of the wrong state
+
+  return (
+    <div style={{ marginTop: "1.5rem", background: "#FAFAFA", borderRadius: 16, padding: "1.25rem", border: "1.5px solid #E0E0E0" }}>
+      <p style={{ fontSize: "0.8rem", fontWeight: 500, color: "var(--onyx)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "0.5rem" }}>💌 Review insights</p>
+      {!subscription && (
+        <>
+          <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.75rem" }}>
+            A weekly email summarising what clients loved and what needs work — without having to read through every review yourself. Free for 30 days.
+          </p>
+          {error && <p style={{ color: "#E53935", fontSize: "0.82rem", marginBottom: "0.75rem" }}>{error}</p>}
+          <button onClick={handleStartTrial} disabled={starting} className="btn-plum" style={{ padding: "0.5rem 1.25rem", fontSize: "0.85rem" }}>
+            {starting ? "Starting…" : "Start free 30-day trial"}
+          </button>
+        </>
+      )}
+      {subscription?.status === "trialing" && (
+        <p style={{ fontSize: "0.85rem", color: "var(--grey)" }}>
+          Your free trial is active until {subscription.trial_ends_at?.slice(0, 10)}. Your first digest lands with your next batch of reviews.
+        </p>
+      )}
+      {subscription?.status === "active" && (
+        <p style={{ fontSize: "0.85rem", color: "var(--grey)" }}>Active{subscription.valid_until ? ` until ${subscription.valid_until}` : ""}.</p>
+      )}
+      {subscription?.status === "expired" && (
+        <p style={{ fontSize: "0.85rem", color: "var(--grey)" }}>Your trial's ended — digests have paused. Reach out to info@umuhle.co.za if you'd like to continue.</p>
+      )}
     </div>
   );
 }

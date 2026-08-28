@@ -1112,6 +1112,62 @@ export async function sendProductReviewDigestEmail(opts: {
   });
 }
 
+export async function sendProviderReviewDigestEmail(opts: {
+  toEmail: string;
+  toName: string;
+  positive: { rating: number; comment: string | null }[];
+  needsWork: { rating: number; comment: string | null; notRebookReason: string | null }[];
+  referenceId: string; // profile id — for email_log only.
+}) {
+  if (!opts.toEmail || (opts.positive.length === 0 && opts.needsWork.length === 0)) return;
+
+  const REASON_LABEL: Record<string, string> = {
+    price: "price", quality: "quality", punctuality: "punctuality",
+    communication: "communication", cleanliness: "cleanliness", other: "other",
+  };
+
+  // Grouped by reason rather than quoting each comment verbatim — useful
+  // without turning a WhatsApp/email digest into a review transcript.
+  // Reviewer names are anonymised here ("a client") even though they're
+  // already public on the artist/salon's own review list — a summary
+  // landing directly in someone's inbox reads differently than browsing
+  // reviews on a page, and "a client" is the more conservative default.
+  const reasonCounts: Record<string, number> = {};
+  for (const r of opts.needsWork) {
+    const label = r.notRebookReason ? REASON_LABEL[r.notRebookReason] ?? "other" : "their experience";
+    reasonCounts[label] = (reasonCounts[label] ?? 0) + 1;
+  }
+
+  const subject = opts.positive.length > 0 && opts.needsWork.length === 0
+    ? "Great feedback this week 🎉"
+    : opts.needsWork.length > 0 && opts.positive.length === 0
+    ? "Room for improvement — this week's feedback"
+    : "Your weekly review digest";
+
+  const positiveLine = opts.positive.length > 0
+    ? `🎉 ${opts.positive.length} client${opts.positive.length === 1 ? "" : "s"} loved their visit this week.`
+    : null;
+  const needsWorkLines = Object.entries(reasonCounts).map(([label, count]) =>
+    `💡 ${count} client${count === 1 ? "" : "s"} mentioned ${label}.`
+  );
+
+  const plainLines = [positiveLine, ...needsWorkLines].filter(Boolean).join("\n");
+  const htmlLines = [positiveLine, ...needsWorkLines].filter(Boolean)
+    .map(line => `<p style="margin:0 0 0.75rem;font-size:0.9rem">${line}</p>`).join("");
+
+  await sendToAll([opts.toEmail], {
+    subject,
+    template: "provider_review_digest",
+    referenceId: opts.referenceId,
+    text: `Hi ${opts.toName},\n\n${plainLines}\n\nSee full reviews and comments in your Umuhle dashboard.\n\nThe Umuhle Team`,
+    html: emailWrapper("Your weekly review digest", `
+      <p style="margin:0 0 1rem">Hi ${opts.toName},</p>
+      ${htmlLines}
+      <p style="margin:1rem 0 1.5rem"><a href="https://umuhle.co.za/dashboard?tab=profile" style="display:inline-block;background:#9B7FB8;color:#fff;font-weight:600;text-decoration:none;padding:0.75rem 1.5rem;border-radius:10px">See full reviews</a></p>
+      <p style="margin:0 0 1.5rem">The Umuhle Team</p>`),
+  });
+}
+
 export async function sendReviewInviteEmail(opts: {
   reviewType:  ReviewType;
   toEmail:     string;
