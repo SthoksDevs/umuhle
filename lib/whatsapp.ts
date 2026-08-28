@@ -305,6 +305,10 @@ export async function notifyNoShowCheck(opts: {
 // should only ever go to whatsapp_comms_enabled clients (checked by the
 // caller before this is invoked, not inside it, matching how the rest of
 // this file treats that preference as the caller's responsibility).
+//
+// The button is a STATIC URL (https://umuhle.co.za/), not a dynamic one —
+// there's no per-booking deep link to fill in yet (see the cron's own
+// comment on that), so it takes no runtime parameter at all.
 export async function notifyRenewalReminder(opts: {
   clientPhone: string;
   clientName: string;
@@ -312,7 +316,6 @@ export async function notifyRenewalReminder(opts: {
   artistName: string;
   suggestedDate: string;
   suggestedTime: string;
-  rebookUrl: string;
 }): Promise<boolean> {
   return sendTemplateMessage(opts.clientPhone, "umuhle_renewal_reminder", [
     {
@@ -324,12 +327,6 @@ export async function notifyRenewalReminder(opts: {
         { type: "text", text: opts.suggestedDate },
         { type: "text", text: opts.suggestedTime },
       ],
-    },
-    {
-      type: "button",
-      sub_type: "url",
-      index: "0",
-      parameters: [{ type: "text", text: opts.rebookUrl }],
     },
   ]);
 }

@@ -27,8 +27,6 @@ import { TIMES } from "@/lib/booking-times";
 const LOOKAHEAD_DAYS = 7; // start looking a week out — still slack to book
 const SLOT_SEARCH_DAYS = 14; // how far past due_at to search for an opening
 
-const REBOOK_URL = "https://umuhle.co.za/";
-
 function addDays(dateStr: string, days: number): string {
   const d = new Date(`${dateStr}T00:00:00`);
   d.setDate(d.getDate() + days);
@@ -105,7 +103,6 @@ export async function GET(request: NextRequest) {
           artistName: (artistRow?.display_name as string) ?? "your artist",
           suggestedDate: slot.date,
           suggestedTime: slot.time,
-          rebookUrl: REBOOK_URL,
         });
       } catch (e) {
         // Expected to fail until umuhle_renewal_reminder is approved —
