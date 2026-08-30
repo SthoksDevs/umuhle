@@ -669,10 +669,6 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
         </div>
       )}
 
-      <button onClick={submit} disabled={saving || depositSaving} className={depositRand ? "btn-outline" : "btn-plum"} style={{ width: "100%", padding: "0.9rem", borderRadius: 100, fontSize: "1rem", fontWeight: 600, cursor: saving?"not-allowed":"pointer", opacity: saving?0.7:1 }}>
-        {saving ? "Sending…" : depositRand ? "Or request without paying now" : "Request booking"}
-      </button>
-      <p style={{ fontSize: "0.75rem", color: "#bbb", textAlign: "center", marginTop: "0.75rem" }}>The salon will confirm via WhatsApp or phone.</p>
     </div>
   );
 }
