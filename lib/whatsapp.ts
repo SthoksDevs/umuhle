@@ -307,8 +307,10 @@ export async function notifyNoShowCheck(opts: {
 // this file treats that preference as the caller's responsibility).
 //
 // The button is a STATIC URL (https://umuhle.co.za/), not a dynamic one —
-// there's no per-booking deep link to fill in yet (see the cron's own
-// comment on that), so it takes no runtime parameter at all.
+// the one-tap rebook deep link (app/api/renewals/[id]) didn't exist yet
+// at submission time, and Meta doesn't allow changing an approved
+// button from static to dynamic without a fresh template review. Once
+// that's resubmitted and approved, this needs a button parameter added.
 export async function notifyRenewalReminder(opts: {
   clientPhone: string;
   clientName: string;
@@ -317,6 +319,14 @@ export async function notifyRenewalReminder(opts: {
   suggestedDate: string;
   suggestedTime: string;
 }): Promise<boolean> {
+  // "Wednesday, 2 September" reads far better in a WhatsApp message than
+  // the raw "2026-09-02" — en-ZA for South African date conventions.
+  const formattedDate = new Date(`${opts.suggestedDate}T00:00:00`).toLocaleDateString("en-ZA", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+
   return sendTemplateMessage(opts.clientPhone, "umuhle_renewal_reminder", [
     {
       type: "body",
@@ -324,7 +334,7 @@ export async function notifyRenewalReminder(opts: {
         { type: "text", text: opts.clientName },
         { type: "text", text: opts.serviceName },
         { type: "text", text: opts.artistName },
-        { type: "text", text: opts.suggestedDate },
+        { type: "text", text: formattedDate },
         { type: "text", text: opts.suggestedTime },
       ],
     },
