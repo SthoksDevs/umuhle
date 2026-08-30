@@ -52,7 +52,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
 
   const { data: booking, error: bookingError } = await service
     .from("store_bookings")
-    .select("id, salon_id, client_id, client_name, client_phone, booking_date, booking_time, salon:partner_salons(id, name, partner_id)")
+    .select("id, salon_id, branch_id, client_id, client_name, client_phone, booking_date, booking_time, salon:partner_salons(id, name, partner_id)")
     .eq("id", bookingId)
     .single();
 
@@ -133,12 +133,19 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
         .eq("id", booking.client_id)
         .single();
 
-      if (salonRow?.id && salonRow?.partner_id) {
+      // branch_id should always be set on any booking made through the
+      // current (branch-aware) store booking flow — this guard only
+      // matters for legacy bookings that predate store_branches shipping,
+      // which can't get a valid review invite under the new per-branch
+      // constraint (reviews_target_shape_check requires branch_id).
+      if (salonRow?.id && salonRow?.partner_id && booking.branch_id) {
         const inviteToken = await createReviewInvite(service, {
           reviewType: "client_to_salon",
           reviewerId: booking.client_id,
           reviewedId: salonRow.partner_id,
           salonId: salonRow.id,
+          storeBookingId: booking.id,
+          branchId: booking.branch_id,
         });
 
         if (inviteToken) {

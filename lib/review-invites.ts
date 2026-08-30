@@ -21,7 +21,7 @@ export type ReviewType = "client_to_artist" | "artist_to_client" | "client_to_sa
 type CreateReviewInviteOpts =
   | { reviewType: "client_to_artist" | "artist_to_client"; reviewerId: string; reviewedId: string; bookingId: string }
   | { reviewType: "client_to_product"; reviewerId: string; reviewedId: string; orderItemId: string }
-  | { reviewType: "client_to_salon"; reviewerId: string; reviewedId: string; salonId: string };
+  | { reviewType: "client_to_salon"; reviewerId: string; reviewedId: string; salonId: string; storeBookingId: string; branchId: string };
 
 /**
  * Inserts a review_invites row and returns its token (the URL-ready id), or
@@ -37,12 +37,14 @@ export async function createReviewInvite(
   const { data, error } = await supabase
     .from("review_invites")
     .insert({
-      review_type:   opts.reviewType,
-      reviewer_id:   opts.reviewerId,
-      reviewed_id:   opts.reviewedId,
-      booking_id:    "bookingId" in opts ? opts.bookingId : null,
-      order_item_id: "orderItemId" in opts ? opts.orderItemId : null,
-      salon_id:      "salonId" in opts ? opts.salonId : null,
+      review_type:      opts.reviewType,
+      reviewer_id:      opts.reviewerId,
+      reviewed_id:      opts.reviewedId,
+      booking_id:       "bookingId" in opts ? opts.bookingId : null,
+      order_item_id:    "orderItemId" in opts ? opts.orderItemId : null,
+      salon_id:         "salonId" in opts ? opts.salonId : null,
+      store_booking_id: "storeBookingId" in opts ? opts.storeBookingId : null,
+      branch_id:        "branchId" in opts ? opts.branchId : null,
     })
     .select("token")
     .single();

@@ -22,35 +22,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { notifyRenewalReminder } from "@/lib/whatsapp";
-import { TIMES } from "@/lib/booking-times";
+import { findNextAvailableSlot } from "@/lib/find-available-slot";
 
 const LOOKAHEAD_DAYS = 7; // start looking a week out — still slack to book
-const SLOT_SEARCH_DAYS = 14; // how far past due_at to search for an opening
 
 function addDays(dateStr: string, days: number): string {
   const d = new Date(`${dateStr}T00:00:00`);
   d.setDate(d.getDate() + days);
   return d.toISOString().slice(0, 10);
-}
-
-async function findNextAvailableSlot(
-  supabase: Awaited<ReturnType<typeof createServiceClient>>,
-  artistId: string,
-  fromDate: string
-): Promise<{ date: string; time: string } | null> {
-  for (let i = 0; i < SLOT_SEARCH_DAYS; i++) {
-    const candidateDate = addDays(fromDate, i);
-    const { data: taken } = await supabase
-      .from("bookings")
-      .select("booking_time")
-      .eq("artist_id", artistId)
-      .eq("booking_date", candidateDate)
-      .neq("status", "cancelled");
-    const takenTimes = new Set((taken ?? []).map(t => t.booking_time.slice(0, 5)));
-    const openTime = TIMES.find(t => !takenTimes.has(t));
-    if (openTime) return { date: candidateDate, time: openTime };
-  }
-  return null;
 }
 
 export async function GET(request: NextRequest) {

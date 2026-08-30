@@ -368,6 +368,46 @@ function ResumeBookingWatcher({ onResume }: { onResume: (artist: Artist, resume:
   return null;
 }
 
+// Receiving end of the one-tap rebook deep link sent by
+// app/api/cron/renewal-nudge/route.ts (?rebook=<booking_renewals.id>).
+// Same shape as ResumeBookingWatcher above, but goes through
+// /api/renewals/[id] rather than querying Supabase directly — booking_
+// renewals has no client-facing RLS policy (server-only by design, see
+// its migration), and this needs to work even if the browser the WhatsApp
+// link opens in has no signed-in session at all.
+function RebookWatcher({ onResume }: { onResume: (artist: Artist, resume: ResumeBookingData) => void }) {
+  const params = useSearchParams();
+  const renewalId = params.get("rebook");
+
+  useEffect(() => {
+    if (!renewalId) return;
+    let cancelled = false;
+    (async () => {
+      const res = await fetch(`/api/renewals/${renewalId}`);
+      if (cancelled || !res.ok) return;
+      const data = await res.json();
+      if (cancelled || !data.artist) return;
+
+      onResume(data.artist as Artist, {
+        serviceId: data.serviceId,
+        // A slot no longer being available (someone else took it since
+        // the reminder went out) shouldn't silently open the drawer with
+        // stale, wrong values — leave date/time blank so the customer
+        // picks fresh, same as opening the drawer normally.
+        bookingDate: data.slotAvailable ? data.bookingDate : "",
+        bookingTime: data.slotAvailable ? data.bookingTime : "",
+        meetingAddress: data.meetingAddress ?? "",
+        pocName: data.pocName ?? "",
+        pocPhone: data.pocPhone ?? "",
+      });
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renewalId]);
+
+  return null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 export default function Home() {
   const supabase = createClient();
@@ -891,6 +931,7 @@ export default function Home() {
 
       <Suspense fallback={null}>
         <ResumeBookingWatcher onResume={handleResumeBooking} />
+        <RebookWatcher onResume={handleResumeBooking} />
       </Suspense>
     </div>
   );

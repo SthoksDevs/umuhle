@@ -40,6 +40,8 @@ type Invite = {
   booking_id: string | null;
   order_item_id: string | null;
   salon_id: string | null;
+  store_booking_id: string | null;
+  branch_id: string | null;
 };
 
 const first = <T,>(v: T | T[] | null | undefined): T | null =>
@@ -51,7 +53,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ token: s
 
   const { data: invite, error } = await service
     .from("review_invites")
-    .select("token, review_type, reviewer_id, reviewed_id, booking_id, order_item_id, salon_id")
+    .select("token, review_type, reviewer_id, reviewed_id, booking_id, order_item_id, salon_id, store_booking_id, branch_id")
     .eq("token", params.token)
     .single<Invite>();
 
@@ -174,7 +176,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ token: s
     const { data: existing } = await service
       .from("reviews")
       .select("id")
-      .eq("salon_id", invite.salon_id!)
+      .eq("store_booking_id", invite.store_booking_id!)
       .eq("reviewer_id", invite.reviewer_id)
       .maybeSingle();
     alreadyReviewed = Boolean(existing);
@@ -205,7 +207,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ token: s
 
   const { data: invite, error } = await service
     .from("review_invites")
-    .select("token, review_type, reviewer_id, reviewed_id, booking_id, order_item_id, salon_id")
+    .select("token, review_type, reviewer_id, reviewed_id, booking_id, order_item_id, salon_id, store_booking_id, branch_id")
     .eq("token", params.token)
     .single<Invite>();
 
@@ -239,6 +241,8 @@ export async function POST(req: NextRequest, props: { params: Promise<{ token: s
     insertPayload.product_id = item?.product_id ?? null;
   } else if (invite.review_type === "client_to_salon") {
     insertPayload.salon_id = invite.salon_id;
+    insertPayload.store_booking_id = invite.store_booking_id;
+    insertPayload.branch_id = invite.branch_id;
   }
 
   const { data: review, error: insertError } = await service
