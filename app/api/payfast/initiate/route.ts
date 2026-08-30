@@ -302,18 +302,21 @@ async function initiateStoreBookingDeposit(
     .single();
 
   if (!service) return NextResponse.json({ error: "That service is no longer available." }, { status: 404 });
-  if (!service.deposit_amount || service.deposit_amount <= 0) {
-    return NextResponse.json({ error: "This service doesn't take a deposit." }, { status: 400 });
-  }
 
-  if (!isGatewayEligible("payfast", { type: "store_booking_deposit", amountCents: service.deposit_amount })) {
+  // Every service requires payment to book — the configured deposit if
+  // the partner set one, otherwise the full service price. No more
+  // free/no-payment booking path.
+  const amountDue = service.deposit_amount && service.deposit_amount > 0 ? service.deposit_amount : service.price;
+  const isFullPayment = !service.deposit_amount || service.deposit_amount <= 0;
+
+  if (!isGatewayEligible("payfast", { type: "store_booking_deposit", amountCents: amountDue })) {
     return NextResponse.json(
-      { error: whyPayFastIneligible({ type: "store_booking_deposit", amountCents: service.deposit_amount }), code: "GATEWAY_INELIGIBLE", fallback: "ozow" },
+      { error: whyPayFastIneligible({ type: "store_booking_deposit", amountCents: amountDue }), code: "GATEWAY_INELIGIBLE", fallback: "ozow" },
       { status: 400 }
     );
   }
 
-  const { payoutCents } = splitCommission(service.deposit_amount);
+  const { payoutCents } = splitCommission(amountDue);
   const split = await getSplitTargetForSalon(supabase, salonId, payoutCents);
 
   const { data: booking, error } = await supabase
@@ -333,7 +336,7 @@ async function initiateStoreBookingDeposit(
       booking_time: bookingTime,
       notes: notes || null,
       status: "pending",
-      deposit_amount: service.deposit_amount,
+      deposit_amount: amountDue,
       deposit_status: "pending",
       payment_method: "payfast",
       payout_via: split ? "instant_split" : "wallet",
@@ -348,8 +351,8 @@ async function initiateStoreBookingDeposit(
 
   const params = buildPaymentParams({
     paymentId:       booking.id,
-    amount:          service.deposit_amount,
-    itemName:        `Booking deposit — ${salon.name}`,
+    amount:          amountDue,
+    itemName:        isFullPayment ? `Booking payment — ${salon.name}` : `Booking deposit — ${salon.name}`,
     itemDescription: `${service.name} on ${bookingDate} at ${bookingTime}`,
     firstName,
     lastName,

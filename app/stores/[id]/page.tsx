@@ -543,7 +543,11 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
     </div>
   );
 
-  const depositRand = hasStructuredServices && selectedService?.deposit_amount ? (selectedService.deposit_amount / 100).toFixed(2) : null;
+  const isFullPayment = hasStructuredServices && !!selectedService && !(selectedService.deposit_amount && selectedService.deposit_amount > 0);
+  const amountDueCents = hasStructuredServices && selectedService
+    ? (selectedService.deposit_amount && selectedService.deposit_amount > 0 ? selectedService.deposit_amount : selectedService.price)
+    : null;
+  const depositRand = amountDueCents !== null ? (amountDueCents / 100).toFixed(2) : null;
 
   return (
     <div ref={formRef} style={{ background: "#fff", borderRadius: 18, border: "1.5px solid rgba(155,127,184,0.15)", padding: "1.5rem" }}>
@@ -653,22 +657,32 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
 
       {depositRand && (
         <div style={{ background: "var(--plum-t)", border: "1.5px solid rgba(155,127,184,0.25)", borderRadius: 14, padding: "1rem 1.1rem", marginBottom: "0.85rem" }}>
-          <p style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--plum-d)", marginBottom: "0.3rem" }}>Secure this booking with a deposit</p>
+          <p style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--plum-d)", marginBottom: "0.3rem" }}>{isFullPayment ? "Payment required to book" : "Secure this booking with a deposit"}</p>
           <p style={{ fontSize: "0.82rem", color: "var(--grey)", marginBottom: "0.85rem" }}>
-            Pay a R{depositRand} deposit now and your slot is confirmed instantly — no waiting on a callback.
+            {isFullPayment
+              ? `Pay R${depositRand} now and your slot is confirmed instantly — no waiting on a callback.`
+              : `Pay a R${depositRand} deposit now and your slot is confirmed instantly — no waiting on a callback.`}
           </p>
           {user ? (
-            <button onClick={payDeposit} disabled={depositSaving || saving} className="btn-plum" style={{ width: "100%", padding: "0.8rem", borderRadius: 100, fontSize: "0.92rem", fontWeight: 600, cursor: depositSaving?"not-allowed":"pointer", opacity: depositSaving?0.7:1 }}>
+            <button onClick={payDeposit} disabled={depositSaving} className="btn-plum" style={{ width: "100%", padding: "0.8rem", borderRadius: 100, fontSize: "0.92rem", fontWeight: 600, cursor: depositSaving?"not-allowed":"pointer", opacity: depositSaving?0.7:1 }}>
               {depositSaving ? "Redirecting to payment…" : `Pay R${depositRand} now to Book`}
             </button>
           ) : (
             <button onClick={() => router.push(`${pathname}?auth=login`)} className="btn-plum" style={{ width: "100%", padding: "0.8rem", borderRadius: 100, fontSize: "0.92rem", fontWeight: 600 }}>
-              Log in to pay deposit & confirm
+              {isFullPayment ? "Log in to pay & confirm" : "Log in to pay deposit & confirm"}
             </button>
           )}
         </div>
       )}
 
+      {!hasStructuredServices && (
+        <button onClick={submit} disabled={saving} className="btn-plum" style={{ width: "100%", padding: "0.9rem", borderRadius: 100, fontSize: "1rem", fontWeight: 600, cursor: saving?"not-allowed":"pointer", opacity: saving?0.7:1 }}>
+          {saving ? "Sending…" : "Request booking"}
+        </button>
+      )}
+      <p style={{ fontSize: "0.75rem", color: "#bbb", textAlign: "center", marginTop: "0.75rem" }}>
+        {hasStructuredServices ? "Your slot is held once payment is confirmed." : "The salon will confirm via WhatsApp or phone."}
+      </p>
     </div>
   );
 }

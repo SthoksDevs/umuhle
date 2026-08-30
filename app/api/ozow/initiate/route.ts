@@ -237,9 +237,11 @@ async function initiateStoreBookingDeposit(
     .single();
 
   if (!service) return NextResponse.json({ error: "That service is no longer available." }, { status: 404 });
-  if (!service.deposit_amount || service.deposit_amount <= 0) {
-    return NextResponse.json({ error: "This service doesn't take a deposit." }, { status: 400 });
-  }
+
+  // Every service requires payment to book — the configured deposit if
+  // the partner set one, otherwise the full service price. No more
+  // free/no-payment booking path.
+  const amountDue = service.deposit_amount && service.deposit_amount > 0 ? service.deposit_amount : service.price;
 
   const webhookSecret = randomUUID();
 
@@ -259,7 +261,7 @@ async function initiateStoreBookingDeposit(
       booking_time: bookingTime,
       notes: notes || null,
       status: "pending",
-      deposit_amount: service.deposit_amount,
+      deposit_amount: amountDue,
       deposit_status: "pending",
       payment_method: "ozow",
       gateway_webhook_secret: webhookSecret,
@@ -275,7 +277,7 @@ async function initiateStoreBookingDeposit(
   const result = await createOzowPaymentRequest({
     transactionReference: booking.id,
     bankReference: `UMUHLEDEP${booking.id.replace(/-/g, "").slice(0, 11)}`,
-    amountCents: service.deposit_amount,
+    amountCents: amountDue,
     cancelUrl: `${baseUrl}/payment/cancelled?ref=${booking.id}&type=store_booking_deposit&method=ozow`,
     errorUrl: `${baseUrl}/payment/failed?ref=${booking.id}&type=store_booking_deposit&method=ozow`,
     successUrl: `${baseUrl}/payment/success?ref=${booking.id}&type=store_booking_deposit&method=ozow`,
