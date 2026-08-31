@@ -24,9 +24,10 @@ type PayMethod = "payfast" | "ozow";
 // Mirrors lib/shiplogic.ts's isCourierCheckoutEnabled() — duplicated as a
 // plain env read (rather than imported) since that file also pulls in
 // server-only fetch code that shouldn't ship in the client bundle (see the
-// CourierRate type-only import above). Keep both in sync if this ever
-// changes name.
-const COURIER_CHECKOUT_ENABLED = process.env.NEXT_PUBLIC_COURIER_CHECKOUT_ENABLED !== "false";
+// CourierRate type-only import above). Fail-safe / opt-in: defaults OFF
+// unless explicitly set to "true" (see lib/shiplogic.ts for why). Keep
+// both in sync if this ever changes name.
+const COURIER_CHECKOUT_ENABLED = process.env.NEXT_PUBLIC_COURIER_CHECKOUT_ENABLED === "true";
 
 // ── Coupon types ──────────────────────────────────────────────────────────────
 interface Coupon {

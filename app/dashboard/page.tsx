@@ -34,8 +34,9 @@ import { computeReliabilityScore } from "@/lib/reliability";
 // Mirrors lib/shiplogic.ts's isCourierCheckoutEnabled() — see
 // app/checkout/page.tsx's copy of the same flag for why this is a plain env
 // read here rather than an import (lib/shiplogic.ts pulls in server-only
-// fetch code that shouldn't ship in the client bundle).
-const COURIER_CHECKOUT_ENABLED = process.env.NEXT_PUBLIC_COURIER_CHECKOUT_ENABLED !== "false";
+// fetch code that shouldn't ship in the client bundle). Fail-safe / opt-in:
+// defaults OFF unless explicitly set to "true" (see lib/shiplogic.ts).
+const COURIER_CHECKOUT_ENABLED = process.env.NEXT_PUBLIC_COURIER_CHECKOUT_ENABLED === "true";
 
 // Refreshes the logged-in artist's stored lat/long from the browser so
 // nearby_artists() (supabase/migrations/20260727_proximity_and_push.sql)

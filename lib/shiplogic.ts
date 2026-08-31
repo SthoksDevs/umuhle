@@ -91,8 +91,14 @@ export function isMockMode(): boolean {
 // lib/orders.ts's createPendingOrder. NEXT_PUBLIC_ so the same flag also
 // gates the client-side checkout UI (see app/checkout/page.tsx) without a
 // second variable to keep in sync.
+//
+// Fail-safe / opt-in: defaults OFF unless explicitly set to "true". There's
+// no live Ship Logic account yet (see MOCK MODE above), so an unset,
+// misspelled, or not-yet-propagated env var must never silently let
+// checkout quote and charge customers a fabricated mock rate — it should
+// only turn on when someone deliberately flips it.
 export function isCourierCheckoutEnabled(): boolean {
-  return process.env.NEXT_PUBLIC_COURIER_CHECKOUT_ENABLED !== "false";
+  return process.env.NEXT_PUBLIC_COURIER_CHECKOUT_ENABLED === "true";
 }
 
 function authHeaders(): Record<string, string> {
