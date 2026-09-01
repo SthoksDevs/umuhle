@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const auth = authClient();
-  const { data: { user: caller }, error: callerError } = await auth.getUser(token);
+  const { data: { user: caller }, error: callerError } = await auth.auth.getUser(token);
   if (callerError || !caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json().catch(() => null);
