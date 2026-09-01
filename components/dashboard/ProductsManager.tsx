@@ -152,7 +152,7 @@ function ProductsManager({ user, partnerProvince }: { user: { id: string }; part
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "0.75rem" }}>
         <p style={{ fontSize: "0.82rem", color: "var(--grey)", margin: 0, maxWidth: 480 }}>
-          Listing a product is free — it goes through a quick review before it appears in the shop.
+          Listing a product is free.
         </p>
         {!showForm && !editTarget && (
           <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.55rem 1.25rem", fontSize: "0.85rem", whiteSpace: "nowrap" }}>
