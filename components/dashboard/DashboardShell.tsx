@@ -234,6 +234,17 @@ export default function DashboardShell({ role }: { role: DashboardRole }) {
 
   if (!user || !profile) return null;
 
+  // Which My Business sections apply to this role — see "core design
+  // decision" in docs/role-based-dashboards-status.md. Route-driven (not a
+  // union of every flag the profile happens to have): an owner who's also
+  // an artist manages Services from /dashboard/artist, not here.
+  const businessSections: Exclude<BusinessSection, "overview">[] =
+    role === "owner" ? ["stores", "products", "orders", "analytics"]
+    : role === "artist" ? ["services", ...(profile.is_seller ? (["products", "orders"] as const) : [])]
+    : profile.is_seller ? ["products", "orders"] // customer, opted into selling
+    : [];
+  const showMyBusiness = businessSections.length > 0;
+
   const TAB_CONFIG: { id: Tab; label: string; icon: string }[] = [
     { id: "dashboard",   label: "Dashboard",   icon: "⌂" },
     { id: "bookings",    label: "Bookings",    icon: "▣" },
@@ -249,13 +260,14 @@ export default function DashboardShell({ role }: { role: DashboardRole }) {
   // nav. Groups (and ids within a group) that end up empty after filtering
   // against TAB_CONFIG are dropped so an empty "My business" heading never
   // renders for a role/account that doesn't have it.
-  const groups: { title: string; ids: Tab[] }[] = [
+  const rawGroups: { title: string; ids: Tab[] }[] = [
     { title: "",             ids: ["dashboard"] },
     { title: "My activity",  ids: ["bookings", "my-orders", "wishlist"] },
     { title: "My business",  ids: ["my-business"] },
     { title: "Money",        ids: ["wallet", "invite"] },
     { title: "Account",      ids: ["profile"] },
-  ]
+  ];
+  const groups: { title: string; ids: Tab[] }[] = rawGroups
     .map(g => ({ ...g, ids: g.ids.filter(id => TAB_CONFIG.some(t => t.id === id)) }))
     .filter(g => g.ids.length > 0);
   const navItem = (id: Tab) => TAB_CONFIG.find(x => x.id === id)!;
@@ -274,17 +286,6 @@ export default function DashboardShell({ role }: { role: DashboardRole }) {
   // (see PartnerFulfillmentSettings). Goes quiet the moment they save one.
   const needsDeliveryArrangement =
     profile.is_partner && profile.allow_courier && !COURIER_CHECKOUT_ENABLED && !profile.delivery_arrangement_method;
-
-  // Which My Business sections apply to this role — see "core design
-  // decision" in docs/role-based-dashboards-status.md. Route-driven (not a
-  // union of every flag the profile happens to have): an owner who's also
-  // an artist manages Services from /dashboard/artist, not here.
-  const businessSections: Exclude<BusinessSection, "overview">[] =
-    role === "owner" ? ["stores", "products", "orders", "analytics"]
-    : role === "artist" ? ["services", ...(profile.is_seller ? (["products", "orders"] as const) : [])]
-    : profile.is_seller ? ["products", "orders"] // customer, opted into selling
-    : [];
-  const showMyBusiness = businessSections.length > 0;
 
   return (
     <div className="dashboard-app">

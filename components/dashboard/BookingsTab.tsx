@@ -11,6 +11,8 @@
 // monolith — see docs/role-based-dashboards-status.md.
 
 import { useState, useEffect, useCallback } from "react";
+import Image from "next/image";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Profile, Artist } from "@/types";
