@@ -67,6 +67,17 @@ export interface Profile {
   is_artist: boolean;
   is_partner: boolean;
   is_admin: boolean;
+  // ── Role-based dashboards (see supabase/migrations/20260830_role_based_dashboards.sql) ──
+  // is_employee mirrors is_artist/is_partner: true once this profile has at
+  // least one active branch_employees row (see BranchEmployee below). Drives
+  // routing to /dashboard/employee — see lib/dashboard/context.ts.
+  is_employee: boolean;
+  // A customer's opt-in to sell products — mirrors is_artist/is_partner but
+  // deliberately isn't a separate account_type, since it's an add-on
+  // capability on a customer account rather than a distinct role. Gates the
+  // Products/Orders sections of My Business on /dashboard/customer.
+  is_seller: boolean;
+  seller_enabled_at: string | null;
   account_status: AccountStatus;
   suspension_reason: string | null;
   suspended_at: string | null;
@@ -497,6 +508,9 @@ export interface StoreBranch {
   created_at: string;
 }
 
+export type BranchEmployeeRank = "staff" | "manager";
+export type BranchEmployeeInviteStatus = "pending" | "active" | "revoked";
+
 export interface BranchEmployee {
   id: string;
   branch_id: string;
@@ -507,6 +521,37 @@ export interface BranchEmployee {
   specialties: string[];
   is_active: boolean;
   display_order: number;
+  created_at: string;
+  // ── Role-based dashboards (supabase/migrations/20260830_role_based_dashboards.sql) ──
+  // profile_id is nullable so pre-existing display-only roster rows (no
+  // login) stay valid — a row only becomes a real employee account once
+  // this is set, via the (not yet built) owner invite flow. See
+  // docs/role-based-dashboards-status.md.
+  profile_id: string | null;
+  rank: BranchEmployeeRank;
+  // Owner-grantable permissions — all default false. A trigger
+  // (enforce_branch_manager_cap, DB-side) caps a branch at 2 "manager" rank
+  // rows; these four flags are independent of rank and not yet enforced by
+  // any owner-side UI (see EmployeeDashboard.tsx / MySalonTab.tsx notes).
+  can_manage_products: boolean;
+  can_manage_calendar: boolean;
+  can_view_analytics: boolean;
+  can_view_revenue: boolean;
+  invited_by: string | null;
+  invite_status: BranchEmployeeInviteStatus;
+}
+
+// One weekly recurring availability window for an employee at a branch —
+// e.g. { day_of_week: 1, start_time: "09:00", end_time: "17:00" } for
+// "Mondays 9-5". day_of_week is 0 (Sunday) to 6 (Saturday), matching
+// JavaScript's Date#getDay(). Multiple rows per employee are expected (one
+// per open day). Self-manageable — see EmployeeDashboard.tsx.
+export interface BranchEmployeeAvailability {
+  id: string;
+  branch_employee_id: string;
+  day_of_week: number;
+  start_time: string; // "HH:MM:SS", time without time zone
+  end_time: string;
   created_at: string;
 }
 

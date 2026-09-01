@@ -8,12 +8,24 @@ import type { ReactNode } from "react";
  * This component owns the navigation shell for business-management sections.
  * The individual sections remain independently reusable components.
  *
- * CONTINUATION MARKER:
- * - Stores is the next area to extract from page.tsx.
- * - Products and Orders are already extracted.
- * - Do not create a standalone Shipments dashboard destination.
+ * Role-based dashboards (see docs/role-based-dashboards-status.md): which of
+ * stores/services/products/orders actually apply depends on the account —
+ * a customer who opted into selling only needs Products+Orders, an artist
+ * needs Services (+ Products/Orders if selling), an owner needs
+ * Stores+Products+Orders. The optional `sections` prop lets a caller
+ * restrict which nav buttons (and content) show; omitting it keeps the old
+ * "show all four" behavior for backward compatibility.
  */
 export type BusinessSection = "overview" | "stores" | "services" | "products" | "orders";
+
+const SECTION_LABELS: Record<Exclude<BusinessSection, "overview">, string> = {
+  stores: "Stores",
+  services: "Services",
+  products: "Products",
+  orders: "Orders",
+};
+
+const ALL_SECTIONS: Exclude<BusinessSection, "overview">[] = ["stores", "services", "products", "orders"];
 
 export default function MyBusinessTab({
   activeSection,
@@ -22,20 +34,19 @@ export default function MyBusinessTab({
   services,
   products,
   orders,
+  sections = ALL_SECTIONS,
 }: {
   activeSection: BusinessSection;
   onSectionChange: (section: BusinessSection) => void;
-  stores: ReactNode;
-  services: ReactNode;
-  products: ReactNode;
-  orders: ReactNode;
+  stores?: ReactNode;
+  services?: ReactNode;
+  products?: ReactNode;
+  orders?: ReactNode;
+  sections?: Exclude<BusinessSection, "overview">[];
 }) {
-  const sections = [
+  const visibleSections = [
     { id: "overview" as const, label: "Overview" },
-    { id: "stores" as const, label: "Stores" },
-    { id: "services" as const, label: "Services" },
-    { id: "products" as const, label: "Products" },
-    { id: "orders" as const, label: "Orders" },
+    ...sections.map(id => ({ id, label: SECTION_LABELS[id] })),
   ];
 
   return (
@@ -50,7 +61,7 @@ export default function MyBusinessTab({
       </div>
 
       <div style={{ display: "flex", gap: "0.5rem", overflowX: "auto", paddingBottom: "0.5rem", marginBottom: "1.5rem" }}>
-        {sections.map(section => (
+        {visibleSections.map(section => (
           <button
             key={section.id}
             onClick={() => onSectionChange(section.id)}

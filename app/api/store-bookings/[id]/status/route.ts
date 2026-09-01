@@ -11,7 +11,13 @@
 //
 // Callable by the salon's own owner (partner_salons.partner_id), via a
 // Bearer token — same auth pattern as
-// app/api/vendor/order-items/[id]/ship/route.ts.
+// app/api/vendor/order-items/[id]/ship/route.ts. Also callable by the
+// specific employee a booking is assigned to (branch_employees.profile_id,
+// see supabase/migrations/20260830_role_based_dashboards.sql) acting on
+// their own booking — see components/dashboard/EmployeeDashboard.tsx. This
+// is intentionally narrower than the branch-wide calendar (can_manage_calendar,
+// not yet wired to any UI): an employee can act on a booking assigned to
+// them without needing that grant.
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
@@ -52,22 +58,37 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
 
   const { data: booking, error: bookingError } = await service
     .from("store_bookings")
-    .select("id, salon_id, branch_id, client_id, client_name, client_phone, booking_date, booking_time, salon:partner_salons(id, name, partner_id)")
+    .select("id, salon_id, branch_id, branch_employee_id, client_id, client_name, client_phone, booking_date, booking_time, salon:partner_salons(id, name, partner_id)")
     .eq("id", bookingId)
     .single();
 
   const salonRow = Array.isArray(booking?.salon) ? booking?.salon[0] : booking?.salon;
-  if (bookingError || !booking || salonRow?.partner_id !== user.id) {
+  const isOwner = !!booking && salonRow?.partner_id === user.id;
+
+  let isAssignedEmployee = false;
+  if (!!booking && !isOwner && booking.branch_employee_id) {
+    const { data: employeeRow } = await service
+      .from("branch_employees")
+      .select("id")
+      .eq("id", booking.branch_employee_id)
+      .eq("profile_id", user.id)
+      .eq("invite_status", "active")
+      .maybeSingle();
+    isAssignedEmployee = !!employeeRow;
+  }
+
+  if (bookingError || !booking || (!isOwner && !isAssignedEmployee)) {
     // Same response whether it doesn't exist or isn't yours — no need to
     // reveal which to a caller probing ids that aren't theirs.
     return NextResponse.json({ error: "Booking not found" }, { status: 404 });
   }
 
-  // Only the salon can call this route (see the auth check above), so any
-  // cancellation made through it is salon-initiated by definition, and any
-  // no-show reported through it is necessarily the customer's — a salon
-  // doesn't travel anywhere to fail to show up. See the 20260827_store_
-  // booking_reliability migration for the reasoning.
+  // Only the salon owner or the assigned employee can call this route (see
+  // the auth check above). A cancellation made through it is therefore
+  // provider-initiated by definition (owner or the staff member handling
+  // it), and any no-show reported through it is necessarily the
+  // customer's — neither party travels anywhere to fail to show up. See
+  // the 20260827_store_booking_reliability migration for the reasoning.
   const now = new Date();
   const cancelledBy = status === "cancelled" ? "salon" : null;
   const lateCancellation = status === "cancelled" ? isLateCancellation(booking.booking_date, booking.booking_time, now) : null;
