@@ -48,6 +48,7 @@ import WalletTab from "@/components/dashboard/WalletTab";
 import MySalonTab from "@/components/dashboard/MySalonTab";
 import MyServicesTab from "@/components/dashboard/MyServicesTab";
 import MyShopTab from "@/components/dashboard/MyShopTab";
+import BranchAnalyticsSection from "@/components/dashboard/BranchAnalyticsSection";
 
 
 // Refreshes the logged-in artist's stored lat/long from the browser so
@@ -279,7 +280,7 @@ export default function DashboardShell({ role }: { role: DashboardRole }) {
   // union of every flag the profile happens to have): an owner who's also
   // an artist manages Services from /dashboard/artist, not here.
   const businessSections: Exclude<BusinessSection, "overview">[] =
-    role === "owner" ? ["stores", "products", "orders"]
+    role === "owner" ? ["stores", "products", "orders", "analytics"]
     : role === "artist" ? ["services", ...(profile.is_seller ? (["products", "orders"] as const) : [])]
     : profile.is_seller ? ["products", "orders"] // customer, opted into selling
     : [];
@@ -472,6 +473,7 @@ export default function DashboardShell({ role }: { role: DashboardRole }) {
             services={businessSections.includes("services") ? <section><MyServicesTab profile={profile} user={user} onUpdate={(p) => setProfile(p)} /></section> : undefined}
             products={businessSections.includes("products") ? <MyShopTab user={user} partnerProvince={profile.province} /> : undefined}
             orders={businessSections.includes("orders") ? <OrdersManager user={user} /> : undefined}
+            analytics={businessSections.includes("analytics") ? <BranchAnalyticsSection user={user} /> : undefined}
           />
         )}
       </main>

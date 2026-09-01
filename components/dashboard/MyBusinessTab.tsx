@@ -9,20 +9,23 @@ import type { ReactNode } from "react";
  * The individual sections remain independently reusable components.
  *
  * Role-based dashboards (see docs/role-based-dashboards-status.md): which of
- * stores/services/products/orders actually apply depends on the account —
- * a customer who opted into selling only needs Products+Orders, an artist
- * needs Services (+ Products/Orders if selling), an owner needs
- * Stores+Products+Orders. The optional `sections` prop lets a caller
- * restrict which nav buttons (and content) show; omitting it keeps the old
- * "show all four" behavior for backward compatibility.
+ * stores/services/products/orders/analytics actually apply depends on the
+ * account — a customer who opted into selling only needs Products+Orders,
+ * an artist needs Services (+ Products/Orders if selling), an owner needs
+ * Stores+Products+Orders+Analytics. The optional `sections` prop lets a
+ * caller restrict which nav buttons (and content) show; omitting it keeps
+ * the old "show all four" behavior for backward compatibility (analytics
+ * is never included by default — it's opt-in via `sections` since it
+ * didn't exist when that default was chosen).
  */
-export type BusinessSection = "overview" | "stores" | "services" | "products" | "orders";
+export type BusinessSection = "overview" | "stores" | "services" | "products" | "orders" | "analytics";
 
 const SECTION_LABELS: Record<Exclude<BusinessSection, "overview">, string> = {
   stores: "Stores",
   services: "Services",
   products: "Products",
   orders: "Orders",
+  analytics: "Analytics",
 };
 
 const ALL_SECTIONS: Exclude<BusinessSection, "overview">[] = ["stores", "services", "products", "orders"];
@@ -34,6 +37,7 @@ export default function MyBusinessTab({
   services,
   products,
   orders,
+  analytics,
   sections = ALL_SECTIONS,
 }: {
   activeSection: BusinessSection;
@@ -42,6 +46,7 @@ export default function MyBusinessTab({
   services?: ReactNode;
   products?: ReactNode;
   orders?: ReactNode;
+  analytics?: ReactNode;
   sections?: Exclude<BusinessSection, "overview">[];
 }) {
   const visibleSections = [
@@ -93,6 +98,7 @@ export default function MyBusinessTab({
       {activeSection === "services" && services}
       {activeSection === "products" && products}
       {activeSection === "orders" && orders}
+      {activeSection === "analytics" && analytics}
     </section>
   );
 }

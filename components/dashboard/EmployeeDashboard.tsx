@@ -33,14 +33,19 @@ import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
 import { ICON } from "@/lib/dashboard/format";
 import { STATUS_STYLES, type BookingWithRelations } from "@/lib/dashboard/types";
+import BranchAnalytics from "@/components/dashboard/BranchAnalytics";
 
 const WEEKDAY_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-type EmployeeTab = "bookings" | "availability" | "account";
+type EmployeeTab = "bookings" | "availability" | "analytics" | "account";
 
-// branch_employees joined with its parent branch's name, for display and
-// for the branch switcher when an employee works more than one branch.
-type MyAssignment = BranchEmployee & { branch: { id: string; name: string } | null };
+// branch_employees joined with its parent branch's name + salon_id, for
+// display, for the branch switcher when an employee works more than one
+// branch, and for resolving which salon's analytics to show (see
+// components/dashboard/BranchAnalytics.tsx, keyed by salonId not branchId
+// — matches the existing GA4/store-analytics data model, which tracks per
+// public store page, not per branch).
+type MyAssignment = BranchEmployee & { branch: { id: string; name: string; salon_id: string } | null };
 
 type MyBooking = BookingWithRelationsLite;
 // store_bookings doesn't shape-match BookingWithRelations (that's the
@@ -77,7 +82,7 @@ export default function EmployeeDashboard() {
         supabase.from("profiles").select("*").eq("id", user.id).single(),
         supabase
           .from("branch_employees")
-          .select("*, branch:store_branches(id, name)")
+          .select("*, branch:store_branches(id, name, salon_id)")
           .eq("profile_id", user.id)
           .eq("invite_status", "active")
           .order("display_order", { ascending: true }),
@@ -155,10 +160,13 @@ export default function EmployeeDashboard() {
           </div>
         )}
 
-        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem" }}>
+        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem", flexWrap: "wrap" }}>
           {([
             { id: "bookings" as const, label: "My bookings" },
             { id: "availability" as const, label: "Availability" },
+            ...(activeAssignment && (activeAssignment.can_view_analytics || activeAssignment.can_view_revenue)
+              ? [{ id: "analytics" as const, label: "Analytics" }]
+              : []),
             { id: "account" as const, label: "Account" },
           ]).map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
@@ -171,6 +179,7 @@ export default function EmployeeDashboard() {
 
         {tab === "bookings" && activeAssignment && <MyAssignedBookings branchEmployeeId={activeAssignment.id} />}
         {tab === "availability" && activeAssignment && <MyAvailability branchEmployeeId={activeAssignment.id} />}
+        {tab === "analytics" && activeAssignment?.branch && <BranchAnalytics salonId={activeAssignment.branch.salon_id} />}
         {tab === "account" && <MyAccount user={user} />}
       </div>
       <Footer />
