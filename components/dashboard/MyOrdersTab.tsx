@@ -11,11 +11,13 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Order, OrderItem, Product } from "@/types";
 import { useCart } from "@/lib/cart-context";
-import { fmt, formatDate } from "@/lib/dashboard/format";
+import { fmt, formatDate, ICON } from "@/lib/dashboard/format";
 import type { BookingWithRelations } from "@/lib/dashboard/types";
 import { STATUS_STYLES } from "@/lib/dashboard/types";
 
@@ -261,5 +263,3 @@ export default function MyOrdersTab({ user }: { user: User }) {
     </section>
   );
 }
-
-// ─── Dashboard home (sidebar landing page) ─────────────────────────────────────

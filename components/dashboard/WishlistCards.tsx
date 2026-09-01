@@ -12,9 +12,11 @@
 import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { useCart } from "@/lib/cart-context";
 import type { Product } from "@/types";
 import type { WishlistArtist } from "@/lib/dashboard/types";
-import { ICON } from "@/lib/dashboard/format";
+import { ICON, fmt } from "@/lib/dashboard/format";
+import StarRating from "@/components/StarRating";
 
 // ─── Wishlist card ─────────────────────────────────────────────────────────────
 export function WishlistCard({ item, onRemove }: { item: WishlistArtist; onRemove: (id: string) => void }) {
@@ -97,4 +99,3 @@ export function ProductWishlistCard({ product, onRemove }: { product: Product; o
     </div>
   );
 }
-
