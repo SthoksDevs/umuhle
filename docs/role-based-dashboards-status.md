@@ -1,5 +1,15 @@
 # Role-based dashboards — status & handoff
 
+**Update (2026-09-01, later session):** the two items originally listed
+below under "Explicitly deferred" — store analytics/revenue, and the
+owner-side employee invite/permissions UI — are now built. See "What
+shipped in the follow-up session" near the bottom of this doc for exactly
+what's there and what's still rough around the edges. The rest of this
+doc (written by the session that did the original route split) is left
+as-is below since it's still an accurate account of that work and the
+boundary-leak gotcha pattern is still worth reading before touching
+`MySalonTab.tsx`/`BookingsTab.tsx`/etc. again.
+
 Splitting the single `app/dashboard/page.tsx` monolith (4,911 lines, one
 tab-switcher UI shown identically to every account type) into separate
 Customer / Employee / Artist / Store Owner dashboards, per the original
@@ -243,24 +253,104 @@ deployed) — pushing them is safe and additive, not a live behavior change.
 11. Open a PR (not a direct push to `main` — see "why a PR" below), get it
     building clean in CI/preview if this repo has that, then merge.
 
-## Explicitly deferred (don't start until the above is merged)
+## What shipped in the follow-up session
 
-Per the user's own sequencing:
-1. The owner-side employee **invite flow** (owner enters name/phone →
-   creates `profiles` + `branch_employees` row with
-   `invite_status='pending'` → employee sets their own password to
-   activate). `branch_employees.invite_status` already supports
-   `'pending'`/`'active'`/`'revoked'` (DB CHECK constraint, confirmed live).
-2. An owner-side UI for granting the four `can_manage_products`/
-   `can_manage_calendar`/`can_view_analytics`/`can_view_revenue` flags per
-   employee, and the "add up to 2 managers per branch" hierarchy UI (the
-   DB-side cap is already enforced live by trigger `trg_branch_manager_cap`
-   on `branch_employees` — don't reimplement that check in application
-   code, just surface it).
-3. Store analytics / branch revenue dashboards — confirmed to not exist
-   anywhere yet (owner or otherwise), currently only an email cron report.
-   No schema work needed, this is a pure new-UI task whenever it's picked
-   up.
+**Store analytics + revenue** (previously an email-cron-only report, no
+dashboard UI anywhere):
+- `app/api/store-analytics/[salonId]/route.ts` — reuses the existing,
+  tested `getStoreBookingStats`/`getStoreGA4Metrics` from
+  `lib/store-analytics.ts` rather than recomputing those metrics a second
+  way. Adds a new revenue aggregation (`store_bookings.payout_cents`
+  summed per branch) the cron report never needed. Authorizes the owner
+  always; an employee only for whichever of `can_view_analytics`/
+  `can_view_revenue` they've actually been granted — this route is the
+  first place in the codebase that checks those two flags.
+- `components/dashboard/BranchAnalytics.tsx` + `BranchAnalyticsSection.tsx`
+  (owner's salon-picker wrapper, since an owner can have >1 salon) — wired
+  into `MyBusinessTab`'s new 5th section (`"analytics"`), and into
+  `EmployeeDashboard.tsx`'s conditionally-shown Analytics tab.
+
+**Owner-side employee invite + permissions UI** (previously: `BranchStaffManager`
+was still the pre-migration display-only roster, no way to actually create
+an employee login or grant permissions):
+- `app/api/branch-employees/invite/route.ts` — owner enters name/phone/email
+  for a branch → creates a real Supabase Auth user (or reuses an existing
+  account if the email already has one), a `profiles` row, and a
+  `branch_employees` row with `invite_status='pending'`, then emails an
+  activation link via `lib/email.ts`'s new `sendEmployeeInviteEmail`.
+  **Email, not WhatsApp** — a business-initiated WhatsApp message needs a
+  pre-approved Meta template (see `lib/whatsapp.ts`'s `sendPhoneOtp` for
+  the one that already exists) and getting a new one approved is an
+  external, multi-day Meta review process outside this codebase.
+- **Real bug caught before shipping**: `auth.users` has an existing
+  `on_auth_user_created` trigger (`handle_new_user()`) that auto-creates
+  the `profiles` row, and its `account_type` validation
+  (`if v_account_type not in ('customer','artist','business_partner')`)
+  was never updated to include `'employee'` when
+  `20260830_role_based_dashboards.sql` added it as a valid value. A naive
+  invite implementation would have silently created employees as
+  `account_type='customer'`. **Not fixed at the trigger level** — deliberately
+  left as-is (it's an `AFTER INSERT` trigger on `auth.users`, about as
+  sensitive as shared infrastructure gets) and instead corrected via an
+  `UPDATE` right after `admin.createUser()` in the invite route. If
+  employee self-signup (metadata-driven, not through the invite route)
+  ever gets built, revisit `handle_new_user()`'s whitelist then.
+- `app/api/branch-employees/activate/route.ts` — flips
+  `invite_status` `pending`→`active` once the employee sets their
+  password. Deliberately not a direct RLS-backed client update — keeps the
+  employee's own write access to their `branch_employees` row limited to
+  exactly this one transition, nothing else on that row.
+- `app/api/branch-employees/[id]/route.ts` — owner-side `PATCH` for rank,
+  the four `can_*` flags, and revoking access. The "max 2 managers per
+  branch" rule is **not** reimplemented here — `trg_branch_manager_cap`
+  (DB trigger) already enforces it; this route just surfaces that error
+  cleanly instead of a raw 500.
+- `app/activate-employee/page.tsx` — the invite link's landing page,
+  closely mirrors `app/reset-password/page.tsx`'s existing pattern.
+- `components/dashboard/MySalonTab.tsx`'s `BranchStaffManager` — added a
+  parallel "+ Invite employee" flow (`InviteEmployeeForm`) alongside the
+  existing "+ Add staff member" (display-only, unchanged), plus
+  `InviteStatusBadge` and `EmployeeAccessPanel` (rank selector, the four
+  permission checkboxes, revoke) for any roster row that has a real
+  `profile_id`. `BranchStaffMember` was a hand-duplicated subset of
+  `BranchEmployee`'s fields — replaced with a type alias to the real
+  `BranchEmployee` type instead of extending the duplicate, to avoid the
+  exact kind of drift that caused the courier-checkout-flag bug.
+
+**Known rough edges in this follow-up work** (not blocking, but real):
+- **Not build-verified** — same caveat as the original route split, no
+  `npm install`/`next build` run against any of this.
+- **No "resend invite" UI** if `generateLink`/the email send fails after
+  the `profiles`/`branch_employees` rows already exist (the invite route
+  returns a 207 with a warning in that case, but there's no owner-facing
+  retry button — they'd need to ask support, or the branch_employees row
+  could be deleted and re-invited from scratch).
+- **Still single-branch-only**, same limitation `BranchStaffManager` had
+  before this work (see its own top comment) — always resolves the salon's
+  `is_primary` branch. A multi-branch owner can't invite/manage staff for
+  a non-primary branch through this UI yet.
+- **The synthetic-email path is untested and probably not worth building
+  further**: the invite route's original design considered generating a
+  placeholder email when the owner doesn't have one, but the route as
+  shipped actually *requires* a real email (returns 400 without one) since
+  there's no working delivery channel for a synthetic address once
+  WhatsApp template delivery was ruled out. Worth revisiting only if this
+  app ever gets an approved WhatsApp template for exactly this.
+- Analytics: revenue's "pending" figure is an *estimate*
+  (`splitCommission()` applied to the raw deposit amount) for bookings
+  that haven't completed yet — only becomes the real, final number once
+  `creditStoreBookingDepositPayout` runs and sets `payout_cents` for real.
+  This is stated in the UI copy but worth double-checking if numbers ever
+  look off by a few rand.
+
+## Genuinely still not started
+
+- Store CSV import already existed pre-this-work — not part of any of the
+  above, unaffected.
+- No UI anywhere for an owner to see *pending* invites in one place across
+  branches, or bulk-manage permissions — today it's one row's "Manage
+  access" panel at a time.
+- No tests were written for anything in this doc, in either session.
 
 ## Why a PR, not a direct push to main
 

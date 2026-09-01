@@ -17,7 +17,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { Booking } from "@/types";
+import type { Booking, BranchEmployee } from "@/types";
 import { UPSELL_TAG_GROUPS } from "@/types";
 import StoreCsvImport from "@/components/dashboard/StoreCsvImport";
 import UpsellProductPicker from "@/components/UpsellProductPicker";
@@ -1013,17 +1013,16 @@ function SalonBookingsInbox({ salonId }: { salonId: string }) {
 // One branch per salon today (see supabase/migrations/20260802_store_branches_foundation.sql)
 // so this always resolves the is_primary branch — multi-branch owners will
 // get a branch switcher here once that phase ships.
-
-type BranchStaffMember = {
-  id: string;
-  branch_id: string;
-  name: string;
-  photo_url: string | null;
-  bio: string | null;
-  specialties: string[];
-  is_active: boolean;
-  display_order: number;
-};
+//
+// BranchStaffMember is just BranchEmployee (@/types) under its original
+// local name here, rather than a hand-duplicated subset of its fields —
+// duplicating a type that's actually the same shape is exactly the kind
+// of drift that caused the courier-checkout-flag bug fixed 2026-08-31
+// (three hand-synced copies of one value). This is where the
+// profile_id/rank/can_*/invite_status columns (added by
+// 20260830_role_based_dashboards.sql) actually get used in the UI for
+// the first time — see EmployeeAccessPanel below.
+type BranchStaffMember = BranchEmployee;
 
 function BranchStaffManager({ salonId, salonServices }: { salonId: string; salonServices: string[] }) {
   const supabase = createClient();
@@ -1032,6 +1031,8 @@ function BranchStaffManager({ salonId, salonServices }: { salonId: string; salon
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<BranchStaffMember | null>(null);
+  const [showInviteForm, setShowInviteForm] = useState(false);
+  const [expandedAccessId, setExpandedAccessId] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -1068,6 +1069,22 @@ function BranchStaffManager({ salonId, salonServices }: { salonId: string; salon
     setStaff(prev => prev.filter(s => s.id !== id));
   };
 
+  const handleInvited = async () => {
+    setShowInviteForm(false);
+    // Re-fetch rather than trying to construct the new row client-side —
+    // the invite route may have reused an existing account (see its
+    // createOrReuseEmployeeAccount), and this way the list always matches
+    // what's actually in the database.
+    if (!branchId) return;
+    const { data } = await supabase
+      .from("branch_employees").select("*").eq("branch_id", branchId).order("display_order", { ascending: true });
+    setStaff((data as BranchStaffMember[]) ?? []);
+  };
+
+  const handleAccessUpdated = (updated: BranchStaffMember) => {
+    setStaff(prev => prev.map(s => s.id === updated.id ? updated : s));
+  };
+
   if (loading) return <p style={{ color: "var(--grey)" }}>Loading…</p>;
 
   if (!branchId) return <p style={{ color: "var(--grey)", fontSize: "0.9rem" }}>Save your store listing first, then add staff here.</p>;
@@ -1082,6 +1099,10 @@ function BranchStaffManager({ salonId, salonServices }: { salonId: string; salon
     />
   );
 
+  if (showInviteForm) return (
+    <InviteEmployeeForm branchId={branchId} onInvited={handleInvited} onCancel={() => setShowInviteForm(false)} />
+  );
+
   return (
     <div>
       <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "1rem" }}>
@@ -1094,29 +1115,212 @@ function BranchStaffManager({ salonId, salonServices }: { salonId: string; salon
 
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1.25rem" }}>
         {staff.map(member => (
-          <div key={member.id} style={{ display: "flex", alignItems: "center", gap: "0.85rem", background: "#fff", borderRadius: 14, border: "1.5px solid rgba(155,127,184,0.15)", padding: "0.85rem 1rem", opacity: member.is_active ? 1 : 0.55 }}>
-            <div style={{ width: 44, height: 44, borderRadius: "50%", overflow: "hidden", background: "#f3eef7", flexShrink: 0 }}>
-              {member.photo_url && <img src={member.photo_url} alt={member.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <p style={{ fontWeight: 600, fontSize: "0.9rem", margin: 0 }}>
-                {member.name}{!member.is_active && <span style={{ color: "#999", fontWeight: 400 }}> · hidden</span>}
-              </p>
-              {member.specialties.length > 0 && (
-                <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: "2px 0 0", textTransform: "capitalize" }}>{member.specialties.join(", ")}</p>
+          <div key={member.id} style={{ background: "#fff", borderRadius: 14, border: "1.5px solid rgba(155,127,184,0.15)", opacity: member.is_active ? 1 : 0.55 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.85rem", padding: "0.85rem 1rem" }}>
+              <div style={{ width: 44, height: 44, borderRadius: "50%", overflow: "hidden", background: "#f3eef7", flexShrink: 0 }}>
+                {member.photo_url && <img src={member.photo_url} alt={member.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <p style={{ fontWeight: 600, fontSize: "0.9rem", margin: 0, display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
+                  {member.name}
+                  {!member.is_active && <span style={{ color: "#999", fontWeight: 400, fontSize: "0.78rem" }}>hidden</span>}
+                  {member.profile_id && <InviteStatusBadge status={member.invite_status} rank={member.rank} />}
+                </p>
+                {member.specialties.length > 0 && (
+                  <p style={{ fontSize: "0.78rem", color: "var(--grey)", margin: "2px 0 0", textTransform: "capitalize" }}>{member.specialties.join(", ")}</p>
+                )}
+              </div>
+              <button onClick={() => setEditing(member)} style={{ background: "none", border: "none", color: "var(--plum)", fontSize: "0.8rem", fontWeight: 600, cursor: "pointer" }}>Edit</button>
+              <button onClick={() => toggleActive(member)} style={{ background: "none", border: "none", color: "var(--grey)", fontSize: "0.8rem", cursor: "pointer" }}>{member.is_active ? "Hide" : "Unhide"}</button>
+              <button onClick={() => remove(member.id)} style={{ background: "none", border: "none", color: "#A32D2D", fontSize: "0.8rem", cursor: "pointer" }}>Remove</button>
+              {member.profile_id && member.invite_status !== "revoked" && (
+                <button onClick={() => setExpandedAccessId(expandedAccessId === member.id ? null : member.id)}
+                  style={{ background: "none", border: "none", color: "var(--grey)", fontSize: "0.8rem", cursor: "pointer" }}>
+                  {expandedAccessId === member.id ? "Close access" : "Manage access"}
+                </button>
               )}
             </div>
-            <button onClick={() => setEditing(member)} style={{ background: "none", border: "none", color: "var(--plum)", fontSize: "0.8rem", fontWeight: 600, cursor: "pointer" }}>Edit</button>
-            <button onClick={() => toggleActive(member)} style={{ background: "none", border: "none", color: "var(--grey)", fontSize: "0.8rem", cursor: "pointer" }}>{member.is_active ? "Hide" : "Unhide"}</button>
-            <button onClick={() => remove(member.id)} style={{ background: "none", border: "none", color: "#A32D2D", fontSize: "0.8rem", cursor: "pointer" }}>Remove</button>
+            {member.profile_id && expandedAccessId === member.id && (
+              <EmployeeAccessPanel member={member} onUpdated={handleAccessUpdated} />
+            )}
           </div>
         ))}
       </div>
 
-      <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.6rem 1.5rem", borderRadius: 100, fontWeight: 600, fontSize: "0.85rem" }}>
-        + Add staff member
+      <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+        <button onClick={() => setShowForm(true)} className="btn-plum" style={{ padding: "0.6rem 1.5rem", borderRadius: 100, fontWeight: 600, fontSize: "0.85rem" }}>
+          + Add staff member
+        </button>
+        <button onClick={() => setShowInviteForm(true)}
+          style={{ padding: "0.6rem 1.5rem", borderRadius: 100, fontWeight: 600, fontSize: "0.85rem", background: "#fff", border: "1.5px solid var(--plum)", color: "var(--plum)", cursor: "pointer" }}>
+          + Invite employee
+        </button>
+      </div>
+      <p style={{ fontSize: "0.78rem", color: "var(--grey)", marginTop: "0.6rem", maxWidth: 480 }}>
+        &quot;Add staff member&quot; just adds a name clients see when booking. &quot;Invite employee&quot; creates an actual login so they can manage their own availability and bookings.
+      </p>
+    </div>
+  );
+}
+
+// A branch can have at most 2 "manager" rank employees — enforced by the
+// trg_branch_manager_cap DB trigger (supabase/migrations/20260830_role_based_dashboards.sql).
+// This list is for the rank <select> below; the actual limit is
+// server-side, this just avoids offering an option that'll immediately
+// bounce.
+const EMPLOYEE_RANKS: { value: "staff" | "manager"; label: string }[] = [
+  { value: "staff", label: "Staff" },
+  { value: "manager", label: "Manager" },
+];
+
+const PERMISSION_FIELDS: { key: "can_manage_products" | "can_manage_calendar" | "can_view_analytics" | "can_view_revenue"; label: string; hint: string }[] = [
+  { key: "can_manage_calendar", label: "Manage branch calendar", hint: "See and edit every staff member's bookings, not just their own" },
+  { key: "can_manage_products", label: "Manage products", hint: "Add, edit, and remove products for sale" },
+  { key: "can_view_analytics", label: "View analytics", hint: "Bookings and website traffic for this store" },
+  { key: "can_view_revenue", label: "View revenue", hint: "Payout amounts, by branch" },
+];
+
+function InviteStatusBadge({ status, rank }: { status: string; rank: string }) {
+  const statusStyle = status === "active"
+    ? { bg: "#E8F5E9", color: "#2E7D32", label: "Active" }
+    : status === "revoked"
+    ? { bg: "#FAFAFA", color: "#757575", label: "Revoked" }
+    : { bg: "#FFF3E0", color: "#E65100", label: "Invite pending" };
+  return (
+    <span style={{ display: "inline-flex", gap: "0.3rem" }}>
+      <span style={{ background: statusStyle.bg, color: statusStyle.color, borderRadius: 100, padding: "0.1rem 0.55rem", fontSize: "0.68rem", fontWeight: 600 }}>{statusStyle.label}</span>
+      {rank === "manager" && <span style={{ background: "var(--plum-t)", color: "var(--plum)", borderRadius: 100, padding: "0.1rem 0.55rem", fontSize: "0.68rem", fontWeight: 600 }}>Manager</span>}
+    </span>
+  );
+}
+
+// Owner-only rank/permission editing + revoke, for one branch_employees
+// row that already has a real login (profile_id set). Goes through
+// PATCH /api/branch-employees/[id] — branch_employees has no client-side
+// RLS write access, by design (see that route's file comment).
+function EmployeeAccessPanel({ member, onUpdated }: { member: BranchStaffMember; onUpdated: (m: BranchStaffMember) => void }) {
+  const supabase = createClient();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const patch = async (body: Record<string, unknown>) => {
+    setSaving(true);
+    setError(null);
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) { setSaving(false); setError("Not signed in."); return; }
+    const res = await fetch(`/api/branch-employees/${member.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json().catch(() => null);
+    setSaving(false);
+    if (!res.ok) { setError(json?.error ?? "Couldn't save that change."); return; }
+    onUpdated(json.branchEmployee as BranchStaffMember);
+  };
+
+  const revoke = () => {
+    if (!confirm(`Revoke ${member.name}'s access? They'll no longer be able to sign in as a team member here.`)) return;
+    patch({ invite_status: "revoked" });
+  };
+
+  return (
+    <div style={{ borderTop: "1.5px solid rgba(155,127,184,0.12)", padding: "1rem", background: "var(--plum-t)" }}>
+      <div style={{ marginBottom: "0.85rem" }}>
+        <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, marginBottom: "0.35rem" }}>Rank</label>
+        <select value={member.rank} disabled={saving} onChange={e => patch({ rank: e.target.value })}
+          style={{ padding: "0.5rem 0.75rem", borderRadius: 8, border: "1.5px solid rgba(155,127,184,0.25)", fontSize: "0.85rem" }}>
+          {EMPLOYEE_RANKS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+        </select>
+        <p style={{ fontSize: "0.72rem", color: "var(--grey)", margin: "0.35rem 0 0" }}>Up to 2 managers per branch.</p>
+      </div>
+
+      <div style={{ marginBottom: "0.85rem" }}>
+        <p style={{ fontSize: "0.78rem", fontWeight: 600, marginBottom: "0.5rem" }}>Access</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+          {PERMISSION_FIELDS.map(f => (
+            <label key={f.key} style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", fontSize: "0.82rem", cursor: saving ? "default" : "pointer" }}>
+              <input type="checkbox" checked={Boolean(member[f.key])} disabled={saving} onChange={e => patch({ [f.key]: e.target.checked })} style={{ marginTop: "0.15rem" }} />
+              <span>
+                {f.label}
+                <br /><span style={{ color: "var(--grey)", fontSize: "0.75rem" }}>{f.hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {error && <p style={{ color: "#A32D2D", fontSize: "0.8rem", margin: "0 0 0.5rem" }}>{error}</p>}
+
+      <button onClick={revoke} disabled={saving} style={{ background: "none", border: "none", color: "#A32D2D", fontSize: "0.8rem", cursor: "pointer", padding: 0 }}>
+        Revoke access
       </button>
     </div>
+  );
+}
+
+// Owner-only: create a real login for a team member (as opposed to "+ Add
+// staff member" above, which just adds a display-only name). Goes through
+// POST /api/branch-employees/invite — see that route for why this sends
+// an email, not a WhatsApp message, and what happens if the email already
+// has an Umuhle account.
+function InviteEmployeeForm({ branchId, onInvited, onCancel }: { branchId: string; onInvited: () => void; onCancel: () => void }) {
+  const supabase = createClient();
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSaving(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) { setSaving(false); setError("Not signed in."); return; }
+    const res = await fetch("/api/branch-employees/invite", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ branchId, name, phone, email }),
+    });
+    const json = await res.json().catch(() => null);
+    setSaving(false);
+    if (!res.ok) { setError(json?.error ?? "Couldn't send the invite."); return; }
+    onInvited();
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "1.25rem" }}>
+        They&apos;ll get an email to set their own password. Once activated, they can manage their own availability and see their assigned bookings — nothing store-wide unless you grant it under &quot;Manage access&quot;.
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginBottom: "1.25rem", maxWidth: 380 }}>
+        <div>
+          <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, marginBottom: "0.35rem" }}>Name</label>
+          <input value={name} onChange={e => setName(e.target.value)} required
+            style={{ width: "100%", padding: "0.65rem 0.9rem", borderRadius: 10, border: "1.5px solid rgba(155,127,184,0.25)", fontSize: "0.88rem", boxSizing: "border-box" }} />
+        </div>
+        <div>
+          <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, marginBottom: "0.35rem" }}>Phone</label>
+          <input value={phone} onChange={e => setPhone(e.target.value)} required placeholder="082 123 4567"
+            style={{ width: "100%", padding: "0.65rem 0.9rem", borderRadius: 10, border: "1.5px solid rgba(155,127,184,0.25)", fontSize: "0.88rem", boxSizing: "border-box" }} />
+        </div>
+        <div>
+          <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, marginBottom: "0.35rem" }}>Email</label>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)} required placeholder="Where their activation link goes"
+            style={{ width: "100%", padding: "0.65rem 0.9rem", borderRadius: 10, border: "1.5px solid rgba(155,127,184,0.25)", fontSize: "0.88rem", boxSizing: "border-box" }} />
+        </div>
+      </div>
+      {error && <p style={{ color: "#A32D2D", fontSize: "0.85rem", marginBottom: "1rem" }}>{error}</p>}
+      <div style={{ display: "flex", gap: "0.75rem" }}>
+        <button type="submit" disabled={saving} className="btn-plum" style={{ padding: "0.6rem 1.5rem", borderRadius: 100, fontWeight: 600, fontSize: "0.85rem" }}>
+          {saving ? "Sending…" : "Send invite"}
+        </button>
+        <button type="button" onClick={onCancel} disabled={saving} style={{ background: "none", border: "none", color: "var(--grey)", fontSize: "0.85rem", cursor: "pointer" }}>Cancel</button>
+      </div>
+    </form>
   );
 }
 
