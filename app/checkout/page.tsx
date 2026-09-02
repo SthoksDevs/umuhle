@@ -370,6 +370,7 @@ export default function CheckoutPage() {
   const [form, setForm] = useState({
     name: "",
     whatsapp: "",
+    email: "",
     address: "",
     suburb: "",
     city: "",
@@ -445,13 +446,13 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) { router.replace("/checkout?auth=login"); return; }
+      if (!user) { setLoading(false); return; } // guest checkout — no account needed
       setUser(user);
       supabase.from("profiles").select("*").eq("id", user.id).single().then(({ data }) => {
         if (data) {
           const p = data as Profile;
           setProfile(p);
-          setForm((f) => ({ ...f, name: p.full_name ?? "", whatsapp: p.phone ?? "" }));
+          setForm((f) => ({ ...f, name: p.full_name ?? "", whatsapp: p.phone ?? "", email: p.email ?? "" }));
         }
         setLoading(false);
       });
@@ -666,6 +667,7 @@ export default function CheckoutPage() {
           shippingPostalCode: form.postalCode,
           contactName: form.name,
           contactWhatsapp: form.whatsapp,
+          contactEmail: form.email || profile?.email || null,
           discountCents: discount,
           couponCode: appliedCoupon?.code ?? null,
         }),
@@ -726,6 +728,7 @@ export default function CheckoutPage() {
           shippingPostalCode: form.postalCode,
           contactName: form.name,
           contactWhatsapp: form.whatsapp,
+          contactEmail: form.email || profile?.email || null,
           discountCents: discount,
           couponCode: appliedCoupon?.code ?? null,
         }),
@@ -755,6 +758,7 @@ export default function CheckoutPage() {
   const isFormValid = Boolean(
     form.name.trim() &&
     form.whatsapp.trim() &&
+    (user ? true : /\S+@\S+\.\S+/.test(form.email.trim())) &&
     (!anyCourier || (form.address.trim() && form.city.trim())) &&
     sellScopeViolations.length === 0
   );
@@ -802,8 +806,12 @@ export default function CheckoutPage() {
                   <input placeholder="WhatsApp number * (e.g. 082 123 4567)" value={form.whatsapp} onChange={(e) => setForm((f) => ({ ...f, whatsapp: e.target.value }))} style={inputStyle} type="tel" />
                   <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "0.3rem" }}>Order updates will be sent to this WhatsApp number.</p>
                 </div>
-                {profile?.email && (
-                  <input value={profile.email} disabled style={{ ...inputStyle, background: "#FAFAFA", color: "var(--light)" }} />
+                {user ? (
+                  profile?.email && (
+                    <input value={profile.email} disabled style={{ ...inputStyle, background: "#FAFAFA", color: "var(--light)" }} />
+                  )
+                ) : (
+                  <input placeholder="Email address *" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} style={inputStyle} type="email" />
                 )}
               </div>
             </div>

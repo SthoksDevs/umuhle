@@ -13,7 +13,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createOzowPaymentRequest } from "@/lib/ozow";
-import { createPendingOrder, type CourierQuoteSelection } from "@/lib/orders";
+import { createPendingOrder, getOrderMutationClient, type CourierQuoteSelection } from "@/lib/orders";
 import { createBookingIntent } from "@/lib/bookings";
 import { randomUUID } from "crypto";
 import { isGatewayEnabled, gatewayLabel } from "@/lib/payments/gateways";
@@ -36,32 +36,40 @@ export async function POST(req: NextRequest) {
 
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("full_name, email, phone, account_status")
-    .eq("id", user.id)
-    .single();
-
-  if (!profile || profile.account_status !== "active") {
-    return NextResponse.json({ error: "Account not active" }, { status: 403 });
-  }
 
   const body = await req.json();
   const type: PaymentTypeBody = body.type ?? "order";
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? `https://${req.headers.get("host")}`;
 
+  // Guest checkout is only supported for shop orders — booking, salon
+  // registration and store booking deposits still require a real, active
+  // account.
+  let profile: OzowProfile | null = null;
+  if (user) {
+    const { data } = await supabase
+      .from("profiles")
+      .select("full_name, email, phone, account_status")
+      .eq("id", user.id)
+      .single();
+
+    if (!data || data.account_status !== "active") {
+      return NextResponse.json({ error: "Account not active" }, { status: 403 });
+    }
+    profile = data;
+  } else if (type !== "order") {
+    return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
+  }
+
   try {
     switch (type) {
       case "booking":
-        return await initiateBooking(supabase, user.id, profile, body, baseUrl);
+        return await initiateBooking(supabase, user!.id, profile!, body, baseUrl);
       case "order":
-        return await initiateOrder(supabase, user.id, profile, body, baseUrl);
+        return await initiateOrder(supabase, user?.id ?? null, profile, body, baseUrl);
       case "salon":
-        return await initiateSalon(supabase, user.id, profile, body, baseUrl);
+        return await initiateSalon(supabase, user!.id, profile!, body, baseUrl);
       case "store_booking_deposit":
-        return await initiateStoreBookingDeposit(supabase, user.id, profile, body, baseUrl);
+        return await initiateStoreBookingDeposit(supabase, user!.id, profile!, body, baseUrl);
       default:
         return NextResponse.json({ error: "Unknown type" }, { status: 400 });
     }
@@ -128,13 +136,13 @@ async function initiateBooking(
 
 async function initiateOrder(
   supabase: SupabaseServerClient,
-  userId: string,
-  profile: OzowProfile,
+  userId: string | null,
+  profile: OzowProfile | null,
   body: Record<string, unknown>,
   baseUrl: string
 ) {
   const {
-    items, shippingAddress, contactName, contactWhatsapp,
+    items, shippingAddress, contactName, contactWhatsapp, contactEmail,
     fulfillmentByPartner, shippingAddressLine1, shippingAddressLine2,
     shippingSuburb, shippingCity, shippingProvince, shippingPostalCode,
     courierQuotes,
@@ -143,6 +151,7 @@ async function initiateOrder(
     shippingAddress: string;
     contactName?: string;
     contactWhatsapp?: string;
+    contactEmail?: string;
     fulfillmentByPartner?: Record<string, FulfillmentMethod>;
     shippingAddressLine1?: string;
     shippingAddressLine2?: string;
@@ -158,6 +167,7 @@ async function initiateOrder(
     shippingAddress,
     contactName,
     contactWhatsapp,
+    contactEmail,
     fulfillmentByPartner,
     courierQuotesByPartner: courierQuotes,
     shippingAddressLine1,
@@ -171,9 +181,14 @@ async function initiateOrder(
   const { orderId, totalAmount } = created.result;
 
   // Per-order secret embedded in the notify URL so we can confirm a
-  // notification actually targets this checkout attempt.
+  // notification actually targets this checkout attempt. Uses the
+  // service-role client, not the caller's session — for a guest order
+  // (client_id null), RLS's "client_id = auth.uid()" update policy can
+  // never pass, and a silently-dropped webhook secret here means Ozow's
+  // notify callback could never verify or confirm this payment at all.
   const webhookSecret = randomUUID();
-  await supabase.from("orders").update({ gateway_webhook_secret: webhookSecret }).eq("id", orderId);
+  const mutClient = await getOrderMutationClient();
+  await mutClient.from("orders").update({ gateway_webhook_secret: webhookSecret }).eq("id", orderId);
 
   const result = await createOzowPaymentRequest({
     transactionReference: orderId,
@@ -187,7 +202,7 @@ async function initiateOrder(
   });
 
   if (!result.success || !result.redirectUrl) {
-    await supabase.from("orders").update({ status: "cancelled" }).eq("id", orderId);
+    await mutClient.from("orders").update({ status: "cancelled" }).eq("id", orderId);
     return NextResponse.json(
       { error: result.errorMessage ?? "Ozow could not start this order" },
       { status: 502 }
@@ -195,7 +210,7 @@ async function initiateOrder(
   }
 
   if (result.ozowTransactionId) {
-    await supabase.from("orders").update({ gateway_order_id: result.ozowTransactionId }).eq("id", orderId);
+    await mutClient.from("orders").update({ gateway_order_id: result.ozowTransactionId }).eq("id", orderId);
   }
 
   return NextResponse.json({ redirectUrl: result.redirectUrl });

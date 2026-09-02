@@ -36,6 +36,11 @@ interface PendingOrderOptions {
   shippingAddress?: string;
   contactName?: string;
   contactWhatsapp?: string;
+  // Required for guest checkout — PayFast needs a real email address, and
+  // it's also the fallback identity lib/payments/fulfillment.ts's
+  // fulfillOrder() uses for order confirmations when there's no
+  // logged-in profile to join against (client_id is null).
+  contactEmail?: string;
   // ── Local delivery & provincial sales ──
   // fulfillmentByPartner is keyed by products.partner_id. A partner missing
   // from the map (shouldn't happen — the checkout page seeds every partner
@@ -76,7 +81,7 @@ type CreateOrderResult =
 
 export async function createPendingOrder(
   supabase: SupabaseClient,
-  userId: string,
+  userId: string | null, // null = guest checkout
   items: { productId: string; quantity: number }[],
   opts: PendingOrderOptions
 ): Promise<CreateOrderResult> {
@@ -246,7 +251,24 @@ export async function createPendingOrder(
 
   const orderId = uuidv4();
 
-  const { error: orderErr } = await supabase.from("orders").insert({
+  // Every write to orders/order_items from here on goes through the
+  // service-role client, not the caller's session-bound `supabase`.
+  // Two reasons:
+  //   1. Guest checkout (userId === null) has no session at all, so RLS's
+  //      "client_id = auth.uid()" insert/update policies can never pass
+  //      for it — using the session client would silently insert/update
+  //      zero rows rather than error.
+  //   2. orders/order_items have no client-facing DELETE policy either
+  //      (only "service role: ALL"), so the rollback deletes below were
+  //      already silently no-op'ing for logged-in orders too — this fixes
+  //      that as a side effect.
+  // Safe to do broadly because everything written here has already been
+  // validated against trusted product/partner data above, never taken
+  // as-is from the request body — same trust model order_shipments below
+  // already used.
+  const serviceClient = await createServiceClient();
+
+  const { error: orderErr } = await serviceClient.from("orders").insert({
     id: orderId,
     client_id: userId,
     total_amount: totalAmount,
@@ -262,11 +284,12 @@ export async function createPendingOrder(
     shipping_postal_code: opts.shippingPostalCode ?? null,
     contact_name: opts.contactName ?? null,
     contact_whatsapp: opts.contactWhatsapp ?? null,
+    contact_email: opts.contactEmail ?? null,
   });
 
   if (orderErr) return { error: orderErr.message };
 
-  const { data: insertedItems, error: itemsErr } = await supabase
+  const { data: insertedItems, error: itemsErr } = await serviceClient
     .from("order_items")
     .insert(
       lines.map((l) => ({
@@ -279,19 +302,14 @@ export async function createPendingOrder(
     .select("id, product_id");
 
   if (itemsErr) {
-    await supabase.from("orders").delete().eq("id", orderId);
+    await serviceClient.from("orders").delete().eq("id", orderId);
     return { error: itemsErr.message };
   }
 
   // ── order_shipments — one row per partner, one parcel/waybill ──
   // `groups` was already built above (needed before the orders insert, to
   // get an authoritative shipping total) — just backfill which order_item
-  // ids landed in each group now that they exist. Uses the service-role
-  // client specifically for this step: after the RLS fix that scoped
-  // order_shipments' "service role" policy to `to service_role`, the
-  // customer's own session has no insert policy on order_shipments at all
-  // (by design — those rows are only ever created server-side), and
-  // order_items has no client-side UPDATE policy either.
+  // ids landed in each group now that they exist.
   for (const item of insertedItems ?? []) {
     const product = products.find((p) => p.id === item.product_id);
     if (!product?.partner_id) continue;
@@ -299,7 +317,6 @@ export async function createPendingOrder(
   }
 
   try {
-    const serviceClient = await createServiceClient();
     for (const group of groups.values()) {
       const method = group.method;
       const origin = partnerProfiles[group.partnerId];
@@ -367,10 +384,23 @@ export async function createPendingOrder(
     // has items and no shipment to fulfil them, so roll back the same way
     // the order_items insert failure above does.
     console.error("Failed to create order shipments:", shipmentErr);
-    await supabase.from("order_items").delete().eq("order_id", orderId);
-    await supabase.from("orders").delete().eq("id", orderId);
+    await serviceClient.from("order_items").delete().eq("order_id", orderId);
+    await serviceClient.from("orders").delete().eq("id", orderId);
     return { error: "Could not finalise delivery details for this order. Please try again." };
   }
 
   return { result: { orderId, totalAmount, shippingFeeCents, lines, isUmuhleProfitOnly } };
+}
+
+/**
+ * Right client for mutating an `orders` row after createPendingOrder() has
+ * already created it (gateway_webhook_secret, payout_via, cancelling on
+ * ineligibility, etc). Always the service client — see the comment above
+ * createPendingOrder's own writes for why: these are server-validated
+ * writes made after full business-logic checks, not client-authorised
+ * ones, and RLS's "client_id = auth.uid()" can never pass for a guest
+ * order (client_id is null) regardless of who's calling.
+ */
+export async function getOrderMutationClient() {
+  return createServiceClient();
 }

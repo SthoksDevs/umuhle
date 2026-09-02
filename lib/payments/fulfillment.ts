@@ -281,6 +281,7 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
     .from("orders")
     .select(`
       id, status, total_amount, shipping_address, created_at,
+      contact_name, contact_whatsapp, contact_email,
       client:profiles!orders_client_id_fkey(full_name, email, phone, whatsapp_comms_enabled)
     `)
     .eq("id", event.referenceId)
@@ -297,6 +298,13 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
   }
 
   const clientRow = Array.isArray(order.client) ? order.client[0] : order.client;
+  // Guest orders (client_id null — see lib/orders.ts) have no profile to
+  // join against, so clientRow comes back empty for them. Fall back to
+  // the contact details captured at checkout instead of dropping the
+  // confirmation entirely.
+  const isGuestOrder = !clientRow;
+  const recipientName = clientRow?.full_name ?? order.contact_name ?? "Unknown";
+  const recipientEmail = clientRow?.email ?? order.contact_email ?? "";
 
   if (event.outcome === "paid") {
     const { data: orderItems } = await supabase
@@ -348,9 +356,9 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
 
       await sendOrderPaidEmail({
         orderId: event.referenceId,
-        clientName: clientRow?.full_name ?? "Unknown",
-        clientEmail: clientRow?.email ?? "",
-        clientPhone: clientRow?.phone ?? null,
+        clientName: recipientName,
+        clientEmail: recipientEmail,
+        clientPhone: clientRow?.phone ?? order.contact_whatsapp ?? null,
         totalAmount: order.total_amount,
         shippingAddress: order.shipping_address ?? undefined,
         paymentGateway: event.gateway,
@@ -367,11 +375,22 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
       console.error(`${tag} order paid email error`, e);
     }
 
-    if (clientRow?.phone && clientRow?.whatsapp_comms_enabled) {
+    // Logged-in customers only get a WhatsApp order update if they've
+    // opted in (whatsapp_comms_enabled). Guests have no such profile
+    // setting to opt into — checkout already told them updates would go
+    // to the WhatsApp number they typed in — so send unconditionally for
+    // guest orders, same "always-on" treatment fulfillBooking gives POC
+    // updates above.
+    const whatsappTarget = isGuestOrder ? order.contact_whatsapp : clientRow?.phone;
+    const shouldNotifyWhatsapp = isGuestOrder
+      ? Boolean(whatsappTarget)
+      : Boolean(whatsappTarget && clientRow?.whatsapp_comms_enabled);
+
+    if (shouldNotifyWhatsapp && whatsappTarget) {
       try {
         await notifyOrderPaid({
-          clientName: clientRow.full_name ?? "there",
-          clientPhone: clientRow.phone,
+          clientName: recipientName ?? "there",
+          clientPhone: whatsappTarget,
           orderId: event.referenceId,
           itemCount: orderItems?.length ?? 0,
           totalAmount: order.total_amount,
@@ -395,8 +414,8 @@ async function fulfillOrder(supabase: SupabaseClient, event: PaymentEvent, tag: 
   try {
     await sendOrderFailedEmail({
       orderId: event.referenceId,
-      clientName: clientRow?.full_name ?? "Unknown",
-      clientEmail: clientRow?.email ?? "",
+      clientName: recipientName,
+      clientEmail: recipientEmail,
       totalAmount: order.total_amount,
       reason: event.outcome,
     });

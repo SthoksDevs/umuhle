@@ -16,8 +16,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { buildPaymentParams, PAYFAST_URL } from "@/lib/payfast";
-import { createClient } from "@/lib/supabase/server";
-import { createPendingOrder, type CourierQuoteSelection } from "@/lib/orders";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createPendingOrder, getOrderMutationClient, type CourierQuoteSelection } from "@/lib/orders";
 import { createBookingIntent } from "@/lib/bookings";
 import { isGatewayEnabled, gatewayLabel } from "@/lib/payments/gateways";
 import { isGatewayEligible, whyPayFastIneligible } from "@/lib/payments/eligibility";
@@ -39,20 +39,28 @@ export async function POST(req: NextRequest) {
 
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("full_name, email, phone, account_status")
-    .eq("id", user.id)
-    .single();
-
-  if (!profile || profile.account_status !== "active") {
-    return NextResponse.json({ error: "Account not active" }, { status: 403 });
-  }
 
   const body = await req.json();
   const type: PaymentType = body.type ?? "order";
+
+  // Guest checkout is only supported for shop orders — bookings, salon
+  // registration and store booking deposits still require a real, active
+  // account.
+  let profile: PFProfile | null = null;
+  if (user) {
+    const { data } = await supabase
+      .from("profiles")
+      .select("full_name, email, phone, account_status")
+      .eq("id", user.id)
+      .single();
+
+    if (!data || data.account_status !== "active") {
+      return NextResponse.json({ error: "Account not active" }, { status: 403 });
+    }
+    profile = data;
+  } else if (type !== "order") {
+    return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
+  }
 
   // Prefer the explicit env var; fall back to the request host so it also
   // works on preview deployments without re-setting the env var.
@@ -60,17 +68,19 @@ export async function POST(req: NextRequest) {
     process.env.NEXT_PUBLIC_BASE_URL ??
     `https://${req.headers.get("x-forwarded-host") ?? req.headers.get("host")}`;
 
-  const [firstName, ...rest] = (profile.full_name ?? "").split(" ");
+  // Guests have no profile.full_name — fall back to the name typed into
+  // the checkout form (contactName).
+  const [firstName, ...rest] = (profile?.full_name ?? (body.contactName as string | undefined) ?? "").split(" ");
   const lastName = rest.join(" ") || "Customer";
 
   try {
     switch (type) {
       case "booking":
-        return await initiateBooking(supabase, user.id, profile, firstName, lastName, body, baseUrl);
+        return await initiateBooking(supabase, user!.id, profile!, firstName, lastName, body, baseUrl);
       case "order":
-        return await initiateOrder(supabase, user.id, profile, firstName, lastName, body, baseUrl);
+        return await initiateOrder(supabase, user?.id ?? null, profile, firstName, lastName, body, baseUrl);
       case "store_booking_deposit":
-        return await initiateStoreBookingDeposit(supabase, user.id, profile, firstName, lastName, body, baseUrl);
+        return await initiateStoreBookingDeposit(supabase, user!.id, profile!, firstName, lastName, body, baseUrl);
       default:
         // ad / product_listing / salon are always Umuhle-profit-only —
         // PayFast is never eligible for them. See lib/payments/eligibility.ts.
@@ -157,15 +167,15 @@ async function getSplitTargetForArtist(supabase: SupabaseServerClient, artistId:
 
 async function initiateOrder(
   supabase: SupabaseServerClient,
-  userId: string,
-  profile: PFProfile,
+  userId: string | null,
+  profile: PFProfile | null,
   firstName: string,
   lastName: string,
   body: Record<string, unknown>,
   baseUrl: string
 ) {
   const {
-    items, shippingAddress, contactName, contactWhatsapp,
+    items, shippingAddress, contactName, contactWhatsapp, contactEmail,
     fulfillmentByPartner, shippingAddressLine1, shippingAddressLine2,
     shippingSuburb, shippingCity, shippingProvince, shippingPostalCode,
     courierQuotes,
@@ -174,6 +184,9 @@ async function initiateOrder(
     shippingAddress: string;
     contactName?: string;
     contactWhatsapp?: string;
+    // Guest checkout only — PayFast requires a real email address and a
+    // guest has no profile.email to fall back to. See email lookup below.
+    contactEmail?: string;
     fulfillmentByPartner?: Record<string, FulfillmentMethod>;
     shippingAddressLine1?: string;
     shippingAddressLine2?: string;
@@ -187,11 +200,17 @@ async function initiateOrder(
     courierQuotes?: Record<string, CourierQuoteSelection>;
   };
 
+  const email = profile?.email ?? contactEmail;
+  if (!email) {
+    return NextResponse.json({ error: "Please provide an email address to pay with PayFast." }, { status: 400 });
+  }
+
   const created = await createPendingOrder(supabase, userId, items, {
     paymentMethod: "payfast",
     shippingAddress,
     contactName,
     contactWhatsapp,
+    contactEmail: contactEmail ?? profile?.email,
     fulfillmentByPartner,
     courierQuotesByPartner: courierQuotes,
     shippingAddressLine1,
@@ -205,7 +224,8 @@ async function initiateOrder(
   const { orderId, totalAmount, lines, isUmuhleProfitOnly } = created.result;
 
   if (!isGatewayEligible("payfast", { type: "order", amountCents: totalAmount, isUmuhleProfitOnly })) {
-    await supabase.from("orders").update({ status: "cancelled" }).eq("id", orderId);
+    const mutClient = await getOrderMutationClient();
+    await mutClient.from("orders").update({ status: "cancelled" }).eq("id", orderId);
     return NextResponse.json(
       { error: whyPayFastIneligible({ type: "order", amountCents: totalAmount, isUmuhleProfitOnly }), code: "GATEWAY_INELIGIBLE", fallback: "ozow" },
       { status: 400 }
@@ -217,9 +237,10 @@ async function initiateOrder(
   // merchant (see lib/payments/split.ts). A cart mixing Umuhle's own
   // stock with one partner's products is still fine; Umuhle just keeps
   // its own share automatically since it's the primary account.
-  const split = await getSplitTargetForOrder(supabase, orderId);
+  const split = await getSplitTargetForOrder(orderId);
   if (split) {
-    await supabase.from("orders").update({ payout_via: "instant_split" }).eq("id", orderId);
+    const mutClient = await getOrderMutationClient();
+    await mutClient.from("orders").update({ payout_via: "instant_split" }).eq("id", orderId);
   }
 
   const params = buildPaymentParams({
@@ -229,7 +250,7 @@ async function initiateOrder(
     itemDescription: `${lines.length} item(s)`,
     firstName,
     lastName,
-    email:           profile.email,
+    email,
     baseUrl,
     customStr1:      "order",
     split:           split ?? undefined,
@@ -243,8 +264,16 @@ async function initiateOrder(
  * much. Excludes Umuhle-owned lines (products.is_umuhle_product) from
  * both the seller-uniqueness check and the payout total — see the
  * comment above this function's call site.
+ *
+ * Always runs on the service client — this is an internal computation
+ * over data this same request already created moments ago (orderId), not
+ * something that should be filtered by whoever's session happens to be
+ * attached to the request (including no session at all, for a guest
+ * checkout — order_items' RLS read policy is client_id-scoped same as
+ * orders', so a guest's own anon session would just see zero rows here).
  */
-async function getSplitTargetForOrder(supabase: SupabaseServerClient, orderId: string) {
+async function getSplitTargetForOrder(orderId: string) {
+  const supabase = await createServiceClient();
   const { data: items } = await supabase
     .from("order_items")
     .select("unit_price, quantity, product:products(partner_id, is_umuhle_product)")
