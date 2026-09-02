@@ -15,6 +15,7 @@ import { createClient } from "@supabase/supabase-js";
 import { gatewayLabel, type PaymentGateway } from "@/lib/payments/gateways";
 import type { ReviewType } from "@/lib/review-invites";
 import type { StoreBookingStats, StoreGA4Result, ReportPeriod } from "@/lib/store-analytics";
+import { WELCOME_EMAIL_CONTENT, type UserRole as WelcomeUserRole } from "@/emails/types/welcomeEmailTypes";
 
 const ADMIN_EMAIL = "info@umuhle.co.za";
 
@@ -1221,5 +1222,51 @@ export async function sendReviewInviteEmail(opts: {
       <p style="margin:0 0 1.5rem;font-size:0.85rem;color:#666">${copy.blurb(opts.targetName)}</p>
       <p style="margin:0 0 1.5rem"><a href="${link}" style="display:inline-block;background:#9B7FB8;color:#fff;font-weight:600;text-decoration:none;padding:0.75rem 1.5rem;border-radius:10px">${copy.buttonLabel}</a></p>
       <p style="margin:0 0 1.5rem">The Umuhle Team</p>`),
+  });
+}
+
+// ── Welcome email ────────────────────────────────────────────────────────────
+// Fired once per new account, right after their first successful
+// /auth/callback exchange (email confirmation, magic link, or OAuth) —
+// see that route for the welcome_email_sent_at guard that keeps this to
+// exactly once per account rather than once per login. Employees don't
+// go through that route (they activate via /activate-employee and
+// already get their own tailored email — sendEmployeeInviteEmail above),
+// so there's no "employee" case here.
+//
+// Subject/heading/feature-list copy per role lives in
+// emails/types/welcomeEmailTypes.ts, kept separate from the send
+// plumbing so editing the words doesn't mean touching this file.
+//
+// Customer-only, no admin copy — same posture as sendSalonSubmittedEmail
+// and sendOrderItemShippedEmail above: an informational nudge to one
+// person, not something admin needs in their inbox for every signup.
+
+export async function sendWelcomeEmail(opts: {
+  toEmail:   string;
+  firstName: string;
+  role:      WelcomeUserRole;
+}) {
+  if (!opts.toEmail) return;
+
+  const content = WELCOME_EMAIL_CONTENT[opts.role];
+  const dashboardUrl = "https://umuhle.co.za/dashboard";
+  const websiteUrl = "https://umuhle.co.za";
+  const ctaUrl = content.ctaUrl === "{{dashboard_url}}" ? dashboardUrl : websiteUrl;
+
+  const featuresHtml = content.features.map((f) => `<li style="margin-bottom:0.4rem">${f}</li>`).join("");
+  const featuresText = content.features.map((f) => `  • ${f}`).join("\n");
+
+  await sendToAll([opts.toEmail], {
+    subject:  content.subject,
+    template: `welcome_${opts.role}`,
+    text:     `Hi ${opts.firstName},\n\n${content.introduction}\n\n${featuresText}\n\n${content.callToAction}\n\n${ctaUrl}\n\n${content.closing}\n\nUmuhle`,
+    html:     emailWrapper(content.heading, `
+      <p style="margin:0 0 1.25rem">Hi ${opts.firstName},</p>
+      <p style="margin:0 0 1.25rem">${content.introduction}</p>
+      <ul style="margin:0 0 1.25rem;padding-left:1.1rem;font-size:0.9rem;color:#444;line-height:1.6">${featuresHtml}</ul>
+      <p style="margin:0 0 1.25rem;font-size:0.875rem;color:#666;white-space:pre-line">${content.callToAction}</p>
+      <p style="margin:0 0 1.5rem"><a href="${ctaUrl}" style="display:inline-block;background:#9B7FB8;color:#fff;font-weight:600;text-decoration:none;padding:0.75rem 1.5rem;border-radius:10px">${content.ctaText}</a></p>
+      <p style="margin:0">${content.closing}</p>`),
   });
 }
