@@ -90,6 +90,22 @@ function useArtistLocationPing(user: User | null, isArtist: boolean): GeoStatus 
 
   return geo.status;
 }
+
+// Small, always-visible label naming which of the four separated dashboard
+// "spaces" (see lib/dashboard/context.ts) the signed-in user is currently
+// looking at — shown in the sidebar (desktop) and the top bar (mobile),
+// regardless of which tab is active, so e.g. a business-partner account
+// that's also an artist can tell at a glance whether they're on their
+// Store Owner or Artist dashboard. "employee" is included only for type
+// completeness — DashboardShell is never actually rendered for that role,
+// see EmployeeDashboard.tsx.
+const ROLE_DASHBOARD_LABEL: Record<DashboardRole, string> = {
+  customer: "Customer Dashboard",
+  artist: "Artist Dashboard",
+  owner: "Store Owner Dashboard",
+  employee: "Employee Dashboard",
+};
+
 export default function DashboardShell({ role }: { role: DashboardRole }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -234,6 +250,13 @@ export default function DashboardShell({ role }: { role: DashboardRole }) {
 
   if (!user || !profile) return null;
 
+  // See ROLE_DASHBOARD_LABEL above — this is what tells a business-partner
+  // account currently looking at /dashboard/artist that they're not on
+  // their Store Owner dashboard, etc. Computed here (not hoisted above the
+  // early returns) since it only makes sense once there's a profile to
+  // show a dashboard for at all.
+  const dashboardLabel = ROLE_DASHBOARD_LABEL[role];
+
   // Which My Business sections apply to this role — see "core design
   // decision" in docs/role-based-dashboards-status.md. Route-driven (not a
   // union of every flag the profile happens to have): an owner who's also
@@ -245,12 +268,21 @@ export default function DashboardShell({ role }: { role: DashboardRole }) {
     : [];
   const showMyBusiness = businessSections.length > 0;
 
+  // Artists who haven't also opted into selling only ever get the one
+  // section (Services) — see MyBusinessTab.tsx, which uses this same shape
+  // to decide whether to show its Overview pill at all. Mirrored here so
+  // the sidebar label and the panel's own heading always agree, rather
+  // than an artist seeing "My Services" in the nav but "My Business" once
+  // they click into it (or vice versa).
+  const businessIsServicesOnly = role === "artist" && businessSections.length === 1 && businessSections[0] === "services";
+  const businessLabel = businessIsServicesOnly ? "My Services" : "My Business";
+
   const TAB_CONFIG: { id: Tab; label: string; icon: string }[] = [
     { id: "dashboard",   label: "Dashboard",   icon: "⌂" },
     { id: "bookings",    label: "Bookings",    icon: "▣" },
     { id: "my-orders",   label: "Orders",      icon: "▤" },
     { id: "wishlist",    label: "Saved",       icon: "♡" },
-    ...(showMyBusiness ? [{ id: "my-business" as Tab, label: "My Business", icon: "▥" }] : []),
+    ...(showMyBusiness ? [{ id: "my-business" as Tab, label: businessLabel, icon: "▥" }] : []),
     { id: "invite",      label: "Referrals",   icon: "↗" },
     { id: "wallet",      label: "Wallet",      icon: "R" },
     { id: "profile",     label: "Account",     icon: "○" },
@@ -263,7 +295,7 @@ export default function DashboardShell({ role }: { role: DashboardRole }) {
   const rawGroups: { title: string; ids: Tab[] }[] = [
     { title: "",             ids: ["dashboard"] },
     { title: "My activity",  ids: ["bookings", "my-orders", "wishlist"] },
-    { title: "My business",  ids: ["my-business"] },
+    { title: businessIsServicesOnly ? "My services" : "My business",  ids: ["my-business"] },
     { title: "Money",        ids: ["wallet", "invite"] },
     { title: "Account",      ids: ["profile"] },
   ];
@@ -330,13 +362,18 @@ export default function DashboardShell({ role }: { role: DashboardRole }) {
       {/* ── Mobile top bar: opens the sidebar drawer ── */}
       <div className="dashboard-mobile-top">
         <button onClick={() => setSidebarOpen(true)} aria-label="Open dashboard menu">☰</button>
-        <span>Dashboard</span>
+        <span>{dashboardLabel}</span>
         <button onClick={() => setActiveTab("profile")} aria-label="Open account">○</button>
       </div>
       {sidebarOpen && <div className="dashboard-sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
 
       {/* ── Left sidebar nav ── */}
       <aside className={`dashboard-sidebar ${sidebarOpen ? "is-open" : ""}`}>
+        {/* Persistent role indicator — see ROLE_DASHBOARD_LABEL. Sits above
+            the nav so it's visible no matter which tab is active. */}
+        <div style={{ padding: "0.35rem 0.75rem 0.9rem", marginBottom: "0.5rem", borderBottom: "1px solid rgba(26,26,26,0.08)", fontFamily: "var(--font-display)", fontSize: "0.78rem", fontWeight: 600, letterSpacing: "0.03em", color: "var(--plum-d)", textTransform: "uppercase" }}>
+          {dashboardLabel}
+        </div>
         <nav className="dashboard-sidebar-nav">
           {groups.map(group => (
             <div key={group.title || "home"} className="dashboard-nav-group">
