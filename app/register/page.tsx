@@ -415,9 +415,6 @@ function RegisterPageInner() {
           required
           style={inputStyle}
         />
-        <p style={{ color: "var(--light)", fontSize: "0.78rem", margin: "-0.4rem 0 0" }}>
-          You can verify this and turn on WhatsApp updates later from your profile settings.
-        </p>
 
         <div style={{ marginTop: "0.35rem" }}>
           <label style={labelStyle}>Address</label>
