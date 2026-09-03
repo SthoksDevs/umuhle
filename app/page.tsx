@@ -872,7 +872,7 @@ export default function Home() {
                 Are you a beauty <em style={{ color: "var(--plum)", fontStyle: "italic" }}>artist</em>?
               </h2>
               <p style={{ color: "var(--grey)", maxWidth: 420, margin: "0 auto 1.5rem", fontSize: "0.95rem" }}>
-                Join Umuhle and get discovered by clients across South Africa looking for hair, nail, makeup and lash artists.
+                Join Umuhle and get discovered by clients in your city looking for hair, nail, makeup and lash artists.
               </p>
               <Link href="/register?type=artist"><button className="btn-plum">Become an Artist</button></Link>
             </div>
@@ -1532,7 +1532,7 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
 
             {error && <p style={{ color: "#E53935", fontSize: "0.85rem", marginBottom: "1rem" }}>{error}</p>}
             <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginBottom: "1.25rem" }}>
-              You will be redirected to PayFast to complete payment securely. Once paid, you will receive a WhatsApp confirmation.
+              You will be redirected to PayFast to complete payment securely. Once paid, you will receive a confirmation message.
             </p>
             <button className="btn-plum" style={{ width: "100%", padding: "0.875rem" }} onClick={handlePayFast} disabled={loading}>
               {loading ? "Redirecting…" : user ? `Pay ${fmt(selected.price)} now to Book` : `Log in to pay ${fmt(selected.price)} & book`}
