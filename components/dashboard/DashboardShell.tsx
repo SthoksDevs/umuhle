@@ -34,7 +34,7 @@ import { useProductWishlist } from "@/lib/product-wishlist-context";
 import { needsLegalReacceptance } from "@/lib/legal";
 import DashboardTour from "@/components/DashboardTour";
 import { useGeolocation, type GeoStatus } from "@/lib/geolocation";
-import { ICON, COURIER_CHECKOUT_ENABLED } from "@/lib/dashboard/format";
+import { ICON } from "@/lib/dashboard/format";
 import type { Tab, WishlistArtist } from "@/lib/dashboard/types";
 import type { DashboardRole } from "@/lib/dashboard/context";
 
@@ -281,30 +281,9 @@ export default function DashboardShell({ role }: { role: DashboardRole }) {
     setActiveTab(next);
   };
 
-  // Courier's paused platform-wide (see lib/shiplogic.ts) — nag any partner
-  // who still offers it and hasn't said how they'll handle delivery yet
-  // (see PartnerFulfillmentSettings). Goes quiet the moment they save one.
-  const needsDeliveryArrangement =
-    profile.is_partner && profile.allow_courier && !COURIER_CHECKOUT_ENABLED && !profile.delivery_arrangement_method;
-
   return (
     <div className="dashboard-app">
       <SiteHeader initialUser={user} initialProfile={profile} />
-
-      {/* ── Courier paused — delivery arrangement required ── */}
-      {needsDeliveryArrangement && (
-        <div style={{ background: "#FFF3E0", borderBottom: "1.5px solid #F0C766", padding: "0.85rem 1.5rem", display: "flex", alignItems: "center", justifyContent: "center", gap: "1rem", flexWrap: "wrap" }}>
-          <p style={{ margin: 0, fontSize: "0.85rem", color: "#8A6100", fontWeight: 500, textAlign: "center" }}>
-            🚚 Courier is paused for now — let customers know how you&apos;ll handle delivery.
-          </p>
-          <button
-            onClick={() => setActiveTab("profile")}
-            style={{ background: "#8A6100", color: "#fff", border: "none", borderRadius: 999, padding: "0.4rem 1rem", fontSize: "0.8rem", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
-          >
-            Set it now
-          </button>
-        </div>
-      )}
 
       {/* ── WhatsApp incomplete nudge ── */}
       {/* ── Terms/Privacy re-acceptance — blocking, not dismissible via
