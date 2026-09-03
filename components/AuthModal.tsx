@@ -17,14 +17,24 @@
 //    not back on the page you were on. This version lives in the header, so
 //    it's already present wherever the link was clicked; those links now
 //    just add "?auth=..." to the CURRENT url instead of jumping to "/".
+//
+// Registration no longer happens in here. This modal is login + forgot
+// password only — a "Sign up" click (and a stray "?auth=register" URL, for
+// any old links still pointing at it) both just redirect to
+// app/register/page.tsx, which now owns the full signup form (including
+// the role choice this modal used to hardcode as account_type: "customer")
+// plus the WhatsApp OTP + terms-acceptance flow this file used to run
+// inline. Social login stays here for both login AND signup — Supabase's
+// OAuth doesn't distinguish the two — a brand new account from a social
+// button gets bounced from app/auth/callback/route.ts to /register to
+// finish up, same as if they'd landed there directly.
 
 import { useState, useEffect } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import { gTag, fbq, ttq } from "@/lib/analytics";
-import { normalizePhone, isValidSAMobile } from "@/lib/phone";
-import { CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION } from "@/lib/legal";
+import { gTag, fbq } from "@/lib/analytics";
+import { normalizePhone } from "@/lib/phone";
 
 export default function AuthModal() {
   const router       = useRouter();
@@ -34,89 +44,27 @@ export default function AuthModal() {
 
   const authParam = searchParams.get("auth"); // "login" | "register" | null
   const nextParam = searchParams.get("next");
-  const isOpen    = authParam === "login" || authParam === "register";
+  const isOpen    = authParam === "login";
 
-  const [mode, setMode]         = useState<"login" | "register" | "forgot">("login");
+  const [mode, setMode]         = useState<"login" | "forgot">("login");
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState("");
-  const [form, setForm]         = useState({ email: "", password: "", name: "", phone: "" });
-
-  // Real WhatsApp OTP verification, required before an account is created
-  // in register mode (same /api/auth/phone-otp/* endpoints and umuhle_number_otp
-  // template that app/dashboard/page.tsx's ProfileTab uses). This is the fix
-  // for the phone field having previously been optional and unverified at
-  // signup — see lib/phone.ts's header comment for the full history.
-  const [otpCode, setOtpCode]           = useState("");
-  const [otpSent, setOtpSent]           = useState(false);
-  const [otpVerified, setOtpVerified]   = useState(false);
-  const [otpSending, setOtpSending]     = useState(false);
-  const [otpVerifying, setOtpVerifying] = useState(false);
-  const [otpError, setOtpError]         = useState("");
-  const [resendCooldown, setResendCooldown] = useState(0);
-
-  // Required, explicit acceptance — not just the passive footer link this
-  // replaced. terms_version/privacy_version travel through signUp()'s
-  // options.data the same way full_name/phone/account_type already do, and
-  // handle_new_user() (see the 20260826 migration) stamps them onto the new
-  // profile row plus a terms_acceptance_log entry, in the same transaction
-  // that creates the account.
-  const [termsAccepted, setTermsAccepted] = useState(false);
-
-  useEffect(() => {
-    if (resendCooldown <= 0) return;
-    const t = setInterval(() => setResendCooldown(s => Math.max(0, s - 1)), 1000);
-    return () => clearInterval(t);
-  }, [resendCooldown]);
-
-  const handlePhoneInput = (val: string) => {
-    setForm(f => ({ ...f, phone: val }));
-    setOtpSent(false); setOtpVerified(false); setOtpError(""); setOtpCode("");
-  };
-
-  const handleSendRegisterOtp = async () => {
-    if (!isValidSAMobile(form.phone)) { setOtpError("Enter a valid South African WhatsApp number."); return; }
-    setOtpSending(true); setOtpError("");
-    try {
-      const res = await fetch("/api/auth/phone-otp/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: form.phone }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to send code");
-      setOtpSent(true); setResendCooldown(60);
-    } catch (err: unknown) {
-      setOtpError(err instanceof Error ? err.message : "Failed to send code");
-    } finally {
-      setOtpSending(false);
-    }
-  };
-
-  const handleVerifyRegisterOtp = async () => {
-    if (otpCode.length !== 6) { setOtpError("Enter the 6-digit code."); return; }
-    setOtpVerifying(true); setOtpError("");
-    try {
-      const res = await fetch("/api/auth/phone-otp/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: form.phone, code: otpCode }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Incorrect code");
-      setOtpVerified(true); setOtpError("");
-    } catch (err: unknown) {
-      setOtpError(err instanceof Error ? err.message : "Incorrect code");
-    } finally {
-      setOtpVerifying(false);
-    }
-  };
+  const [form, setForm]         = useState({ email: "", password: "" });
 
   // Reactive — this is the actual fix for bug #1. Runs every time the "auth"
   // param changes, including same-page navigations, not just on mount.
   useEffect(() => {
     if (authParam === "login") setMode("login");
-    else if (authParam === "register") setMode("register");
   }, [authParam]);
+
+  // "?auth=register" is a signup intent, not a mode this modal renders
+  // anymore — send it straight to the dedicated page instead. Any old link
+  // or bookmark still pointing at "?auth=register" keeps working.
+  useEffect(() => {
+    if (authParam !== "register") return;
+    const dest = nextParam && nextParam.startsWith("/") ? nextParam : (pathname || "/");
+    router.replace(`/register?next=${encodeURIComponent(dest)}`);
+  }, [authParam, nextParam, pathname, router]);
 
   // Clear a stray OAuth error hash so the UI stays clean.
   useEffect(() => {
@@ -134,82 +82,48 @@ export default function AuthModal() {
     router.push(qs ? `${pathname}?${qs}` : pathname);
   };
 
-  // Where to land after a successful sign-in/sign-up: an explicit ?next=
-  // wins, otherwise just stay on the page the modal was opened from — it
-  // now lives wherever that page is, so "stay put" is the right default.
+  // Where to land after a successful sign-in: an explicit ?next= wins,
+  // otherwise just stay on the page the modal was opened from — it lives
+  // wherever that page is, so "stay put" is the right default.
   const goNext = () => {
     const dest = nextParam && nextParam.startsWith("/") ? nextParam : pathname;
     router.push(dest);
   };
 
+  const dest = nextParam && nextParam.startsWith("/") ? nextParam : (pathname || "/");
+
   const handleOAuth = async (provider: "google" | "facebook") => {
-    if (mode === "register" && !termsAccepted) {
-      setError("Please accept the Terms & Conditions and Privacy Policy first.");
-      return;
-    }
     setLoading(true);
-    const dest = nextParam && nextParam.startsWith("/") ? nextParam : pathname;
     await supabase.auth.signInWithOAuth({
       provider,
-      options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(dest || "/dashboard")}` },
+      options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(dest)}` },
     });
   };
 
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (mode === "register" && !otpVerified) {
-      setError("Please verify your WhatsApp number first.");
-      return;
-    }
-    if (mode === "register" && !termsAccepted) {
-      setError("Please accept the Terms & Conditions and Privacy Policy first.");
-      return;
-    }
     setLoading(true);
     setError("");
     try {
-      if (mode === "login") {
-        // Support login with email or WhatsApp (phone number → look up email)
-        const identifier = form.email.trim();
-        const isPhone = /^[0-9+\s()-]{7,}$/.test(identifier) && !identifier.includes("@");
-        if (isPhone) {
-          const { data: profileData } = await supabase
-            .from("profiles")
-            .select("email")
-            .eq("phone", normalizePhone(identifier))
-            .maybeSingle();
-          if (!profileData?.email) throw new Error("No account found with that WhatsApp number.");
-          const { error } = await supabase.auth.signInWithPassword({ email: profileData.email, password: form.password });
-          if (error) throw error;
-        } else {
-          const { error } = await supabase.auth.signInWithPassword({ email: identifier, password: form.password });
-          if (error) throw error;
-        }
-        gTag("login", { method: "email" });
-        fbq("Login");
-        goNext();
-      } else {
-        // Phone is normalized here to exactly match what /api/auth/phone-otp/send
-        // and /verify stored the verification row under, so the handle_new_user()
-        // trigger's phone_otp_verifications lookup actually matches and the new
-        // profile's whatsapp_verified_at gets set.
-        const { error } = await supabase.auth.signUp({
-          email: form.email,
-          password: form.password,
-          options: {
-            data: {
-              full_name: form.name, phone: normalizePhone(form.phone), account_type: "customer",
-              terms_version: CURRENT_TERMS_VERSION, privacy_version: CURRENT_PRIVACY_VERSION,
-            },
-            emailRedirectTo: `${window.location.origin}/auth/callback`,
-          },
-        });
+      // Support login with email or WhatsApp (phone number → look up email)
+      const identifier = form.email.trim();
+      const isPhone = /^[0-9+\s()-]{7,}$/.test(identifier) && !identifier.includes("@");
+      if (isPhone) {
+        const { data: profileData } = await supabase
+          .from("profiles")
+          .select("email")
+          .eq("phone", normalizePhone(identifier))
+          .maybeSingle();
+        if (!profileData?.email) throw new Error("No account found with that WhatsApp number.");
+        const { error } = await supabase.auth.signInWithPassword({ email: profileData.email, password: form.password });
         if (error) throw error;
-        setError("Check your email to confirm your account.");
-        gTag("sign_up", { method: "email" });
-        fbq("CompleteRegistration");
-        ttq("CompleteRegistration");
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email: identifier, password: form.password });
+        if (error) throw error;
       }
+      gTag("login", { method: "email" });
+      fbq("Login");
+      goNext();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -256,32 +170,15 @@ export default function AuthModal() {
     <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) close(); }}>
       <div style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 420, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
         <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.6rem", marginBottom: "0.25rem" }}>
-          {mode === "login" ? "Welcome back" : mode === "forgot" ? "Reset password" : "Create account"}
+          {mode === "forgot" ? "Reset password" : "Welcome back"}
         </h2>
         <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>
-          {mode === "login" ? "Sign in to book your next appointment." : mode === "forgot" ? "Enter your email or WhatsApp number to receive a reset link." : "Join Umuhle — it's free."}
+          {mode === "forgot" ? "Enter your email or WhatsApp number to receive a reset link." : "Sign in to book your next appointment."}
         </p>
-
-        {mode === "register" && (
-          <label style={{ display: "flex", alignItems: "flex-start", gap: "0.6rem", marginBottom: "1.25rem", cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={termsAccepted}
-              onChange={e => setTermsAccepted(e.target.checked)}
-              style={{ marginTop: "0.2rem", flexShrink: 0 }}
-            />
-            <span style={{ fontSize: "0.8rem", color: "var(--grey)", lineHeight: 1.5 }}>
-              I have read and agree to the{" "}
-              <Link href="/terms-and-conditions" target="_blank" style={{ color: "var(--plum)" }}>Terms &amp; Conditions</Link>
-              {" "}and{" "}
-              <Link href="/privacy-policy" target="_blank" style={{ color: "var(--plum)" }}>Privacy Policy</Link>.
-            </span>
-          </label>
-        )}
 
         {mode !== "forgot" && (
           <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1.5rem" }}>
-            <button onClick={() => handleOAuth("google")} disabled={loading || (mode === "register" && !termsAccepted)} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "1.5px solid #E0E0E0", background: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}>
+            <button onClick={() => handleOAuth("google")} disabled={loading} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "1.5px solid #E0E0E0", background: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}>
               <svg width="20" height="20" viewBox="0 0 48 48">
                 <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.2l6.7-6.7C35.8 2.4 30.2 0 24 0 14.8 0 6.9 5.4 3 13.3l7.8 6.1C12.6 13.1 17.9 9.5 24 9.5z"/>
                 <path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.5c-.5 2.8-2.1 5.2-4.5 6.8l7 5.4c4.1-3.8 6.5-9.4 6.5-16.2z"/>
@@ -290,7 +187,7 @@ export default function AuthModal() {
               </svg>
               Continue with Google
             </button>
-            <button onClick={() => handleOAuth("facebook")} disabled={loading || (mode === "register" && !termsAccepted)} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "none", background: "#1877F2", color: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}>
+            <button onClick={() => handleOAuth("facebook")} disabled={loading} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "0.75rem", borderRadius: 12, border: "none", background: "#1877F2", color: "#fff", fontWeight: 500, fontSize: "0.9rem", cursor: "pointer" }}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff">
                 <path d="M24 12a12 12 0 1 0-13.875 11.85v-8.385H7.08V12h3.045V9.356c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874V12h3.328l-.532 3.465h-2.796v8.385A12 12 0 0 0 24 12z"/>
               </svg>
@@ -308,74 +205,9 @@ export default function AuthModal() {
         )}
 
         <form onSubmit={mode === "forgot" ? handleForgotPassword : handleEmailAuth} style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-          {mode === "register" && (
-            <>
-              <input
-                placeholder="Full name"
-                value={form.name}
-                onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                required
-                style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }}
-              />
-              <input
-                placeholder="WhatsApp number (e.g. 082 123 4567)"
-                value={form.phone}
-                onChange={e => handlePhoneInput(e.target.value)}
-                required
-                disabled={otpVerified}
-                style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }}
-              />
-
-              {otpVerified ? (
-                <p style={{ color: "var(--forest)", fontSize: "0.8rem", margin: 0 }}>✓ WhatsApp number verified</p>
-              ) : !otpSent ? (
-                <button
-                  type="button"
-                  onClick={handleSendRegisterOtp}
-                  disabled={otpSending || !form.phone}
-                  style={{ padding: "0.6rem 1rem", borderRadius: 12, border: "1.5px solid var(--plum)", background: "#fff", color: "var(--plum)", fontWeight: 500, fontSize: "0.85rem", cursor: "pointer", alignSelf: "flex-start" }}
-                >
-                  {otpSending ? "Sending…" : "Send WhatsApp code"}
-                </button>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                  <div style={{ display: "flex", gap: "0.5rem" }}>
-                    <input
-                      placeholder="6-digit code"
-                      value={otpCode}
-                      onChange={e => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                      inputMode="numeric"
-                      style={{ flex: 1, padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }}
-                    />
-                    <button
-                      type="button"
-                      onClick={handleVerifyRegisterOtp}
-                      disabled={otpVerifying || otpCode.length !== 6}
-                      className="btn-plum"
-                      style={{ padding: "0 1.25rem", borderRadius: 12 }}
-                    >
-                      {otpVerifying ? "Checking…" : "Verify"}
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleSendRegisterOtp}
-                    disabled={resendCooldown > 0 || otpSending}
-                    style={{ background: "none", border: "none", padding: 0, textAlign: "left", color: "var(--light)", fontSize: "0.8rem", cursor: resendCooldown > 0 ? "default" : "pointer", alignSelf: "flex-start" }}
-                  >
-                    {resendCooldown > 0 ? `Resend code in ${resendCooldown}s` : "Resend code"}
-                  </button>
-                </div>
-              )}
-              {otpError && (
-                <p style={{ color: "#E53935", fontSize: "0.8rem", margin: 0 }}>{otpError}</p>
-              )}
-            </>
-          )}
-
           <input
-            type={mode === "register" ? "email" : "text"}
-            placeholder={mode === "register" ? "Email address" : "Email or WhatsApp number"}
+            type="text"
+            placeholder="Email or WhatsApp number"
             value={form.email}
             onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
             required
@@ -392,44 +224,46 @@ export default function AuthModal() {
                 required
                 style={{ padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem" }}
               />
-              {mode === "login" && (
-                <button
-                  type="button"
-                  onClick={() => { setMode("forgot"); setError(""); }}
-                  style={{ background: "none", border: "none", padding: 0, textAlign: "right", color: "var(--plum)", cursor: "pointer", fontSize: "0.85rem", alignSelf: "flex-end" }}
-                >
-                  Forgot password?
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => { setMode("forgot"); setError(""); }}
+                style={{ background: "none", border: "none", padding: 0, textAlign: "right", color: "var(--plum)", cursor: "pointer", fontSize: "0.85rem", alignSelf: "flex-end" }}
+              >
+                Forgot password?
+              </button>
             </>
           )}
 
           {error && (
-            <p style={{ color: error.includes("Check your email") || error.includes("reset link sent") ? "var(--forest)" : "#E53935", fontSize: "0.85rem", margin: 0 }}>
+            <p style={{ color: error.includes("reset link sent") ? "var(--forest)" : "#E53935", fontSize: "0.85rem", margin: 0 }}>
               {error}
             </p>
           )}
 
-          <button type="submit" className="btn-plum" style={{ marginTop: "0.25rem" }} disabled={loading || (mode === "register" && (!otpVerified || !termsAccepted))}>
-            {loading ? "Please wait…" : mode === "login" ? "Sign in" : mode === "forgot" ? "Send reset link" : "Create account"}
+          <button type="submit" className="btn-plum" style={{ marginTop: "0.25rem" }} disabled={loading}>
+            {loading ? "Please wait…" : mode === "forgot" ? "Send reset link" : "Sign in"}
           </button>
         </form>
 
         <p style={{ textAlign: "center", marginTop: "1.25rem", fontSize: "0.875rem", color: "var(--grey)" }}>
-          {mode === "forgot" ? "Remember your password?" : mode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
-          <button onClick={() => { setMode(mode === "register" ? "login" : mode === "forgot" ? "login" : "register"); setError(""); }} style={{ background: "none", border: "none", color: "var(--plum)", fontWeight: 500, cursor: "pointer" }}>
-            {mode === "forgot" ? "Sign in" : mode === "login" ? "Sign up" : "Sign in"}
-          </button>
+          {mode === "forgot" ? "Remember your password?" : "Don't have an account?"}{" "}
+          {mode === "forgot" ? (
+            <button onClick={() => { setMode("login"); setError(""); }} style={{ background: "none", border: "none", color: "var(--plum)", fontWeight: 500, cursor: "pointer" }}>
+              Sign in
+            </button>
+          ) : (
+            <button onClick={() => router.push(`/register?next=${encodeURIComponent(dest)}`)} style={{ background: "none", border: "none", color: "var(--plum)", fontWeight: 500, cursor: "pointer" }}>
+              Sign up
+            </button>
+          )}
         </p>
 
-        {mode !== "register" && (
-          <p style={{ textAlign: "center", marginTop: "0.75rem", fontSize: "0.75rem", color: "var(--light)" }}>
-            By continuing you agree to our{" "}
-            <Link href="/terms-and-conditions" style={{ color: "var(--plum)" }} onClick={close}>Terms</Link>
-            {" "}and{" "}
-            <Link href="/privacy-policy" style={{ color: "var(--plum)" }} onClick={close}>Privacy Policy</Link>
-          </p>
-        )}
+        <p style={{ textAlign: "center", marginTop: "0.75rem", fontSize: "0.75rem", color: "var(--light)" }}>
+          By continuing you agree to our{" "}
+          <Link href="/terms-and-conditions" style={{ color: "var(--plum)" }} onClick={close}>Terms</Link>
+          {" "}and{" "}
+          <Link href="/privacy-policy" style={{ color: "var(--plum)" }} onClick={close}>Privacy Policy</Link>
+        </p>
       </div>
     </div>
   );

@@ -128,7 +128,7 @@ export default function EarnPage() {
           <p style={{ color: "var(--grey)", maxWidth: 400, margin: "0 auto 1.5rem", fontSize: "0.95rem" }}>
             Become an Umuhle Partner. Sell products, list your salon, and get discovered.
           </p>
-          <Link href="?auth=register">
+          <Link href="/register?type=business_partner">
             <button className="btn-plum">Become a Partner</button>
           </Link>
         </div>

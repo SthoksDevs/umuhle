@@ -417,7 +417,7 @@ export default function ShopPage() {
             <p style={{ color: "var(--grey)", maxWidth: 400, margin: "0 auto 1.5rem", fontSize: "0.95rem" }}>
               List your products on Umuhle and reach thousands of customers across South Africa.
             </p>
-            <Link href="?auth=register"><button className="btn-plum">Become a Partner</button></Link>
+            <Link href="/register?type=business_partner"><button className="btn-plum">Become a Partner</button></Link>
           </div>
         </main>
 

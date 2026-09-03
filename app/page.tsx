@@ -874,7 +874,7 @@ export default function Home() {
               <p style={{ color: "var(--grey)", maxWidth: 420, margin: "0 auto 1.5rem", fontSize: "0.95rem" }}>
                 Join Umuhle and get discovered by clients across South Africa looking for hair, nail, makeup and lash artists.
               </p>
-              <Link href="/?auth=register"><button className="btn-plum">Become an Artist</button></Link>
+              <Link href="/register?type=artist"><button className="btn-plum">Become an Artist</button></Link>
             </div>
           </section>
         </main>
