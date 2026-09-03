@@ -16,7 +16,7 @@ const ICON = "/umuhle-icon.png";
 
 // ── CHANGE: added Stores link ─────────────────────────────────────────────────
 const NAV_LINKS = [
-  { label: "Search",  href: "/" },
+  { label: "Artists",  href: "/" },
   { label: "Stores",  href: "/stores" },
   { label: "Shop",    href: "/shop" },
   { label: "Earn",    href: "/earn" },
