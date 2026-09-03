@@ -31,6 +31,7 @@ import { gTag, fbq, ttq } from "@/lib/analytics";
 import { normalizePhone, isValidSAMobile } from "@/lib/phone";
 import { CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION } from "@/lib/legal";
 import type { AccountType, ServiceCategory } from "@/types";
+import { SA_PROVINCES } from "@/types";
 
 const ICON = "/umuhle-icon.png";
 
@@ -40,10 +41,10 @@ const ICON = "/umuhle-icon.png";
 // Owner" reads better than the raw "business_partner" column value, same
 // gap app/auth/callback/route.ts's WELCOME_ROLE_MAP already papers over
 // for the welcome email copy.
-const ROLE_OPTIONS: { value: AccountType; label: string; blurb: string; icon: string }[] = [
-  { value: "customer", label: "Customer", blurb: "Book artists and shop products", icon: "\u{1F6CD}\u{FE0F}" },
-  { value: "artist", label: "Artist", blurb: "Offer hair, nails, makeup or lashes", icon: "\u{1F485}" },
-  { value: "business_partner", label: "Store Owner", blurb: "Run a salon or sell products", icon: "\u{1F3EC}" },
+const ROLE_OPTIONS: { value: AccountType; label: string; blurb: string }[] = [
+  { value: "customer", label: "Customer", blurb: "Book artists and shop products" },
+  { value: "artist", label: "Artist", blurb: "Offer hair, nails, makeup or lashes" },
+  { value: "business_partner", label: "Store Owner", blurb: "Run a salon or sell products" },
 ];
 
 const ARTIST_CATEGORIES: { value: ServiceCategory; label: string }[] = [
@@ -126,9 +127,15 @@ function RegisterPageInner() {
   const [sessionEmail, setSessionEmail] = useState("");
 
   const [accountType, setAccountType] = useState<AccountType>(isAccountType(typeParam) ? typeParam : "customer");
-  const [artistCategory, setArtistCategory] = useState<ServiceCategory | "">("");
+  const [artistCategories, setArtistCategories] = useState<ServiceCategory[]>([]);
+  const toggleArtistCategory = (cat: ServiceCategory) => {
+    setArtistCategories(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]);
+  };
 
-  const [form, setForm] = useState({ name: "", email: "", password: "", phone: "" });
+  const [form, setForm] = useState({
+    name: "", email: "", password: "", phone: "",
+    address: "", suburb: "", city: "", province: "", postalCode: "",
+  });
   const [showPass, setShowPass] = useState(false);
 
   const [otpCode, setOtpCode] = useState("");
@@ -162,7 +169,7 @@ function RegisterPageInner() {
 
       const { data: profile } = await supabase
         .from("profiles")
-        .select("full_name, phone, terms_accepted, account_type, artist_category")
+        .select("full_name, phone, terms_accepted, account_type, artist_categories, address, suburb, city, province, postal_code")
         .eq("id", user.id)
         .single();
 
@@ -174,9 +181,18 @@ function RegisterPageInner() {
       }
 
       setSessionEmail(user.email ?? "");
-      setForm(f => ({ ...f, name: profile?.full_name ?? "", email: user.email ?? "" }));
+      setForm(f => ({
+        ...f,
+        name: profile?.full_name ?? "",
+        email: user.email ?? "",
+        address: profile?.address ?? "",
+        suburb: profile?.suburb ?? "",
+        city: profile?.city ?? "",
+        province: profile?.province ?? "",
+        postalCode: profile?.postal_code ?? "",
+      }));
       if (!typeParam && isAccountType(profile?.account_type)) setAccountType(profile.account_type);
-      if (profile?.artist_category) setArtistCategory(profile.artist_category as ServiceCategory);
+      if (profile?.artist_categories?.length) setArtistCategories(profile.artist_categories as ServiceCategory[]);
       setStatus("completing");
     });
     return () => { cancelled = true; };
@@ -244,7 +260,11 @@ function RegisterPageInner() {
     e.preventDefault();
     if (!otpVerified) { setError("Please verify your WhatsApp number first."); return; }
     if (!termsAccepted) { setError("Please accept the Terms & Conditions and Privacy Policy first."); return; }
-    if (accountType === "artist" && !artistCategory) { setError("Choose what kind of artist you are."); return; }
+    if (accountType === "artist" && artistCategories.length === 0) { setError("Choose at least one specialty."); return; }
+    if (!form.address.trim() || !form.city.trim() || !form.province || !form.postalCode.trim()) {
+      setError("Please fill in your address.");
+      return;
+    }
 
     setLoading(true);
     setError("");
@@ -257,7 +277,12 @@ function RegisterPageInner() {
             full_name: form.name,
             phone: form.phone,
             account_type: accountType,
-            artist_category: accountType === "artist" ? artistCategory : null,
+            artist_categories: accountType === "artist" ? artistCategories : [],
+            address: form.address,
+            suburb: form.suburb,
+            city: form.city,
+            province: form.province,
+            postal_code: form.postalCode,
           }),
         });
         const data = await res.json();
@@ -281,9 +306,14 @@ function RegisterPageInner() {
             full_name: form.name,
             phone: normalizePhone(form.phone),
             account_type: accountType,
-            artist_category: accountType === "artist" ? artistCategory : undefined,
+            artist_categories: accountType === "artist" ? artistCategories : [],
             terms_version: CURRENT_TERMS_VERSION,
             privacy_version: CURRENT_PRIVACY_VERSION,
+            address: form.address,
+            suburb: form.suburb,
+            city: form.city,
+            province: form.province,
+            postal_code: form.postalCode,
           },
           emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
         },
@@ -308,7 +338,6 @@ function RegisterPageInner() {
     return (
       <PageShell>
         <div style={{ textAlign: "center", padding: "1rem 0" }}>
-          <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>📩</div>
           <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.5rem", color: "var(--onyx)", marginBottom: "0.5rem" }}>Check your email</h1>
           <p style={{ color: "var(--grey)", fontSize: "0.9rem", lineHeight: 1.6 }}>
             We sent a confirmation link to <strong>{form.email}</strong>. Click it to activate your account.
@@ -320,12 +349,9 @@ function RegisterPageInner() {
 
   return (
     <PageShell>
-      <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.75rem", color: "var(--onyx)", marginBottom: "0.4rem" }}>
+      <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.75rem", color: "var(--onyx)", marginBottom: "1.75rem" }}>
         {status === "completing" ? "Finish setting up" : "Join Umuhle"}
       </h1>
-      <p style={{ color: "var(--grey)", fontSize: "0.9rem", marginBottom: "1.75rem", lineHeight: 1.6 }}>
-        {status === "completing" ? "A couple more details and you're in." : "Tell us what brings you here — it's free."}
-      </p>
 
       <div style={{ marginBottom: "1.5rem" }}>
         <label style={labelStyle}>I&apos;m signing up as</label>
@@ -341,7 +367,6 @@ function RegisterPageInner() {
                 background: accountType === opt.value ? "var(--plum-t)" : "#fff",
               }}
             >
-              <div style={{ fontSize: "1.3rem", marginBottom: "0.25rem" }}>{opt.icon}</div>
               <div style={{ fontWeight: 600, fontSize: "0.9rem", color: "var(--onyx)" }}>{opt.label}</div>
               <div style={{ fontSize: "0.75rem", color: "var(--grey)", marginTop: "0.15rem" }}>{opt.blurb}</div>
             </button>
@@ -350,19 +375,19 @@ function RegisterPageInner() {
 
         {accountType === "artist" && (
           <div style={{ marginTop: "0.85rem" }}>
-            <label style={labelStyle}>What do you specialise in?</label>
+            <label style={labelStyle}>What do you specialise in? (choose all that apply)</label>
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
               {ARTIST_CATEGORIES.map(cat => (
                 <button
                   key={cat.value}
                   type="button"
-                  onClick={() => setArtistCategory(cat.value)}
+                  onClick={() => toggleArtistCategory(cat.value)}
                   style={{
                     padding: "0.5rem 0.9rem", borderRadius: 100, fontSize: "0.85rem", cursor: "pointer",
-                    border: artistCategory === cat.value ? "1.5px solid var(--plum)" : "1.5px solid #E0E0E0",
-                    background: artistCategory === cat.value ? "var(--plum-t)" : "#fff",
-                    color: artistCategory === cat.value ? "var(--plum)" : "var(--grey)",
-                    fontWeight: artistCategory === cat.value ? 600 : 400,
+                    border: artistCategories.includes(cat.value) ? "1.5px solid var(--plum)" : "1.5px solid #E0E0E0",
+                    background: artistCategories.includes(cat.value) ? "var(--plum-t)" : "#fff",
+                    color: artistCategories.includes(cat.value) ? "var(--plum)" : "var(--grey)",
+                    fontWeight: artistCategories.includes(cat.value) ? 600 : 400,
                   }}
                 >
                   {cat.label}
@@ -466,6 +491,54 @@ function RegisterPageInner() {
           </div>
         )}
         {otpError && <p style={{ color: "#E53935", fontSize: "0.8rem", margin: 0 }}>{otpError}</p>}
+
+        <div style={{ marginTop: "0.35rem" }}>
+          <label style={labelStyle}>Address</label>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            <input
+              placeholder="Street address"
+              value={form.address}
+              onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
+              required
+              style={inputStyle}
+            />
+            <div style={{ display: "flex", gap: "0.75rem" }}>
+              <input
+                placeholder="Suburb"
+                value={form.suburb}
+                onChange={e => setForm(f => ({ ...f, suburb: e.target.value }))}
+                style={{ ...inputStyle, flex: 1 }}
+              />
+              <input
+                placeholder="City"
+                value={form.city}
+                onChange={e => setForm(f => ({ ...f, city: e.target.value }))}
+                required
+                style={{ ...inputStyle, flex: 1 }}
+              />
+            </div>
+            <div style={{ display: "flex", gap: "0.75rem" }}>
+              <select
+                value={form.province}
+                onChange={e => setForm(f => ({ ...f, province: e.target.value }))}
+                required
+                style={{ ...inputStyle, flex: 1, background: "#fff" }}
+              >
+                <option value="">Province</option>
+                {SA_PROVINCES.map(p => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+              <input
+                placeholder="Postal code"
+                value={form.postalCode}
+                onChange={e => setForm(f => ({ ...f, postalCode: e.target.value }))}
+                required
+                style={{ ...inputStyle, flex: 1 }}
+              />
+            </div>
+          </div>
+        </div>
 
         {status === "fresh" && (
           <div style={{ position: "relative" }}>

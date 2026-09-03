@@ -23,6 +23,7 @@ import { createClient as createServerClient } from "@/lib/supabase/server";
 import { normalizePhone, isValidSAMobile } from "@/lib/phone";
 import { CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION } from "@/lib/legal";
 import { sendWelcomeEmail } from "@/lib/email";
+import { SA_PROVINCES } from "@/types";
 
 const ACCOUNT_TYPES = ["customer", "artist", "business_partner"] as const;
 type AllowedAccountType = (typeof ACCOUNT_TYPES)[number];
@@ -31,7 +32,8 @@ function isAllowedAccountType(v: unknown): v is AllowedAccountType {
 }
 
 const ARTIST_CATEGORIES = ["hair", "nails", "makeup", "lashes"] as const;
-function isArtistCategory(v: unknown): v is (typeof ARTIST_CATEGORIES)[number] {
+type ArtistCategory = (typeof ARTIST_CATEGORIES)[number];
+function isArtistCategory(v: unknown): v is ArtistCategory {
   return typeof v === "string" && (ARTIST_CATEGORIES as readonly string[]).includes(v);
 }
 
@@ -58,7 +60,10 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
 
-  let body: { full_name?: string; phone?: string; account_type?: string; artist_category?: string | null };
+  let body: {
+    full_name?: string; phone?: string; account_type?: string; artist_categories?: unknown;
+    address?: string; suburb?: string; city?: string; province?: string; postal_code?: string;
+  };
   try {
     body = await req.json();
   } catch {
@@ -75,9 +80,23 @@ export async function POST(req: NextRequest) {
 
   const accountType: AllowedAccountType = isAllowedAccountType(body.account_type) ? body.account_type : "customer";
 
-  const artistCategory = accountType === "artist" && isArtistCategory(body.artist_category) ? body.artist_category : null;
-  if (accountType === "artist" && !artistCategory) {
-    return NextResponse.json({ error: "Choose what kind of artist you are." }, { status: 400 });
+  const artistCategories: ArtistCategory[] = accountType === "artist" && Array.isArray(body.artist_categories)
+    ? body.artist_categories.filter(isArtistCategory)
+    : [];
+  if (accountType === "artist" && artistCategories.length === 0) {
+    return NextResponse.json({ error: "Choose at least one specialty." }, { status: 400 });
+  }
+
+  const address = (body.address ?? "").trim();
+  const city = (body.city ?? "").trim();
+  const province = (body.province ?? "").trim();
+  const postalCode = (body.postal_code ?? "").trim();
+  const suburb = (body.suburb ?? "").trim();
+  if (!address || !city || !province || !postalCode) {
+    return NextResponse.json({ error: "Please fill in your address." }, { status: 400 });
+  }
+  if (!(SA_PROVINCES as readonly string[]).includes(province)) {
+    return NextResponse.json({ error: "Choose a valid province." }, { status: 400 });
   }
 
   // Re-check the phone was actually OTP-verified in the last 30 minutes —
@@ -116,11 +135,17 @@ export async function POST(req: NextRequest) {
       account_type: accountType,
       is_artist: accountType === "artist",
       is_partner: accountType === "business_partner",
-      artist_category: artistCategory,
+      artist_categories: artistCategories,
+      artist_category: artistCategories[0] ?? null,
       terms_accepted: true,
       terms_accepted_at: now,
       terms_version: CURRENT_TERMS_VERSION,
       privacy_version: CURRENT_PRIVACY_VERSION,
+      address,
+      suburb: suburb || null,
+      city,
+      province,
+      postal_code: postalCode,
     })
     .eq("id", user.id);
 

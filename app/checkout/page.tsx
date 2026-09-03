@@ -452,7 +452,17 @@ export default function CheckoutPage() {
         if (data) {
           const p = data as Profile;
           setProfile(p);
-          setForm((f) => ({ ...f, name: p.full_name ?? "", whatsapp: p.phone ?? "", email: p.email ?? "" }));
+          setForm((f) => ({
+            ...f,
+            name: p.full_name ?? "",
+            whatsapp: p.phone ?? "",
+            email: p.email ?? "",
+            address: p.address ?? "",
+            suburb: p.suburb ?? "",
+            city: p.city ?? "",
+            province: p.province ?? "",
+            postalCode: p.postal_code ?? "",
+          }));
         }
         setLoading(false);
       });

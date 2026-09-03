@@ -85,7 +85,8 @@ export interface Profile {
   referral_code: string | null;
   referred_by: string | null;
   account_type: AccountType | null;
-  artist_category: ServiceCategory | null; // set at signup when account_type = 'artist'
+  artist_category: ServiceCategory | null; // set at signup when account_type = 'artist' — first of artist_categories, kept for backward compat
+  artist_categories: ServiceCategory[]; // an artist can offer more than one specialty — see 20260903_registration_multi_category_and_address migration
   poc_name: string | null;   // point-of-contact name (required before booking)
   poc_phone: string | null;  // point-of-contact WhatsApp number
   payfast_merchant_id: string | null;    // for instant PayFast split payouts — see lib/payments/split.ts
