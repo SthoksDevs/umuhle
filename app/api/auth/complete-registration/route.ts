@@ -11,14 +11,17 @@
 //
 // Deliberately a server route rather than a raw client .update() (the
 // pattern components/dashboard/ProfileTab.tsx uses for a simple phone
-// change, per app/api/auth/phone-otp/verify/route.ts's own header comment)
-// because this call also flips account_type/is_artist/is_partner together
-// and re-checks the phone OTP verification server-side before trusting it
-// — more surface than a single self-service field edit, and not something
-// to trust a client-supplied boolean for.
+// change) because this call also flips account_type/is_artist/is_partner
+// together — more surface than a single self-service field edit.
+//
+// WhatsApp is no longer verified at registration — only email is (Supabase's
+// confirmation-link flow that got someone here in the first place). The
+// phone number is just format-validated and stored; whatsapp_verified_at
+// stays null until the person turns on "Send me WhatsApp updates" from
+// components/dashboard/ProfileTab.tsx, which runs the real OTP send/verify
+// (app/api/auth/phone-otp/*) at that point instead.
 
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { createClient as createServerClient } from "@/lib/supabase/server";
 import { normalizePhone, isValidSAMobile } from "@/lib/phone";
 import { CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION } from "@/lib/legal";
@@ -46,14 +49,6 @@ const WELCOME_ROLE_MAP: Record<AllowedAccountType, "artist" | "store_owner" | "c
   business_partner: "store_owner",
   customer: "customer",
 };
-
-function serviceClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { autoRefreshToken: false, persistSession: false } }
-  );
-}
 
 export async function POST(req: NextRequest) {
   const supabase = await createServerClient();
@@ -99,25 +94,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Choose a valid province." }, { status: 400 });
   }
 
-  // Re-check the phone was actually OTP-verified in the last 30 minutes —
-  // same window and table handle_new_user() checks for a fresh signUp() —
-  // rather than trusting a client-side otpVerified flag on its own.
-  const service = serviceClient();
-  const { data: otpRow } = await service
-    .from("phone_otp_verifications")
-    .select("id")
-    .eq("phone", phone)
-    .not("verified_at", "is", null)
-    .is("consumed_at", null)
-    .gt("verified_at", new Date(Date.now() - 30 * 60 * 1000).toISOString())
-    .order("verified_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (!otpRow) {
-    return NextResponse.json({ error: "Please verify your WhatsApp number again." }, { status: 400 });
-  }
-
   const now = new Date().toISOString();
 
   const { data: existingProfile } = await supabase
@@ -131,7 +107,6 @@ export async function POST(req: NextRequest) {
     .update({
       full_name: fullName,
       phone,
-      whatsapp_verified_at: now,
       account_type: accountType,
       is_artist: accountType === "artist",
       is_partner: accountType === "business_partner",
@@ -150,10 +125,6 @@ export async function POST(req: NextRequest) {
     .eq("id", user.id);
 
   if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
-
-  // Best-effort, same as handle_new_user() does for a fresh signup — a
-  // failure here shouldn't undo the account update above.
-  await service.from("phone_otp_verifications").update({ consumed_at: now }).eq("id", otpRow.id);
 
   const { error: logError } = await supabase.from("terms_acceptance_log").insert({
     user_id: user.id,

@@ -47,6 +47,13 @@ export default function ProfileTab({ profile, user, locationStatus, onUpdate }: 
   const [resendCooldown, setResendCooldown] = useState(0);
   const originalPhone = profile.phone ?? "";
 
+  // True whenever the phone on the form needs a fresh OTP check before
+  // it's trusted: either it's been edited to a different number, or
+  // WhatsApp updates are being switched on for a number that was only
+  // ever collected (not verified) at registration — see
+  // app/register/page.tsx, which no longer runs an OTP step at signup.
+  const needsPhoneVerification = phoneChanged || (whatsappCommsEnabled && !profile.whatsapp_verified_at);
+
   useEffect(() => {
     if (resendCooldown <= 0) return;
     const t = setInterval(() => setResendCooldown(s => Math.max(0, s - 1)), 1000);
@@ -115,7 +122,12 @@ export default function ProfileTab({ profile, user, locationStatus, onUpdate }: 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.phone.trim()) { setError("A WhatsApp number is required."); return; }
-    if (phoneChanged && !otpVerified) { setError("Please verify your new WhatsApp number before saving."); return; }
+    if (needsPhoneVerification && !otpVerified) {
+      setError(phoneChanged
+        ? "Please verify your new WhatsApp number before saving."
+        : "Please verify your WhatsApp number to turn on WhatsApp updates.");
+      return;
+    }
     setSaving(true); setError(""); setSaved(false);
     const updates: Record<string, unknown> = {
       full_name: form.full_name,
@@ -123,7 +135,7 @@ export default function ProfileTab({ profile, user, locationStatus, onUpdate }: 
       whatsapp_comms_enabled: whatsappCommsEnabled,
       updated_at: new Date().toISOString(),
     };
-    if (phoneChanged && otpVerified) updates.whatsapp_verified_at = new Date().toISOString();
+    if (needsPhoneVerification && otpVerified) updates.whatsapp_verified_at = new Date().toISOString();
     const { data, error: err } = await supabase.from("profiles").update(updates).eq("id", user.id).select().single();
     setSaving(false);
     if (err) { setError(err.message); return; }
@@ -191,14 +203,14 @@ export default function ProfileTab({ profile, user, locationStatus, onUpdate }: 
         <div>
           <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 500, color: "var(--grey)", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>WhatsApp number{otpVerified && <span style={{ marginLeft: "0.5rem", color: "var(--forest)", fontSize: "0.72rem" }}>✓ Verified</span>}{!phoneChanged && profile.whatsapp_verified_at && <span style={{ marginLeft: "0.5rem", color: "var(--forest)", fontSize: "0.72rem" }}>✓ Verified</span>}</label>
           <div style={{ display: "flex", gap: "0.5rem" }}>
-            <input value={form.phone} onChange={e => handlePhoneChange(e.target.value)} placeholder="e.g. 082 123 4567" type="tel" required style={{ flex: 1, padding: "0.75rem 1rem", borderRadius: 12, border: `1.5px solid ${phoneChanged && !otpVerified ? "var(--nude)" : "#E0E0E0"}`, fontSize: "0.9rem" }} />
-            {phoneChanged && !otpVerified && (
+            <input value={form.phone} onChange={e => handlePhoneChange(e.target.value)} placeholder="e.g. 082 123 4567" type="tel" required style={{ flex: 1, padding: "0.75rem 1rem", borderRadius: 12, border: `1.5px solid ${needsPhoneVerification && !otpVerified ? "var(--nude)" : "#E0E0E0"}`, fontSize: "0.9rem" }} />
+            {needsPhoneVerification && !otpVerified && (
               <button type="button" onClick={handleSendOtp} disabled={otpSending || resendCooldown > 0} style={{ flexShrink: 0, background: "var(--plum)", color: "#fff", border: "none", borderRadius: 12, padding: "0 1rem", fontSize: "0.82rem", fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap" }}>
                 {otpSending ? "Sending…" : resendCooldown > 0 ? `Resend in ${resendCooldown}s` : otpSent ? "Resend" : "Send code"}
               </button>
             )}
           </div>
-          {phoneChanged && otpSent && !otpVerified && (
+          {needsPhoneVerification && otpSent && !otpVerified && (
             <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
               <input
                 value={otpCode}
@@ -214,7 +226,7 @@ export default function ProfileTab({ profile, user, locationStatus, onUpdate }: 
             </div>
           )}
           {otpError && <p style={{ color: "#E53935", fontSize: "0.8rem", marginTop: "0.4rem" }}>{otpError}</p>}
-          {!phoneChanged && <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "0.35rem" }}>Used for booking notifications and account security. Changing your number requires verification.</p>}
+          {!needsPhoneVerification && <p style={{ fontSize: "0.75rem", color: "var(--light)", marginTop: "0.35rem" }}>Used for booking notifications and account security. Changing your number, or turning on WhatsApp updates below, requires verification.</p>}
         </div>
         <div style={{ background: "#FAFAFA", borderRadius: 12, padding: "1rem", border: "1.5px solid #E0E0E0" }}>
           <label style={{ display: "flex", alignItems: "flex-start", gap: "0.7rem", cursor: "pointer" }}>
@@ -229,6 +241,11 @@ export default function ProfileTab({ profile, user, locationStatus, onUpdate }: 
               <span style={{ display: "block", fontSize: "0.78rem", color: "var(--grey)", marginTop: "0.2rem" }}>
                 Booking reminders, order updates and review requests. Off by default — we&apos;ll use email instead. Security codes and appointment contact alerts always go out regardless of this setting.
               </span>
+              {whatsappCommsEnabled && !profile.whatsapp_verified_at && !otpVerified && (
+                <span style={{ display: "block", fontSize: "0.78rem", color: "var(--plum)", marginTop: "0.4rem" }}>
+                  We haven&apos;t verified this number yet — send yourself a code above to turn this on.
+                </span>
+              )}
             </span>
           </label>
         </div>

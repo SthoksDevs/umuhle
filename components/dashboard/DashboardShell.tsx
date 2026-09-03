@@ -336,7 +336,7 @@ export default function DashboardShell({ role }: { role: DashboardRole }) {
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 380, boxShadow: "0 24px 80px rgba(0,0,0,0.15)", textAlign: "center" }}>
             <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>📱</div>
             <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.3rem", marginBottom: "0.5rem" }}>Just one more thing</h3>
-            <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem", lineHeight: 1.6 }}>We mainly talk to you on WhatsApp — bookings, confirmations, and updates all go there.</p>
+            <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem", lineHeight: 1.6 }}>Add a WhatsApp number so we can reach you with booking contact details and keep your account secure. Email handles everything else — you can turn on WhatsApp updates any time from your profile.</p>
             <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
               <button className="btn-plum" onClick={() => { setShowWhatsAppNudge(false); setTab("profile"); }} style={{ width: "100%", padding: "0.75rem" }}>Add WhatsApp number</button>
               <button onClick={() => setShowWhatsAppNudge(false)} style={{ background: "none", border: "none", color: "var(--light)", fontSize: "0.85rem", cursor: "pointer" }}>Remind me later</button>

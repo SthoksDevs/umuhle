@@ -6,8 +6,8 @@
 // URL trigger both just navigate here instead. Two ways to land on this page:
 //
 //   1. Straight from a "Sign up" / "Become an Artist" link, no session yet
-//      → "fresh" mode: full name, email, password, WhatsApp OTP, terms, and
-//      (new) an explicit choice of what to register as.
+//      → "fresh" mode: full name, email, password, WhatsApp number, terms,
+//      and (new) an explicit choice of what to register as.
 //   2. Bounced here by app/auth/callback/route.ts right after a brand new
 //      Google/Facebook sign-in — a session already exists (the trigger in
 //      the 20260826 migration auto-created a `profiles` row with
@@ -15,6 +15,15 @@
 //      but OAuth never supplied a WhatsApp number, a role, or terms
 //      acceptance → "completing" mode: same role choice + phone/terms, but
 //      name/email are prefilled and read-only-ish, no password field.
+//
+// WhatsApp is collected here but deliberately NOT verified at this point —
+// email is the only verification gate for account creation now (Supabase's
+// own confirmation-link flow via emailRedirectTo below). The number is
+// saved as-is (whatsapp_verified_at stays null — see handle_new_user() /
+// app/api/auth/complete-registration/route.ts) and only gets OTP-verified
+// later, on demand, from components/dashboard/ProfileTab.tsx when someone
+// turns on "Send me WhatsApp updates". Registering used to block on a
+// WhatsApp OTP step right here; that UI has moved to ProfileTab.
 //
 // Registering as "Employee" is deliberately not offered here — employees
 // are provisioned by a store owner's invite (see
@@ -68,13 +77,6 @@ const labelStyle: React.CSSProperties = {
   marginBottom: "0.5rem", textTransform: "uppercase", letterSpacing: "0.05em",
 };
 
-function resendStyle(cooldown: number): React.CSSProperties {
-  return {
-    background: "none", border: "none", padding: 0, textAlign: "left",
-    color: "var(--light)", fontSize: "0.8rem", cursor: cooldown > 0 ? "default" : "pointer", alignSelf: "flex-start",
-  };
-}
-
 function GoogleIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 48 48">
@@ -119,6 +121,13 @@ function RegisterPageInner() {
   const nextParam = searchParams.get("next");
   const typeParam = searchParams.get("type");
   const next = nextParam && nextParam.startsWith("/") ? nextParam : "/dashboard";
+  // Where someone lands once registration is actually complete — distinct
+  // from `next` above (which also drives the "already complete, bounce
+  // away" redirect, the OAuth round trip, and the "Sign in" link). An
+  // explicit deep link still wins (e.g. someone sent here mid-booking),
+  // but with no particular destination in mind, send a brand-new account
+  // to the Profile tab so verifying/enabling WhatsApp is right there.
+  const postSignupNext = nextParam && nextParam.startsWith("/") ? nextParam : "/dashboard?tab=profile";
 
   // "checking": don't know yet whether a session exists.
   // "fresh": no session — full signup form.
@@ -138,24 +147,10 @@ function RegisterPageInner() {
   });
   const [showPass, setShowPass] = useState(false);
 
-  const [otpCode, setOtpCode] = useState("");
-  const [otpSent, setOtpSent] = useState(false);
-  const [otpVerified, setOtpVerified] = useState(false);
-  const [otpSending, setOtpSending] = useState(false);
-  const [otpVerifying, setOtpVerifying] = useState(false);
-  const [otpError, setOtpError] = useState("");
-  const [resendCooldown, setResendCooldown] = useState(0);
-
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [checkEmail, setCheckEmail] = useState(false);
-
-  useEffect(() => {
-    if (resendCooldown <= 0) return;
-    const t = setInterval(() => setResendCooldown(s => Math.max(0, s - 1)), 1000);
-    return () => clearInterval(t);
-  }, [resendCooldown]);
 
   // An already-complete profile (existing user who wandered back here, or
   // a "completing" submit that already succeeded) has no business on this
@@ -201,45 +196,6 @@ function RegisterPageInner() {
 
   const handlePhoneInput = (val: string) => {
     setForm(f => ({ ...f, phone: val }));
-    setOtpSent(false); setOtpVerified(false); setOtpError(""); setOtpCode("");
-  };
-
-  const handleSendOtp = async () => {
-    if (!isValidSAMobile(form.phone)) { setOtpError("Enter a valid South African WhatsApp number."); return; }
-    setOtpSending(true); setOtpError("");
-    try {
-      const res = await fetch("/api/auth/phone-otp/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: form.phone }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to send code");
-      setOtpSent(true); setResendCooldown(60);
-    } catch (err: unknown) {
-      setOtpError(err instanceof Error ? err.message : "Failed to send code");
-    } finally {
-      setOtpSending(false);
-    }
-  };
-
-  const handleVerifyOtp = async () => {
-    if (otpCode.length !== 6) { setOtpError("Enter the 6-digit code."); return; }
-    setOtpVerifying(true); setOtpError("");
-    try {
-      const res = await fetch("/api/auth/phone-otp/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: form.phone, code: otpCode }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Incorrect code");
-      setOtpVerified(true); setOtpError("");
-    } catch (err: unknown) {
-      setOtpError(err instanceof Error ? err.message : "Incorrect code");
-    } finally {
-      setOtpVerifying(false);
-    }
   };
 
   // The chosen role rides along as `type` on the way back from OAuth, so a
@@ -258,7 +214,7 @@ function RegisterPageInner() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!otpVerified) { setError("Please verify your WhatsApp number first."); return; }
+    if (!isValidSAMobile(form.phone)) { setError("Enter a valid South African WhatsApp number."); return; }
     if (!termsAccepted) { setError("Please accept the Terms & Conditions and Privacy Policy first."); return; }
     if (accountType === "artist" && artistCategories.length === 0) { setError("Choose at least one specialty."); return; }
     if (!form.address.trim() || !form.city.trim() || !form.province || !form.postalCode.trim()) {
@@ -290,14 +246,15 @@ function RegisterPageInner() {
         gTag("sign_up", { method: "oauth" });
         fbq("CompleteRegistration");
         ttq("CompleteRegistration");
-        router.push(next);
+        router.push(postSignupNext);
         return;
       }
 
-      // Phone is normalized here to exactly match what /api/auth/phone-otp/*
-      // stored the verification row under, same as the old AuthModal did —
-      // handle_new_user() re-checks phone_otp_verifications itself before
-      // marking the new profile's WhatsApp number verified.
+      // Phone is normalized here the same way ProfileTab and
+      // handle_new_user() normalise it, so a later verify-from-Profile
+      // attempt matches this exact string — but no OTP check happens at
+      // this point. handle_new_user() just stores it and leaves
+      // whatsapp_verified_at null.
       const { error } = await supabase.auth.signUp({
         email: form.email,
         password: form.password,
@@ -315,7 +272,7 @@ function RegisterPageInner() {
             province: form.province,
             postal_code: form.postalCode,
           },
-          emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
+          emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(postSignupNext)}`,
         },
       });
       if (error) throw error;
@@ -456,41 +413,11 @@ function RegisterPageInner() {
           value={form.phone}
           onChange={e => handlePhoneInput(e.target.value)}
           required
-          disabled={otpVerified}
           style={inputStyle}
         />
-
-        {otpVerified ? (
-          <p style={{ color: "var(--forest)", fontSize: "0.8rem", margin: 0 }}>✓ WhatsApp number verified</p>
-        ) : !otpSent ? (
-          <button
-            type="button"
-            onClick={handleSendOtp}
-            disabled={otpSending || !form.phone}
-            style={{ padding: "0.6rem 1rem", borderRadius: 12, border: "1.5px solid var(--plum)", background: "#fff", color: "var(--plum)", fontWeight: 500, fontSize: "0.85rem", cursor: "pointer", alignSelf: "flex-start" }}
-          >
-            {otpSending ? "Sending…" : "Send WhatsApp code"}
-          </button>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <input
-                placeholder="6-digit code"
-                value={otpCode}
-                onChange={e => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                inputMode="numeric"
-                style={{ ...inputStyle, flex: 1 }}
-              />
-              <button type="button" onClick={handleVerifyOtp} disabled={otpVerifying || otpCode.length !== 6} className="btn-plum" style={{ padding: "0 1.25rem", borderRadius: 12 }}>
-                {otpVerifying ? "Checking…" : "Verify"}
-              </button>
-            </div>
-            <button type="button" onClick={handleSendOtp} disabled={resendCooldown > 0 || otpSending} style={resendStyle(resendCooldown)}>
-              {resendCooldown > 0 ? `Resend code in ${resendCooldown}s` : "Resend code"}
-            </button>
-          </div>
-        )}
-        {otpError && <p style={{ color: "#E53935", fontSize: "0.8rem", margin: 0 }}>{otpError}</p>}
+        <p style={{ color: "var(--light)", fontSize: "0.78rem", margin: "-0.4rem 0 0" }}>
+          You can verify this and turn on WhatsApp updates later from your profile settings.
+        </p>
 
         <div style={{ marginTop: "0.35rem" }}>
           <label style={labelStyle}>Address</label>
@@ -574,7 +501,7 @@ function RegisterPageInner() {
 
         {error && <p style={{ color: "#E53935", fontSize: "0.85rem", margin: 0 }}>{error}</p>}
 
-        <button type="submit" className="btn-plum" disabled={loading || !otpVerified || !termsAccepted} style={{ marginTop: "0.25rem", padding: "0.875rem", fontSize: "1rem" }}>
+        <button type="submit" className="btn-plum" disabled={loading || !termsAccepted} style={{ marginTop: "0.25rem", padding: "0.875rem", fontSize: "1rem" }}>
           {loading ? "Please wait…" : "Create account"}
         </button>
       </form>
