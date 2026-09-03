@@ -73,6 +73,20 @@ export async function POST(req: NextRequest) {
   }
   const phone = normalizePhone(body.phone);
 
+  // Same gap app/register/page.tsx's "fresh" path has to guard against —
+  // profiles.phone has no DB constraint, and this OAuth "completing" path
+  // never goes through supabase.auth.signUp() at all, so it needs its own
+  // check rather than relying on that route's.
+  const { data: existingPhone } = await supabase
+    .from("profiles")
+    .select("id")
+    .eq("phone", phone)
+    .neq("id", user.id)
+    .maybeSingle();
+  if (existingPhone) {
+    return NextResponse.json({ error: "That WhatsApp number is already registered to another account." }, { status: 409 });
+  }
+
   const accountType: AllowedAccountType = isAllowedAccountType(body.account_type) ? body.account_type : "customer";
 
   const artistCategories: ArtistCategory[] = accountType === "artist" && Array.isArray(body.artist_categories)

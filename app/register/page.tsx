@@ -255,13 +255,31 @@ function RegisterPageInner() {
       // attempt matches this exact string — but no OTP check happens at
       // this point. handle_new_user() just stores it and leaves
       // whatsapp_verified_at null.
-      const { error } = await supabase.auth.signUp({
+      const normalizedPhone = normalizePhone(form.phone);
+
+      // Supabase Auth only enforces uniqueness on email — profiles.phone
+      // has no DB constraint, so nothing stops two different accounts
+      // sharing a WhatsApp number without this check. (See the matching
+      // check in app/api/auth/complete-registration/route.ts for the
+      // OAuth "completing" path, which hits the same gap.)
+      const { data: existingPhone } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("phone", normalizedPhone)
+        .maybeSingle();
+      if (existingPhone) {
+        setError("That WhatsApp number is already registered to another account. Sign in instead, or use a different number.");
+        setLoading(false);
+        return;
+      }
+
+      const { data: signUpData, error } = await supabase.auth.signUp({
         email: form.email,
         password: form.password,
         options: {
           data: {
             full_name: form.name,
-            phone: normalizePhone(form.phone),
+            phone: normalizedPhone,
             account_type: accountType,
             artist_categories: accountType === "artist" ? artistCategories : [],
             terms_version: CURRENT_TERMS_VERSION,
@@ -276,6 +294,18 @@ function RegisterPageInner() {
         },
       });
       if (error) throw error;
+
+      // Supabase deliberately does NOT return an error for signUp() with an
+      // email that's already registered and confirmed — for anti-enumeration
+      // reasons it returns an obfuscated "user" with an empty identities
+      // array instead (see github.com/orgs/supabase/discussions/1282). No
+      // new confirmation email is sent either. Without this check the form
+      // just falls through to "Check your email" for an email that was
+      // never sent — this is the "duplicate email lets the form submit" bug.
+      if (signUpData.user && signUpData.user.identities && signUpData.user.identities.length === 0) {
+        throw new Error("An account with this email already exists. Please sign in instead, or use \u201cForgot password\u201d if you don't remember it.");
+      }
+
       gTag("sign_up", { method: "email" });
       fbq("CompleteRegistration");
       ttq("CompleteRegistration");

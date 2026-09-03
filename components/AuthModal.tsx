@@ -42,9 +42,17 @@ export default function AuthModal() {
   const searchParams  = useSearchParams();
   const supabase      = createClient();
 
-  const authParam = searchParams.get("auth"); // "login" | "register" | null
+  const authParam = searchParams.get("auth"); // "login" | "register" | "error" | null
   const nextParam = searchParams.get("next");
-  const isOpen    = authParam === "login";
+  // "error" is app/auth/callback/route.ts's catch-all redirect for a failed
+  // code exchange — an expired/already-used confirmation or reset link, a
+  // denied OAuth consent, or a magic link opened in a different browser
+  // than the one that started it (the PKCE code_verifier lives in that
+  // browser's storage, so exchangeCodeForSession fails in the new one).
+  // Previously this landed on "/" with nothing on screen: isOpen only
+  // checked for "login", so the modal never opened and the person had no
+  // idea anything had gone wrong.
+  const isOpen    = authParam === "login" || authParam === "error";
 
   const [mode, setMode]         = useState<"login" | "forgot">("login");
   const [loading, setLoading]   = useState(false);
@@ -55,6 +63,12 @@ export default function AuthModal() {
   // param changes, including same-page navigations, not just on mount.
   useEffect(() => {
     if (authParam === "login") setMode("login");
+    if (authParam === "error") {
+      setMode("login");
+      setError(
+        "That link didn't work — it may have expired, already been used, or been opened in a different browser than the one you started in. Please sign in again, or request a new link below."
+      );
+    }
   }, [authParam]);
 
   // "?auth=register" is a signup intent, not a mode this modal renders
