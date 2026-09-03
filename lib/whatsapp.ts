@@ -99,9 +99,9 @@ export async function sendPhoneOtp(phone: string, code: string): Promise<boolean
     },
     {
       type: "button",
-      sub_type: "copy_code",
+      sub_type: "url",           // was "copy_code" — Auth OTP buttons are typed "url" by Meta
       index: "0",
-      parameters: [{ type: "coupon_code", coupon_code: code }],
+      parameters: [{ type: "text", text: code }],  // was { type: "coupon_code", coupon_code: code }
     },
   ]);
 }
