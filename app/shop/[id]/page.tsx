@@ -10,7 +10,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { Product } from "@/types";
-import { useCart, setPendingCartAdd, getPendingCartAdd, clearPendingCartAdd } from "@/lib/cart-context";
+import { useCart } from "@/lib/cart-context";
 import { useProductWishlist, getPendingWishlistAdd, clearPendingWishlistAdd } from "@/lib/product-wishlist-context";
 import SiteHeader from "@/components/SiteHeader";
 import Footer from "@/components/Footer";
@@ -223,35 +223,15 @@ export default function ProductDetailPage() {
   const handleAddToCart = (prod?: Product) => {
     const target = prod ?? product;
     if (!target) return;
-    if (!user) {
-      // Remember what they were trying to add — re-applied once they sign in
-      // and land back on this product page (see the effect below).
-      setPendingCartAdd(target.id, prod ? 1 : quantity);
-      setShowAuth(true);
-      return;
-    }
+    // Guest checkout means adding to cart never needs an account — see
+    // app/shop/page.tsx's handleAdd for the fuller explanation. Only
+    // wishlist saving (toggleWishlist below) still requires signing in.
     addItem(target, prod ? 1 : quantity);
     if (!prod) {
       setAdded(true);
       setTimeout(() => setAdded(false), 2000);
     }
   };
-
-  // Re-apply a pending "add to cart" click once the user is signed in and the
-  // product has loaded (e.g. after logging in from the auth modal and being
-  // redirected back to this same product page).
-  useEffect(() => {
-    if (!user || !product) return;
-    const pending = getPendingCartAdd();
-    if (!pending || pending.productId !== product.id) return;
-    if (product.stock_count > 0) {
-      addItem(product, pending.quantity);
-      setAdded(true);
-      setTimeout(() => setAdded(false), 2000);
-    }
-    clearPendingCartAdd();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, product]);
 
   // Re-apply a pending "heart" click once the user is signed in and the
   // product has loaded (mirrors the pending "add to cart" replay above).
@@ -556,12 +536,14 @@ export default function ProductDetailPage() {
 
         <Footer />
 
-        {/* Auth modal */}
+        {/* Auth modal — wishlist saving is the only action left on this
+            page that requires an account (guests can add to cart and
+            check out freely; see handleAddToCart above). */}
         {showAuth && (
           <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setShowAuth(false); }}>
             <div style={{ background: "#fff", borderRadius: 20, padding: "2rem", width: "100%", maxWidth: 380, textAlign: "center", boxShadow: "0 24px 80px rgba(0,0,0,0.15)" }}>
-              <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>Sign in to shop</h3>
-              <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>Create an account to save items and checkout.</p>
+              <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "1.4rem", marginBottom: "0.5rem" }}>Sign in to save</h3>
+              <p style={{ color: "var(--grey)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>Create an account to save items to your wishlist.</p>
               <Link href="?auth=login"><button className="btn-plum" style={{ width: "100%", marginBottom: "0.75rem" }} onClick={() => setShowAuth(false)}>Sign in</button></Link>
               <Link href="?auth=register"><button className="btn-outline" style={{ width: "100%" }} onClick={() => setShowAuth(false)}>Create account</button></Link>
             </div>
