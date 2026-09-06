@@ -20,6 +20,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { v4 as uuidv4 } from "uuid";
 import { createServiceClient } from "@/lib/supabase/server";
+import { isValidEmail } from "@/lib/validation";
 
 export type BookingPaymentMethod = "payfast" | "ozow";
 
@@ -75,7 +76,17 @@ export async function createBookingIntent(
 
   if (!opts.meetingAddress?.trim()) return { error: "Meeting address is required" };
   if (!opts.clientPocName?.trim() || !opts.clientPocPhone?.trim()) return { error: "Point of contact name and phone are required" };
-  if (!userId && !opts.contactEmail?.trim()) return { error: "An email address is required" };
+  if (!userId) {
+    if (!opts.contactEmail?.trim()) return { error: "An email address is required" };
+    // Guest bookings only — this is what a malformed guest email used to
+    // reach PayFast as, which PayFast then rejected with an opaque 400
+    // "malformed email" error on its own hosted page. Catching it here
+    // means BOTH gateways get a friendly in-app message instead, and it
+    // also protects fulfillBooking()'s confirmation-email fallback (see
+    // the file header above), which needs this address to actually be
+    // deliverable regardless of which gateway the guest paid with.
+    if (!isValidEmail(opts.contactEmail)) return { error: "Please enter a valid email address" };
+  }
 
   const { data: artist } = await supabase
     .from("artists")
