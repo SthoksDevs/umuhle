@@ -17,6 +17,7 @@ import { useGeolocation, distanceKm, type GeoStatus } from "@/lib/geolocation";
 import { sortByLocality } from "@/lib/locality";
 import { getProvince } from "@/lib/provinces";
 import { TIMES } from "@/lib/booking-times";
+import { isValidEmail } from "@/lib/validation";
 import ProximityFilter from "@/components/ProximityFilter";
 import AddressMapPicker from "@/components/AddressMapPicker";
 
@@ -1225,7 +1226,19 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
     // extra thing a guest needs to provide that a logged-in client's
     // profile already has is a name + email for the receipt/confirmation
     // (see the guest-only fields below the point-of-contact ones).
-    if (!user && (!contactName.trim() || !contactEmail.trim())) return;
+    //
+    // Format-checked here too, not just non-empty — the "Review booking"
+    // button already blocks an obviously invalid address (see its
+    // disabled= condition below), but this is the last line of defense
+    // before the request reaches PayFast, which validates email_address
+    // itself and fails the whole checkout-form POST with an opaque 400
+    // "malformed email" error if it isn't a plausible address.
+    const trimmedEmail = contactEmail.trim();
+    if (!user && (!contactName.trim() || !trimmedEmail)) return;
+    if (!user && !isValidEmail(trimmedEmail)) {
+      setError("That email address doesn't look right — please double-check it.");
+      return;
+    }
     setLoading(true); setError("");
     try {
       const res = await fetch("/api/payfast/initiate", {
@@ -1234,7 +1247,7 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
         body: JSON.stringify({
           type: "booking", serviceId: selected.id, artistId: artist.id, bookingDate: date, bookingTime: time,
           meetingAddress: address, clientPocName: pocName, clientPocPhone: pocPhone,
-          ...(!user ? { contactName, contactEmail } : {}),
+          ...(!user ? { contactName, contactEmail: trimmedEmail } : {}),
         }),
       });
       const data = await res.json();
@@ -1257,6 +1270,12 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
   };
 
   const inputStyle: React.CSSProperties = { padding: "0.75rem 1rem", borderRadius: 12, border: "1.5px solid #E0E0E0", fontSize: "0.9rem", width: "100%", boxSizing: "border-box" };
+
+  // Only flags once the guest has actually typed something — an empty
+  // field is caught by the existing "required" disabled= check below, not
+  // this one, so it doesn't show a red border before they've had a chance
+  // to type. See lib/validation.ts for why this check exists at all.
+  const guestEmailInvalid = !user && contactEmail.trim().length > 0 && !isValidEmail(contactEmail);
 
   return (
     <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
@@ -1413,13 +1432,22 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
                   <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Your details *</p>
                   <p style={{ fontSize: "0.78rem", color: "var(--light)", marginBottom: "0.6rem" }}>No account needed to book — just enter your name and email for the booking confirmation.</p>
                   <input type="text" placeholder="Your name" value={contactName} onChange={e => setContactName(e.target.value)} style={{ ...inputStyle, marginBottom: "0.75rem" }} />
-                  <input type="email" placeholder="Your email" value={contactEmail} onChange={e => setContactEmail(e.target.value)} style={inputStyle} />
+                  <input
+                    type="email"
+                    placeholder="Your email"
+                    value={contactEmail}
+                    onChange={e => setContactEmail(e.target.value)}
+                    style={{ ...inputStyle, border: guestEmailInvalid ? "1.5px solid #E53935" : inputStyle.border }}
+                  />
+                  {guestEmailInvalid && (
+                    <p style={{ fontSize: "0.78rem", color: "#E53935", margin: "0.35rem 0 0" }}>That email address doesn&apos;t look right — please double-check it.</p>
+                  )}
                 </div>
               )}
 
               <button
                 className="btn-plum"
-                disabled={!date || !time || !(address.trim() || useCurrentLocation) || !pocName.trim() || !pocPhone.trim() || !!pendingFarSalon || (!user && (!contactName.trim() || !contactEmail.trim()))}
+                disabled={!date || !time || !(address.trim() || useCurrentLocation) || !pocName.trim() || !pocPhone.trim() || !!pendingFarSalon || (!user && (!contactName.trim() || !contactEmail.trim() || !isValidEmail(contactEmail)))}
                 onClick={() => setStep("confirm")}
               >Review booking</button>
             </div>
