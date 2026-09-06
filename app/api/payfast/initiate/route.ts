@@ -23,6 +23,7 @@ import { isGatewayEnabled, gatewayLabel } from "@/lib/payments/gateways";
 import { isGatewayEligible, whyPayFastIneligible } from "@/lib/payments/eligibility";
 import { getSplitTarget, singleSellerProfileId } from "@/lib/payments/split";
 import { splitCommission } from "@/lib/payouts";
+import { isValidEmail } from "@/lib/validation";
 import type { PaymentType } from "@/lib/payments/types";
 import type { FulfillmentMethod } from "@/types";
 
@@ -122,15 +123,28 @@ async function initiateBooking(
   // fulfillment.ts) fallback identity for the booking confirmation email
   // when there's no logged-in profile to join against. See app/page.tsx's
   // BookingDrawer for the guest-only email field this comes from.
-  const email = profile?.email ?? contactEmail;
+  //
+  // Trimmed + format-checked here (not just presence-checked) because an
+  // untrimmed or malformed address used to sail straight through to
+  // PayFast's hosted checkout form, which validates email_address itself
+  // and rejects the whole POST with a 400 "malformed email" error — a
+  // dead end on PayFast's own page instead of a message back in the app.
+  // createBookingIntent() below re-checks format too (see lib/bookings.ts)
+  // so Ozow's guest booking path — which shares this same helper — is
+  // covered as well, but rejecting early here also skips a wasted
+  // booking_intents insert for a request that can't succeed anyway.
+  const email = (profile?.email ?? contactEmail ?? "").trim();
   if (!email) {
     return NextResponse.json({ error: "Please provide an email address to pay with PayFast." }, { status: 400 });
+  }
+  if (!isValidEmail(email)) {
+    return NextResponse.json({ error: "That email address doesn't look right — please double-check it and try again." }, { status: 400 });
   }
 
   const created = await createBookingIntent(supabase, userId, {
     paymentMethod: "payfast",
     serviceId, artistId, bookingDate, bookingTime, meetingAddress, notes, clientPocName, clientPocPhone,
-    contactName, contactEmail: contactEmail ?? profile?.email,
+    contactName, contactEmail: email,
   });
   if ("error" in created) {
     const status = created.error === "Service not found" ? 404 : created.error.includes("required") ? 400 : 500;
@@ -225,9 +239,12 @@ async function initiateOrder(
     courierQuotes?: Record<string, CourierQuoteSelection>;
   };
 
-  const email = profile?.email ?? contactEmail;
+  const email = (profile?.email ?? contactEmail ?? "").trim();
   if (!email) {
     return NextResponse.json({ error: "Please provide an email address to pay with PayFast." }, { status: 400 });
+  }
+  if (!isValidEmail(email)) {
+    return NextResponse.json({ error: "That email address doesn't look right — please double-check it and try again." }, { status: 400 });
   }
 
   const created = await createPendingOrder(supabase, userId, items, {
@@ -235,7 +252,7 @@ async function initiateOrder(
     shippingAddress,
     contactName,
     contactWhatsapp,
-    contactEmail: contactEmail ?? profile?.email,
+    contactEmail: email,
     fulfillmentByPartner,
     courierQuotesByPartner: courierQuotes,
     shippingAddressLine1,
@@ -338,10 +355,14 @@ async function initiateStoreBookingDeposit(
   body: Record<string, string>,
   baseUrl: string
 ) {
-  const { salonId, branchId, employeeId, clientName, clientPhone, clientEmail, serviceId, bookingDate, bookingTime, notes } = body;
+  const { salonId, branchId, employeeId, clientName, clientPhone, serviceId, bookingDate, bookingTime, notes } = body;
+  const clientEmail = body.clientEmail?.trim();
 
   if (!salonId || !clientName || !clientPhone || !clientEmail || !serviceId || !bookingDate || !bookingTime) {
     return NextResponse.json({ error: "Please fill in all required fields." }, { status: 400 });
+  }
+  if (!isValidEmail(clientEmail)) {
+    return NextResponse.json({ error: "That email address doesn't look right — please double-check it and try again." }, { status: 400 });
   }
 
   const { data: salon } = await supabase.from("partner_salons").select("id, name").eq("id", salonId).single();
