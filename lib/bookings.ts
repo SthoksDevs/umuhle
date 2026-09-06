@@ -37,6 +37,18 @@ interface CreateBookingIntentOptions {
   // Guest bookings only — see the file header above.
   contactName?: string;
   contactEmail?: string;
+  // Upsell products added during this booking, paid together with it in
+  // one transaction (2026-09) instead of a separate cart checkout. See
+  // the bundled_booking_upsell_payments migration for the payout-routing
+  // rule this enables.
+  upsellItems?: { productId: string; quantity: number }[];
+}
+
+interface UpsellItemSnapshot {
+  product_id: string;
+  quantity: number;
+  unit_price: number;
+  partner_id: string;
 }
 
 interface BookingIntentService {
@@ -54,7 +66,23 @@ type CreateBookingIntentResult =
   | {
       result: {
         intentId: string;
-        amount: number; // cents
+        amount: number; // cents — service price only, see amountDue below for the actual charge
+        // The actual amount to charge the gateway: service price + upsell
+        // total. Kept separate from `amount` (service price alone) because
+        // fulfillBooking() still records the booking's own commission
+        // split against the service price only — the upsell portion gets
+        // its own, independent commission record (see
+        // lib/payments/fulfillment.ts).
+        amountDue: number;
+        upsellTotal: number;
+        // true if any upsell item belongs to a different seller than the
+        // artist being booked — PayFast can only split one transaction to
+        // one merchant, so a mismatch forces this payment to Ozow only.
+        // false (including when there are no upsell items at all) means
+        // every upsell item is the artist's own product, so the whole
+        // combined amount can still go through PayFast's instant split to
+        // that same artist.
+        vendorMismatch: boolean;
         service: BookingIntentService;
         artist: BookingIntentArtist | null;
       };
@@ -90,9 +118,38 @@ export async function createBookingIntent(
 
   const { data: artist } = await supabase
     .from("artists")
-    .select("display_name, point_of_contact_name, point_of_contact_phone")
+    .select("display_name, point_of_contact_name, point_of_contact_phone, profile_id")
     .eq("id", opts.artistId)
     .single();
+
+  // Snapshot upsell items at today's price/partner_id — same reasoning as
+  // order_items.unit_price: a later price change on the product must never
+  // retroactively change what this specific payment actually charges.
+  // Also where the PayFast-vs-Ozow-only routing decision is made (see
+  // vendorMismatch below) — the initiate routes act on this, not on
+  // eligibility.ts, which stays untouched for every other payment type.
+  const upsellSnapshots: UpsellItemSnapshot[] = [];
+  let vendorMismatch = false;
+  if (opts.upsellItems?.length) {
+    const { data: products } = await supabase
+      .from("products")
+      .select("id, price, partner_id, stock_count")
+      .in("id", opts.upsellItems.map((i) => i.productId));
+
+    for (const item of opts.upsellItems) {
+      const product = products?.find((p) => p.id === item.productId);
+      if (!product) return { error: "One of the upsell items is no longer available" };
+      if (product.stock_count < item.quantity) return { error: "One of the upsell items is out of stock" };
+      upsellSnapshots.push({
+        product_id: product.id,
+        quantity: item.quantity,
+        unit_price: product.price,
+        partner_id: product.partner_id,
+      });
+      if (product.partner_id !== artist?.profile_id) vendorMismatch = true;
+    }
+  }
+  const upsellTotal = upsellSnapshots.reduce((sum, i) => sum + i.unit_price * i.quantity, 0);
 
   const intentId = uuidv4();
 
@@ -122,6 +179,8 @@ export async function createBookingIntent(
     payment_method:   opts.paymentMethod,
     contact_name:     opts.contactName || null,
     contact_email:    opts.contactEmail || null,
+    upsell_items:     upsellSnapshots.length ? upsellSnapshots : null,
+    upsell_total:     upsellTotal,
   });
 
   if (intentErr) {
@@ -133,6 +192,9 @@ export async function createBookingIntent(
     result: {
       intentId,
       amount: service.price,
+      amountDue: service.price + upsellTotal,
+      upsellTotal,
+      vendorMismatch,
       service: { id: service.id, name: service.name, price: service.price, duration_minutes: service.duration_minutes },
       artist: artist ? { display_name: artist.display_name } : null,
     },

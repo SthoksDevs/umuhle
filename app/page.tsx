@@ -12,7 +12,6 @@ import Footer from "@/components/Footer";
 import SiteHeader from "@/components/SiteHeader";
 import StarRating from "@/components/StarRating";
 import { gTag, fbq, ttq } from "@/lib/analytics";
-import { useCart } from "@/lib/cart-context";
 import { useGeolocation, distanceKm, type GeoStatus } from "@/lib/geolocation";
 import { sortByLocality } from "@/lib/locality";
 import { getProvince } from "@/lib/provinces";
@@ -948,7 +947,6 @@ type ArtistReview = { id: string; rating: number; comment: string | null; create
 
 function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onClose: () => void; user: User | null; resume?: ResumeBookingData | null }) {
   const supabase = createClient();
-  const { addItem } = useCart();
   type Service = { id: string; name: string; price: number; duration_minutes: number; tags: string[] };
   type UpsellProduct = {
     id: string; partner_id: string; name: string; price: number; image_url: string | null;
@@ -960,7 +958,11 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
   const [services, setServices]   = useState<Service[]>([]);
   const [selected, setSelected]   = useState<Service | null>(null);
   const [upsellProducts, setUpsellProducts] = useState<UpsellProduct[]>([]);
-  const [addedProductIds, setAddedProductIds] = useState<Set<string>>(new Set());
+  // Upsell products picked during this booking (2026-09) now pay together
+  // with it in one transaction, instead of sitting in the shared cart for
+  // a separate checkout — see handleToggleUpsell below and
+  // bundled_booking_upsell_payments migration.
+  const [bookingUpsells, setBookingUpsells] = useState<UpsellProduct[]>([]);
   const [date, setDate]           = useState("");
   const [time, setTime]           = useState("");
   // Times this artist is already booked for on the selected date — shown
@@ -1201,15 +1203,26 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
-  const handleAddUpsell = (p: UpsellProduct) => {
-    addItem({
-      id: p.id, partner_id: p.partner_id, name: p.name, description: null, price: p.price,
-      image_url: p.image_url, category: p.category, tags: p.tags, stock_count: p.stock_count,
-      is_active: true, moderation_status: "approved", moderation_score: null, created_at: "",
-      sell_scope: p.sell_scope, sell_provinces: p.sell_provinces,
-    });
-    setAddedProductIds(prev => new Set(prev).add(p.id));
+  // Toggles an upsell product in/out of THIS booking's bundled payment —
+  // no longer the shared cart (see bookingUpsells above). Tapping an
+  // already-added item removes it, rather than being a one-way action,
+  // since there's no separate cart page to remove it from anymore.
+  const handleToggleUpsell = (p: UpsellProduct) => {
+    setBookingUpsells(prev =>
+      prev.some(i => i.id === p.id) ? prev.filter(i => i.id !== p.id) : [...prev, p]
+    );
   };
+
+  // True if any bundled upsell item belongs to a different seller than
+  // the artist being booked. PayFast can only split one transaction to
+  // one merchant, so a mismatch forces the combined payment to Ozow only
+  // — see app/api/payfast/initiate/route.ts's initiateBooking, which
+  // would reject the same payment with the same reasoning if attempted
+  // anyway. Computed here so the pay button/label/helper text below can
+  // reflect this before the customer ever taps pay, not just after a
+  // rejected request.
+  const bundleVendorMismatch = bookingUpsells.some(p => p.partner_id !== artist.profile_id);
+  const upsellTotal = bookingUpsells.reduce((sum, p) => sum + p.price, 0);
 
   useEffect(() => {
     if (!artist.review_count) { setReviews([]); return; }
@@ -1240,15 +1253,36 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
       return;
     }
     setLoading(true); setError("");
+    const upsellItems = bookingUpsells.map(p => ({ productId: p.id, quantity: 1 }));
+    const payload = {
+      type: "booking", serviceId: selected.id, artistId: artist.id, bookingDate: date, bookingTime: time,
+      meetingAddress: address, clientPocName: pocName, clientPocPhone: pocPhone,
+      ...(!user ? { contactName, contactEmail: trimmedEmail } : {}),
+      ...(upsellItems.length ? { upsellItems } : {}),
+    };
     try {
+      // A vendor-mismatched bundle (an upsell item from a different
+      // seller than the artist) can never be a PayFast instant split —
+      // one transaction, one merchant — so it goes straight to Ozow
+      // instead of trying PayFast first and handling a rejection. See
+      // app/api/payfast/initiate/route.ts's initiateBooking, which would
+      // reject the same payment with the same reasoning anyway.
+      if (bundleVendorMismatch) {
+        const res = await fetch("/api/ozow/initiate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "Payment initiation failed");
+        window.location.href = data.redirectUrl;
+        return;
+      }
+
       const res = await fetch("/api/payfast/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "booking", serviceId: selected.id, artistId: artist.id, bookingDate: date, bookingTime: time,
-          meetingAddress: address, clientPocName: pocName, clientPocPhone: pocPhone,
-          ...(!user ? { contactName, contactEmail: trimmedEmail } : {}),
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -1479,10 +1513,13 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
             {upsellProducts.length > 0 && (
               <div style={{ marginBottom: "1.5rem" }}>
                 <h4 style={{ fontWeight: 500, marginBottom: "0.15rem", fontSize: "0.95rem" }}>You might also like</h4>
-                <p style={{ fontSize: "0.78rem", color: "var(--grey)", marginBottom: "0.9rem" }}>Handy for your {selected.name.toLowerCase()} — added to your cart, checked out separately.</p>
+                <p style={{ fontSize: "0.78rem", color: "var(--grey)", marginBottom: "0.9rem" }}>Handy for your {selected.name.toLowerCase()} — paid together with your booking, one transaction.</p>
                 <div style={{ display: "flex", gap: "0.75rem", overflowX: "auto", paddingBottom: "0.25rem" }}>
                   {upsellProducts.map(p => {
-                    const added = addedProductIds.has(p.id);
+                    const added = bookingUpsells.some(i => i.id === p.id);
+                    // Whether THIS item, if added, would keep the combined
+                    // payment on PayFast — see bundleVendorMismatch above.
+                    const payfastOk = p.partner_id === artist.profile_id;
                     return (
                       <div key={p.id} style={{ flexShrink: 0, width: 120, borderRadius: 12, border: "1.5px solid rgba(155,127,184,0.15)", overflow: "hidden", background: "#fff" }}>
                         <div style={{ height: 90, background: "var(--plum-t)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
@@ -1490,27 +1527,37 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
                         </div>
                         <div style={{ padding: "0.5rem" }}>
                           <p style={{ fontSize: "0.75rem", fontWeight: 500, margin: 0, lineHeight: 1.3, height: "2.1rem", overflow: "hidden" }}>{p.name}</p>
-                          <p style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--plum)", margin: "0.2rem 0 0.4rem" }}>{fmt(p.price)}</p>
+                          <p style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--plum)", margin: "0.2rem 0 0.3rem" }}>{fmt(p.price)}</p>
+                          <p style={{ fontSize: "0.65rem", fontWeight: 500, margin: "0 0 0.35rem", color: payfastOk ? "var(--forest)" : "var(--grey)" }}>
+                            {payfastOk ? "PayFast eligible" : "Ozow only"}
+                          </p>
                           <button
                             type="button"
-                            onClick={() => handleAddUpsell(p)}
-                            disabled={added}
-                            style={{ width: "100%", padding: "0.35rem", borderRadius: 8, border: "none", fontSize: "0.72rem", fontWeight: 500, cursor: added ? "default" : "pointer", background: added ? "var(--forest)" : "var(--plum)", color: "#fff" }}
-                          >{added ? "Added ✓" : "Add to cart"}</button>
+                            onClick={() => handleToggleUpsell(p)}
+                            style={{ width: "100%", padding: "0.35rem", borderRadius: 8, border: "none", fontSize: "0.72rem", fontWeight: 500, cursor: "pointer", background: added ? "var(--forest)" : "var(--plum)", color: "#fff" }}
+                          >{added ? "Added ✓ (tap to remove)" : "Add"}</button>
                         </div>
                       </div>
                     );
                   })}
                 </div>
+                {bookingUpsells.length > 0 && (
+                  <p style={{ fontSize: "0.78rem", color: "var(--grey)", marginTop: "0.6rem" }}>
+                    + {fmt(upsellTotal)} for {bookingUpsells.length} item{bookingUpsells.length > 1 ? "s" : ""}
+                    {bundleVendorMismatch && " — paid via Ozow, since one or more items are from a different seller than the artist"}
+                  </p>
+                )}
               </div>
             )}
 
             {error && <p style={{ color: "#E53935", fontSize: "0.85rem", marginBottom: "1rem" }}>{error}</p>}
             <p style={{ fontSize: "0.8rem", color: "var(--grey)", marginBottom: "1.25rem" }}>
-              You will be redirected to PayFast to complete payment securely. Once paid, you will receive a confirmation message.
+              {bundleVendorMismatch
+                ? "You will be redirected to Ozow to complete payment securely. Once paid, you will receive a confirmation message."
+                : "You will be redirected to PayFast to complete payment securely. Once paid, you will receive a confirmation message."}
             </p>
             <button className="btn-plum" style={{ width: "100%", padding: "0.875rem" }} onClick={handlePayFast} disabled={loading}>
-              {loading ? "Redirecting…" : `Pay ${fmt(selected.price)} now to Book`}
+              {loading ? "Redirecting…" : bundleVendorMismatch ? `Pay ${fmt(selected.price + upsellTotal)} via Ozow` : `Pay ${fmt(selected.price + upsellTotal)} now to Book`}
             </button>
           </>
         )}

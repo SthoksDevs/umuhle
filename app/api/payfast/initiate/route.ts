@@ -113,10 +113,16 @@ async function initiateBooking(
   profile: PFProfile | null,
   firstName: string,
   lastName: string,
-  body: Record<string, string>,
+  body: Record<string, unknown>,
   baseUrl: string
 ) {
-  const { serviceId, artistId, bookingDate, bookingTime, notes, meetingAddress, clientPocName, clientPocPhone, contactName, contactEmail } = body;
+  const { serviceId, artistId, bookingDate, bookingTime, notes, meetingAddress, clientPocName, clientPocPhone, contactName, contactEmail } =
+    body as Record<string, string>;
+  // Upsell products added during this booking (2026-09) — paid together
+  // with the booking itself in one transaction. See
+  // bundled_booking_upsell_payments migration and lib/bookings.ts's
+  // createBookingIntent for the vendor-match rule this enables.
+  const upsellItems = body.upsellItems as { productId: string; quantity: number }[] | undefined;
 
   // Guests have no profile.email — PayFast needs a real email address to
   // charge a card, and it's also fulfillBooking()'s (lib/payments/
@@ -145,18 +151,35 @@ async function initiateBooking(
     paymentMethod: "payfast",
     serviceId, artistId, bookingDate, bookingTime, meetingAddress, notes, clientPocName, clientPocPhone,
     contactName, contactEmail: email,
+    upsellItems,
   });
   if ("error" in created) {
     const status = created.error === "Service not found" ? 404 : created.error.includes("required") ? 400 : 500;
     return NextResponse.json({ error: created.error }, { status });
   }
-  const { intentId, amount, service, artist } = created.result;
+  const { intentId, amountDue, vendorMismatch, service, artist } = created.result;
 
-  if (!isGatewayEligible("payfast", { type: "booking", amountCents: amount })) {
+  // PayFast can only split one transaction to one merchant — a bundled
+  // payment where an upsell item belongs to a different seller than the
+  // artist can never be that artist's own instant split, so it isn't
+  // offered PayFast at all. This is a NEW rule specific to bundled
+  // booking+upsell payments, checked here rather than folded into
+  // lib/payments/eligibility.ts — that file stays the single source of
+  // truth for every other payment type, unaffected by this one.
+  if (vendorMismatch) {
     const mutClient = await getBookingMutationClient();
     await mutClient.from("booking_intents").update({ status: "cancelled" }).eq("id", intentId);
     return NextResponse.json(
-      { error: whyPayFastIneligible({ type: "booking", amountCents: amount }), code: "GATEWAY_INELIGIBLE", fallback: "ozow" },
+      { error: "One of the upsell items belongs to a different seller than the artist, so this payment can only go through Ozow.", code: "GATEWAY_INELIGIBLE", fallback: "ozow" },
+      { status: 400 }
+    );
+  }
+
+  if (!isGatewayEligible("payfast", { type: "booking", amountCents: amountDue })) {
+    const mutClient = await getBookingMutationClient();
+    await mutClient.from("booking_intents").update({ status: "cancelled" }).eq("id", intentId);
+    return NextResponse.json(
+      { error: whyPayFastIneligible({ type: "booking", amountCents: amountDue }), code: "GATEWAY_INELIGIBLE", fallback: "ozow" },
       { status: 400 }
     );
   }
@@ -168,7 +191,12 @@ async function initiateBooking(
   // service client — booking_intents' UPDATE policy is client_id =
   // auth.uid(), which can never pass for a guest booking (client_id null)
   // regardless of who's calling.
-  const { payoutCents } = splitCommission(amount);
+  //
+  // Split against amountDue (service + any upsells), not the service price
+  // alone — vendorMismatch is already false by this point, so every
+  // upsell item (if any) belongs to this same artist, and PayFast is
+  // splitting ONE lump sum covering both to their one merchant account.
+  const { payoutCents } = splitCommission(amountDue);
   const split = artistId ? await getSplitTargetForArtist(supabase, artistId, payoutCents) : null;
   if (split) {
     const mutClient = await getBookingMutationClient();
@@ -177,7 +205,7 @@ async function initiateBooking(
 
   const params = buildPaymentParams({
     paymentId:       intentId,
-    amount,
+    amount:          amountDue,
     itemName:        `Booking: ${service.name}`,
     itemDescription: `${artist?.display_name ?? ""} — ${bookingDate} at ${bookingTime}`,
     firstName,

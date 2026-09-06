@@ -86,10 +86,18 @@ async function initiateBooking(
   supabase: SupabaseServerClient,
   userId: string | null,
   profile: OzowProfile | null,
-  body: Record<string, string>,
+  body: Record<string, unknown>,
   baseUrl: string
 ) {
-  const { serviceId, artistId, bookingDate, bookingTime, notes, meetingAddress, clientPocName, clientPocPhone, contactName, contactEmail } = body;
+  const { serviceId, artistId, bookingDate, bookingTime, notes, meetingAddress, clientPocName, clientPocPhone, contactName, contactEmail } =
+    body as Record<string, string>;
+  // Upsell products added during this booking (2026-09) — see
+  // lib/bookings.ts's createBookingIntent. Unlike PayFast, Ozow never
+  // rejects on a vendor mismatch (there's no split to attempt in the
+  // first place — the whole amount always goes straight to Umuhle), so
+  // this is the gateway a bundled payment falls back to whenever the
+  // upsell items don't all belong to the artist being booked.
+  const upsellItems = body.upsellItems as { productId: string; quantity: number }[] | undefined;
 
   // Unlike PayFast, Ozow's own payment request never needed an email
   // address, so this stays optional here — but still worth capturing on
@@ -99,12 +107,13 @@ async function initiateBooking(
     paymentMethod: "ozow",
     serviceId, artistId, bookingDate, bookingTime, meetingAddress, notes, clientPocName, clientPocPhone,
     contactName, contactEmail: contactEmail ?? profile?.email,
+    upsellItems,
   });
   if ("error" in created) {
     const status = created.error === "Service not found" ? 404 : created.error.includes("required") ? 400 : 500;
     return NextResponse.json({ error: created.error }, { status });
   }
-  const { intentId, amount } = created.result;
+  const { intentId, amountDue } = created.result;
 
   // Per-checkout-attempt secret embedded in the notify URL so we can
   // confirm a notification actually targets this attempt (same pattern
@@ -119,7 +128,7 @@ async function initiateBooking(
     transactionReference: intentId,
     // Ozow shows this on the customer's bank statement — keep it short.
     bankReference: `UMUHLE${intentId.replace(/-/g, "").slice(0, 12)}`,
-    amountCents: amount,
+    amountCents: amountDue,
     cancelUrl: `${baseUrl}/payment/cancelled?ref=${intentId}&type=booking&method=ozow`,
     errorUrl: `${baseUrl}/payment/failed?ref=${intentId}&type=booking&method=ozow`,
     successUrl: `${baseUrl}/payment/success?ref=${intentId}&type=booking&method=ozow`,

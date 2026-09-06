@@ -136,7 +136,7 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
         client_poc_name, client_poc_phone, contact_name, contact_email,
         client:profiles!bookings_client_id_fkey(full_name, phone, email, whatsapp_comms_enabled),
         artist:artists!bookings_artist_id_fkey(
-          display_name, point_of_contact_name, point_of_contact_phone,
+          display_name, profile_id, point_of_contact_name, point_of_contact_phone,
           profile:profiles!artists_profile_id_fkey(phone, whatsapp_comms_enabled)
         ),
         service:services(name, duration_minutes)
@@ -156,6 +156,92 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
       await recordBookingSplit(supabase, booking.id, booking.total_amount);
     } catch (e) {
       console.error(`${tag} failed to record booking commission split`, e);
+    }
+
+    // Upsell products bundled into this same payment (2026-09) — paid
+    // together with the booking instead of a separate cart checkout. See
+    // the bundled_booking_upsell_payments migration. This creates a
+    // completely ordinary `orders` + `order_items` row for them (so
+    // existing stock/reporting/admin-order-view code doesn't need to
+    // know bundling happened at all) — the only thing bundling changes
+    // is payout_via, decided per the SAME vendor-match rule
+    // lib/bookings.ts's createBookingIntent already used to pick
+    // PayFast vs Ozow at initiate time. The booking's OWN payout above
+    // is completely unaffected either way — it's always computed only
+    // against the service price, never the upsell total.
+    const upsellItems = intent.upsell_items as { product_id: string; quantity: number; unit_price: number; partner_id: string }[] | null;
+    if (upsellItems?.length) {
+      const bookingArtistRow = Array.isArray(booking.artist) ? booking.artist[0] : booking.artist;
+      const artistProfileId = bookingArtistRow?.profile_id as string | undefined;
+      // Re-derived rather than stored — same rule, same reasoning as
+      // lib/bookings.ts's vendorMismatch, kept in exactly one place
+      // conceptually even though it's evaluated twice (once to decide
+      // the gateway, once here to decide the payout).
+      const vendorMismatch = upsellItems.some((i) => i.partner_id !== artistProfileId);
+      // instant_split on the intent means PayFast already paid the WHOLE
+      // combined amount (service + upsells) straight to this same artist
+      // in one lump sum — the order's payout is already settled, just
+      // needs stamping (creditOrderItemPayout does that automatically
+      // for payout_via: instant_split, same as any other order). A
+      // mismatch can only have gone through Ozow (PayFast rejects it at
+      // initiate time — see the initiate routes), so the whole amount
+      // sits with Umuhle until admin resolves it by hand — see
+      // lib/payouts.ts's manual-payout guard in
+      // creditOrderItemPayout/creditOrderPayouts.
+      const payoutVia: "instant_split" | "manual" | "wallet" =
+        intent.payout_via === "instant_split" ? "instant_split" : vendorMismatch ? "manual" : "wallet";
+
+      const { data: bundledOrder, error: orderErr } = await supabase
+        .from("orders")
+        .insert({
+          client_id: intent.client_id,
+          status: "paid",
+          paid_at: new Date().toISOString(),
+          total_amount: intent.upsell_total,
+          payment_method: event.gateway,
+          payout_via: payoutVia,
+          linked_booking_id: booking.id,
+          contact_name: intent.contact_name,
+          contact_email: intent.contact_email,
+          // These products are collected in person alongside the
+          // service, not shipped — meeting_address is the closest thing
+          // to a delivery location this purchase actually has.
+          shipping_address: booking.meeting_address,
+          ...gatewayReferenceColumns(event),
+        })
+        .select("id")
+        .single();
+
+      if (orderErr || !bundledOrder) {
+        console.error(`${tag} failed to create bundled order for booking upsells`, orderErr);
+      } else {
+        const { error: itemsErr } = await supabase.from("order_items").insert(
+          upsellItems.map((i) => ({
+            order_id: bundledOrder.id,
+            product_id: i.product_id,
+            quantity: i.quantity,
+            unit_price: i.unit_price,
+          }))
+        );
+        if (itemsErr) {
+          console.error(`${tag} failed to create bundled order_items`, itemsErr);
+        }
+        for (const item of upsellItems) {
+          const { error: stockErr } = await supabase.rpc("decrement_stock", { p_product_id: item.product_id, p_qty: item.quantity });
+          if (stockErr) console.error(`${tag} failed to decrement stock for bundled item ${item.product_id}`, stockErr);
+        }
+        if (payoutVia !== "manual") {
+          // "manual" bundles deliberately skip the automatic commission
+          // ledger — Umuhle admin resolves these by hand. "wallet" and
+          // "instant_split" both still want their split recorded, same
+          // as any other order (see lib/payouts.ts).
+          try {
+            await recordOrderItemSplits(supabase, bundledOrder.id);
+          } catch (e) {
+            console.error(`${tag} failed to record bundled order commission split`, e);
+          }
+        }
+      }
     }
 
     const clientRow = Array.isArray(booking.client) ? booking.client[0] : booking.client;

@@ -466,6 +466,18 @@ export async function creditOrderItemPayout(
     return { credited: true };
   }
 
+  // payout_via: "manual" — a booking + upsell bundle (2026-09) where the
+  // upsell item belonged to a different seller than the artist, so it
+  // was paid via Ozow straight to Umuhle with no per-seller attribution
+  // at the gateway level (see lib/payments/fulfillment.ts's fulfillBooking
+  // and the bundled_booking_upsell_payments migration). Deliberately
+  // never auto-credited — Umuhle's admin team pays these out by hand.
+  // Query `select * from orders where payout_via = 'manual'` to find them
+  // until there's a dedicated admin view for this.
+  if (order?.payout_via === "manual") {
+    return { credited: false, reason: "Payout requires manual admin review (bundled multi-vendor booking purchase)" };
+  }
+
   const { data: creditedFlag, error: rpcError } =
     await supabase.rpc("credit_wallet_earning", {
       p_profile_id: product.partner_id,
@@ -538,11 +550,20 @@ export async function creditOrderPayouts(
 ): Promise<{ creditedItems: number; skipped: number; results: OrderPayoutItemResult[]; error?: string }> {
   const { data: order } = await supabase
     .from("orders")
-    .select("id, status, discount_cents")
+    .select("id, status, discount_cents, payout_via")
     .eq("id", orderId)
     .single();
 
   if (!order || order.status !== "delivered") return { creditedItems: 0, skipped: 0, results: [] };
+
+  // payout_via: "manual" — a booking + upsell bundle (2026-09) where the
+  // upsell item belonged to a different seller than the artist, paid via
+  // Ozow straight to Umuhle with no per-seller attribution at the gateway
+  // level. Deliberately never auto-credited here — see the matching guard
+  // in creditOrderItemPayout above for the fuller reasoning.
+  if (order.payout_via === "manual") {
+    return { creditedItems: 0, skipped: 0, results: [], error: "Payout requires manual admin review (bundled multi-vendor booking purchase)" };
+  }
 
   const { data: items, error: itemsError } = await supabase
     .from("order_items")
