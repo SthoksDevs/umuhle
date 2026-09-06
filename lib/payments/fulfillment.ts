@@ -127,11 +127,13 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
         artist_poc_phone: intent.artist_poc_phone,
         payment_method: event.gateway,
         payout_via: intent.payout_via ?? "wallet",
+        contact_name: intent.contact_name,
+        contact_email: intent.contact_email,
         ...gatewayReferenceColumns(event),
       })
       .select(`
         id, booking_date, booking_time, meeting_address, notes, total_amount,
-        client_poc_name, client_poc_phone,
+        client_poc_name, client_poc_phone, contact_name, contact_email,
         client:profiles!bookings_client_id_fkey(full_name, phone, email, whatsapp_comms_enabled),
         artist:artists!bookings_artist_id_fkey(
           display_name, point_of_contact_name, point_of_contact_phone,
@@ -161,13 +163,22 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
     const serviceRow = Array.isArray(booking.service) ? booking.service[0] : booking.service;
     const artistProfileRow = Array.isArray(artistRow?.profile) ? artistRow.profile[0] : artistRow?.profile;
 
-    const clientPhone = clientRow?.phone as string | undefined;
+    // Guest bookings (client_id null — see lib/bookings.ts) have no
+    // profile to join against, so clientRow comes back empty for them.
+    // Fall back to the contact details captured at booking time instead
+    // of dropping the confirmation entirely — client_poc_phone doubles as
+    // the guest's own number here since there's no separate "guest's own
+    // phone" field distinct from point-of-contact.
+    const isGuestBooking = !clientRow;
+    const recipientName = (clientRow?.full_name as string | undefined) ?? booking.contact_name ?? booking.client_poc_name ?? "Guest";
+    const recipientEmail = (clientRow?.email as string | undefined) ?? booking.contact_email ?? "";
+    const clientPhone = (clientRow?.phone as string | undefined) ?? booking.client_poc_phone ?? undefined;
     const artistPhone = artistProfileRow?.phone as string | undefined;
 
     if (clientPhone && artistPhone) {
       try {
         await notifyBookingCreated({
-          clientName: clientRow.full_name as string,
+          clientName: recipientName,
           clientPhone,
           artistName: artistRow.display_name as string,
           artistPhone,
@@ -177,9 +188,12 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
           meetingAddress: booking.meeting_address ?? undefined,
           expectedDuration: serviceRow?.duration_minutes ?? undefined,
           // Email is the default channel now — WhatsApp only for accounts
-          // that opted in (whatsapp_comms_enabled). Booking confirmation
-          // email is sent unconditionally just below regardless.
-          clientWhatsappEnabled: clientRow?.whatsapp_comms_enabled ?? false,
+          // that opted in (whatsapp_comms_enabled). Guests have no such
+          // profile setting to opt into — the booking form already told
+          // them updates would go to the number they typed in — so send
+          // unconditionally for guest bookings, same "always-on"
+          // treatment fulfillOrder gives guest orders.
+          clientWhatsappEnabled: isGuestBooking ? true : (clientRow?.whatsapp_comms_enabled ?? false),
           artistWhatsappEnabled: artistProfileRow?.whatsapp_comms_enabled ?? false,
         });
       } catch (e) {
@@ -194,7 +208,7 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
     if (booking.client_poc_phone) {
       try {
         await notifyPocBookingUpdate({
-          clientName: clientRow.full_name as string,
+          clientName: recipientName,
           clientPhone: clientPhone ?? "",
           artistName: artistRow.display_name as string,
           artistPhone: artistPhone ?? "",
@@ -215,8 +229,8 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
     try {
       await sendBookingConfirmedEmail({
         bookingId: booking.id,
-        clientName: (clientRow?.full_name as string) ?? "Unknown",
-        clientEmail: (clientRow?.email as string) ?? "",
+        clientName: recipientName,
+        clientEmail: recipientEmail,
         artistName: (artistRow?.display_name as string) ?? "Unknown",
         serviceName: (serviceRow?.name as string) ?? "Service",
         date: booking.booking_date,
@@ -244,12 +258,15 @@ async function fulfillBooking(supabase: SupabaseClient, event: PaymentEvent, tag
 
   const clientRow = Array.isArray(intent.client) ? intent.client[0] : intent.client;
   const serviceRow = Array.isArray(intent.service) ? intent.service[0] : intent.service;
+  // Guest fallback — same reasoning as the "paid" branch above.
+  const recipientName = clientRow?.full_name ?? intent.contact_name ?? intent.client_poc_name ?? "Guest";
+  const recipientEmail = clientRow?.email ?? intent.contact_email ?? "";
 
   try {
     await sendBookingFailedEmail({
       bookingId: event.referenceId,
-      clientName: clientRow?.full_name ?? "Unknown",
-      clientEmail: clientRow?.email ?? "",
+      clientName: recipientName,
+      clientEmail: recipientEmail,
       serviceName: serviceRow?.name ?? "Service",
       date: intent.booking_date,
       time: intent.booking_time,

@@ -14,7 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createOzowPaymentRequest } from "@/lib/ozow";
 import { createPendingOrder, getOrderMutationClient, type CourierQuoteSelection } from "@/lib/orders";
-import { createBookingIntent } from "@/lib/bookings";
+import { createBookingIntent, getBookingMutationClient } from "@/lib/bookings";
 import { randomUUID } from "crypto";
 import { isGatewayEnabled, gatewayLabel } from "@/lib/payments/gateways";
 import { calculateSalonRegistrationPrice } from "@/lib/salon-pricing";
@@ -41,9 +41,10 @@ export async function POST(req: NextRequest) {
   const type: PaymentTypeBody = body.type ?? "order";
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? `https://${req.headers.get("host")}`;
 
-  // Guest checkout is only supported for shop orders — booking, salon
-  // registration and store booking deposits still require a real, active
-  // account.
+  // Guest checkout (2026-09) covers shop orders, artist bookings, and
+  // store booking deposits — see the PayFast initiate route's matching
+  // comment for the full reasoning. Salon registration still requires a
+  // real, active account.
   let profile: OzowProfile | null = null;
   if (user) {
     const { data } = await supabase
@@ -56,20 +57,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Account not active" }, { status: 403 });
     }
     profile = data;
-  } else if (type !== "order") {
+  } else if (type === "salon") {
     return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   }
 
   try {
     switch (type) {
       case "booking":
-        return await initiateBooking(supabase, user!.id, profile!, body, baseUrl);
+        return await initiateBooking(supabase, user?.id ?? null, profile, body, baseUrl);
       case "order":
         return await initiateOrder(supabase, user?.id ?? null, profile, body, baseUrl);
       case "salon":
         return await initiateSalon(supabase, user!.id, profile!, body, baseUrl);
       case "store_booking_deposit":
-        return await initiateStoreBookingDeposit(supabase, user!.id, profile!, body, baseUrl);
+        return await initiateStoreBookingDeposit(supabase, user?.id ?? null, profile, body, baseUrl);
       default:
         return NextResponse.json({ error: "Unknown type" }, { status: 400 });
     }
@@ -83,16 +84,21 @@ export async function POST(req: NextRequest) {
 
 async function initiateBooking(
   supabase: SupabaseServerClient,
-  userId: string,
-  profile: OzowProfile,
+  userId: string | null,
+  profile: OzowProfile | null,
   body: Record<string, string>,
   baseUrl: string
 ) {
-  const { serviceId, artistId, bookingDate, bookingTime, notes, meetingAddress, clientPocName, clientPocPhone } = body;
+  const { serviceId, artistId, bookingDate, bookingTime, notes, meetingAddress, clientPocName, clientPocPhone, contactName, contactEmail } = body;
 
+  // Unlike PayFast, Ozow's own payment request never needed an email
+  // address, so this stays optional here — but still worth capturing on
+  // the intent for fulfillBooking()'s confirmation-email fallback if the
+  // booking UI happens to have collected one.
   const created = await createBookingIntent(supabase, userId, {
     paymentMethod: "ozow",
     serviceId, artistId, bookingDate, bookingTime, meetingAddress, notes, clientPocName, clientPocPhone,
+    contactName, contactEmail: contactEmail ?? profile?.email,
   });
   if ("error" in created) {
     const status = created.error === "Service not found" ? 404 : created.error.includes("required") ? 400 : 500;
@@ -102,9 +108,12 @@ async function initiateBooking(
 
   // Per-checkout-attempt secret embedded in the notify URL so we can
   // confirm a notification actually targets this attempt (same pattern
-  // used for shop orders below).
+  // used for shop orders below). Service client — booking_intents'
+  // UPDATE policy is client_id = auth.uid(), which can never pass for a
+  // guest booking (client_id null) regardless of who's calling.
   const webhookSecret = randomUUID();
-  await supabase.from("booking_intents").update({ gateway_webhook_secret: webhookSecret }).eq("id", intentId);
+  const mutClient = await getBookingMutationClient();
+  await mutClient.from("booking_intents").update({ gateway_webhook_secret: webhookSecret }).eq("id", intentId);
 
   const result = await createOzowPaymentRequest({
     transactionReference: intentId,
@@ -118,7 +127,7 @@ async function initiateBooking(
   });
 
   if (!result.success || !result.redirectUrl) {
-    await supabase.from("booking_intents").update({ status: "cancelled" }).eq("id", intentId);
+    await mutClient.from("booking_intents").update({ status: "cancelled" }).eq("id", intentId);
     return NextResponse.json(
       { error: result.errorMessage ?? "Ozow could not start this booking" },
       { status: 502 }
@@ -126,7 +135,7 @@ async function initiateBooking(
   }
 
   if (result.ozowTransactionId) {
-    await supabase.from("booking_intents").update({ gateway_order_id: result.ozowTransactionId }).eq("id", intentId);
+    await mutClient.from("booking_intents").update({ gateway_order_id: result.ozowTransactionId }).eq("id", intentId);
   }
 
   return NextResponse.json({ redirectUrl: result.redirectUrl });
@@ -218,8 +227,8 @@ async function initiateOrder(
 
 async function initiateStoreBookingDeposit(
   supabase: SupabaseServerClient,
-  userId: string,
-  profile: OzowProfile,
+  userId: string | null,
+  profile: OzowProfile | null,
   body: Record<string, string>,
   baseUrl: string
 ) {

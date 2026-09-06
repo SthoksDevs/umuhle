@@ -18,7 +18,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { buildPaymentParams, PAYFAST_URL } from "@/lib/payfast";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { createPendingOrder, getOrderMutationClient, type CourierQuoteSelection } from "@/lib/orders";
-import { createBookingIntent } from "@/lib/bookings";
+import { createBookingIntent, getBookingMutationClient } from "@/lib/bookings";
 import { isGatewayEnabled, gatewayLabel } from "@/lib/payments/gateways";
 import { isGatewayEligible, whyPayFastIneligible } from "@/lib/payments/eligibility";
 import { getSplitTarget, singleSellerProfileId } from "@/lib/payments/split";
@@ -43,9 +43,13 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const type: PaymentType = body.type ?? "order";
 
-  // Guest checkout is only supported for shop orders — bookings, salon
-  // registration and store booking deposits still require a real, active
-  // account.
+  // Guest checkout (2026-09) covers shop orders, artist bookings, and
+  // store booking deposits — see lib/orders.ts / lib/bookings.ts for how
+  // each handles a null userId, and app/page.tsx / app/stores/[id]/page.tsx
+  // for the guest-only contact fields each collects. Salon registration
+  // (a business partner subscribing a salon to Umuhle) is a business
+  // action, not a customer purchase, so it's the one type still gated
+  // behind a real, active account.
   let profile: PFProfile | null = null;
   if (user) {
     const { data } = await supabase
@@ -58,7 +62,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Account not active" }, { status: 403 });
     }
     profile = data;
-  } else if (type !== "order") {
+  } else if (type === "salon") {
     return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   }
 
@@ -68,19 +72,24 @@ export async function POST(req: NextRequest) {
     process.env.NEXT_PUBLIC_BASE_URL ??
     `https://${req.headers.get("x-forwarded-host") ?? req.headers.get("host")}`;
 
-  // Guests have no profile.full_name — fall back to the name typed into
-  // the checkout form (contactName).
-  const [firstName, ...rest] = (profile?.full_name ?? (body.contactName as string | undefined) ?? "").split(" ");
+  // Guests have no profile.full_name — fall back to whichever contact
+  // field this payment type collects: "contactName" for orders and
+  // artist bookings, "clientName" for store bookings (that form's own
+  // field name, always collected regardless of login — see
+  // initiateStoreBookingDeposit below).
+  const [firstName, ...rest] = (
+    profile?.full_name ?? (body.contactName as string | undefined) ?? (body.clientName as string | undefined) ?? ""
+  ).split(" ");
   const lastName = rest.join(" ") || "Customer";
 
   try {
     switch (type) {
       case "booking":
-        return await initiateBooking(supabase, user!.id, profile!, firstName, lastName, body, baseUrl);
+        return await initiateBooking(supabase, user?.id ?? null, profile, firstName, lastName, body, baseUrl);
       case "order":
         return await initiateOrder(supabase, user?.id ?? null, profile, firstName, lastName, body, baseUrl);
       case "store_booking_deposit":
-        return await initiateStoreBookingDeposit(supabase, user!.id, profile!, firstName, lastName, body, baseUrl);
+        return await initiateStoreBookingDeposit(supabase, user?.id ?? null, profile, firstName, lastName, body, baseUrl);
       default:
         // ad / product_listing / salon are always Umuhle-profit-only —
         // PayFast is never eligible for them. See lib/payments/eligibility.ts.
@@ -99,18 +108,29 @@ export async function POST(req: NextRequest) {
 
 async function initiateBooking(
   supabase: SupabaseServerClient,
-  userId: string,
-  profile: PFProfile,
+  userId: string | null,
+  profile: PFProfile | null,
   firstName: string,
   lastName: string,
   body: Record<string, string>,
   baseUrl: string
 ) {
-  const { serviceId, artistId, bookingDate, bookingTime, notes, meetingAddress, clientPocName, clientPocPhone } = body;
+  const { serviceId, artistId, bookingDate, bookingTime, notes, meetingAddress, clientPocName, clientPocPhone, contactName, contactEmail } = body;
+
+  // Guests have no profile.email — PayFast needs a real email address to
+  // charge a card, and it's also fulfillBooking()'s (lib/payments/
+  // fulfillment.ts) fallback identity for the booking confirmation email
+  // when there's no logged-in profile to join against. See app/page.tsx's
+  // BookingDrawer for the guest-only email field this comes from.
+  const email = profile?.email ?? contactEmail;
+  if (!email) {
+    return NextResponse.json({ error: "Please provide an email address to pay with PayFast." }, { status: 400 });
+  }
 
   const created = await createBookingIntent(supabase, userId, {
     paymentMethod: "payfast",
     serviceId, artistId, bookingDate, bookingTime, meetingAddress, notes, clientPocName, clientPocPhone,
+    contactName, contactEmail: contactEmail ?? profile?.email,
   });
   if ("error" in created) {
     const status = created.error === "Service not found" ? 404 : created.error.includes("required") ? 400 : 500;
@@ -119,7 +139,8 @@ async function initiateBooking(
   const { intentId, amount, service, artist } = created.result;
 
   if (!isGatewayEligible("payfast", { type: "booking", amountCents: amount })) {
-    await supabase.from("booking_intents").update({ status: "cancelled" }).eq("id", intentId);
+    const mutClient = await getBookingMutationClient();
+    await mutClient.from("booking_intents").update({ status: "cancelled" }).eq("id", intentId);
     return NextResponse.json(
       { error: whyPayFastIneligible({ type: "booking", amountCents: amount }), code: "GATEWAY_INELIGIBLE", fallback: "ozow" },
       { status: 400 }
@@ -129,11 +150,15 @@ async function initiateBooking(
   // If eligible, persist the decision onto the intent NOW — fulfillBooking
   // (lib/payments/fulfillment.ts) reads intent.payout_via when it creates
   // the final `bookings` row, so this has to be settled before the
-  // customer ever reaches PayFast, not decided again later.
+  // customer ever reaches PayFast, not decided again later. Uses the
+  // service client — booking_intents' UPDATE policy is client_id =
+  // auth.uid(), which can never pass for a guest booking (client_id null)
+  // regardless of who's calling.
   const { payoutCents } = splitCommission(amount);
   const split = artistId ? await getSplitTargetForArtist(supabase, artistId, payoutCents) : null;
   if (split) {
-    await supabase.from("booking_intents").update({ payout_via: "instant_split" }).eq("id", intentId);
+    const mutClient = await getBookingMutationClient();
+    await mutClient.from("booking_intents").update({ payout_via: "instant_split" }).eq("id", intentId);
   }
 
   const params = buildPaymentParams({
@@ -143,7 +168,7 @@ async function initiateBooking(
     itemDescription: `${artist?.display_name ?? ""} — ${bookingDate} at ${bookingTime}`,
     firstName,
     lastName,
-    email:           profile.email,
+    email,
     baseUrl,
     customStr1:      "booking",
     split:           split ?? undefined,
@@ -306,8 +331,8 @@ async function getSplitTargetForOrder(orderId: string) {
 
 async function initiateStoreBookingDeposit(
   supabase: SupabaseServerClient,
-  userId: string,
-  profile: PFProfile,
+  userId: string | null,
+  profile: PFProfile | null,
   firstName: string,
   lastName: string,
   body: Record<string, string>,

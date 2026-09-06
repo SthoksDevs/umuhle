@@ -61,32 +61,6 @@ function clearPendingWishlistAdd() {
   try { window.sessionStorage.removeItem(PENDING_WISHLIST_KEY); } catch { /* ignore */ }
 }
 
-// ── Pending "book this artist" intent ───────────────────────────────────────
-// Logged-out visitors can now browse an artist's services and pick a date/
-// time freely — see BookingDrawer below, which no longer requires `user`.
-// Login is only forced at the final "pay now" step, so this remembers the
-// FULL in-progress selection (not just which artist), letting the drawer
-// reopen straight on the confirm step post-login instead of making them
-// re-pick everything they'd already filled in. Session-scoped deliberately:
-// a stale draft from days ago shouldn't silently resurface.
-const PENDING_BOOKING_KEY = "umuhle_pending_booking_draft";
-type PendingBookingDraft = ResumeBookingData & { artistId: string };
-function setPendingBookingDraft(draft: PendingBookingDraft) {
-  if (typeof window === "undefined") return;
-  try { window.sessionStorage.setItem(PENDING_BOOKING_KEY, JSON.stringify(draft)); } catch { /* ignore */ }
-}
-function getPendingBookingDraft(): PendingBookingDraft | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.sessionStorage.getItem(PENDING_BOOKING_KEY);
-    return raw ? (JSON.parse(raw) as PendingBookingDraft) : null;
-  } catch { return null; }
-}
-function clearPendingBookingDraft() {
-  if (typeof window === "undefined") return;
-  try { window.sessionStorage.removeItem(PENDING_BOOKING_KEY); } catch { /* ignore */ }
-}
-
 // ─── Category pill nav with scroll arrow ──────────────────────────────────────
 function CategoryPillNav({ active, onChange }: { active: Category; onChange: (c: Category) => void }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -312,6 +286,10 @@ type ResumeBookingData = {
   meetingAddress: string;
   pocName: string;
   pocPhone: string;
+  // Guest bookings only — undefined for a logged-in client's retry/rebook,
+  // whose name/email come from their profile instead.
+  contactName?: string;
+  contactEmail?: string;
 };
 
 // Isolated into its own component (rather than calling useSearchParams
@@ -328,7 +306,7 @@ function ResumeBookingWatcher({ onResume }: { onResume: (artist: Artist, resume:
     (async () => {
       const { data: intent } = await supabase
         .from("booking_intents")
-        .select("artist_id, service_id, booking_date, booking_time, meeting_address, client_poc_name, client_poc_phone, status")
+        .select("artist_id, service_id, booking_date, booking_time, meeting_address, client_poc_name, client_poc_phone, contact_name, contact_email, status")
         .eq("id", intentId)
         .maybeSingle();
       // Resumable states: "pending" (rare — got here before the finalize
@@ -359,6 +337,8 @@ function ResumeBookingWatcher({ onResume }: { onResume: (artist: Artist, resume:
         meetingAddress: intent.meeting_address ?? "",
         pocName: intent.client_poc_name ?? "",
         pocPhone: intent.client_poc_phone ?? "",
+        contactName: intent.contact_name ?? undefined,
+        contactEmail: intent.contact_email ?? undefined,
       });
     })();
     return () => { cancelled = true; };
@@ -507,41 +487,6 @@ export default function Home() {
       if (pending) clearPendingWishlistAdd();
       setWishlistIds(ids);
     })();
-  }, [user]);
-
-  // Replay a pending booking that was interrupted by the login wall at the
-  // final "pay now" step (see BookingDrawer's handlePayFast) — reopens
-  // the drawer for the right artist AND feeds the saved selections through
-  // the same `resume` prop the payment-retry flow uses, so it lands
-  // straight back on the confirm step instead of starting over. Fetched
-  // directly by id rather than pulled from `artists`/`provinceFallback` —
-  // those lists are geo/filter-dependent and may not contain this artist
-  // by the time the page reloads post-login.
-  useEffect(() => {
-    if (!user) return;
-    const draft = getPendingBookingDraft();
-    if (!draft) return;
-    clearPendingBookingDraft();
-    supabase
-      .from("artists")
-      .select("*, services(id, name, price, duration_minutes, is_active)")
-      .eq("id", draft.artistId)
-      .eq("is_active", true)
-      .eq("moderation_status", "approved")
-      .maybeSingle()
-      .then(({ data }) => {
-        if (!data) return;
-        setSelectedArtist(data as Artist);
-        setResumeBookingData({
-          serviceId: draft.serviceId,
-          bookingDate: draft.bookingDate,
-          bookingTime: draft.bookingTime,
-          meetingAddress: draft.meetingAddress,
-          pocName: draft.pocName,
-          pocPhone: draft.pocPhone,
-        });
-      });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   const toggleWishlist = useCallback(async (artistId: string) => {
@@ -1002,7 +947,6 @@ type ArtistReview = { id: string; rating: number; comment: string | null; create
 
 function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onClose: () => void; user: User | null; resume?: ResumeBookingData | null }) {
   const supabase = createClient();
-  const router = useRouter();
   const { addItem } = useCart();
   type Service = { id: string; name: string; price: number; duration_minutes: number; tags: string[] };
   type UpsellProduct = {
@@ -1033,6 +977,11 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
   const [pendingFarSalon, setPendingFarSalon] = useState<{ suggestion: SalonSuggestion; distanceKm: number } | null>(null);
   const [pocName, setPocName]     = useState("");
   const [pocPhone, setPocPhone]   = useState("");
+  // Guest bookings only — a logged-in client's name/email already come
+  // from their profile (see handlePayFast/initiateBooking); a guest has
+  // no profile to pull those from, so this drawer collects them directly.
+  const [contactName, setContactName]   = useState("");
+  const [contactEmail, setContactEmail] = useState("");
   const [step, setStep]           = useState<"services" | "datetime" | "confirm">("services");
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState("");
@@ -1140,6 +1089,8 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
     setAddress(resume.meetingAddress);
     setPocName(resume.pocName);
     setPocPhone(resume.pocPhone);
+    if (resume.contactName) setContactName(resume.contactName);
+    if (resume.contactEmail) setContactEmail(resume.contactEmail);
     if (resume.bookingDate >= todayStr) {
       setDate(resume.bookingDate);
       setTime(resume.bookingTime);
@@ -1269,35 +1220,22 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
 
   const handlePayFast = async () => {
     if (!selected || !address.trim() || !pocName.trim() || !pocPhone.trim()) return;
-    // Browsing services and picking a date/time never required an account —
-    // this is the one point that does, so a lead who was just looking isn't
-    // walled off before they've seen anything worth signing up for. Save
-    // the whole selection so it's waiting for them on the other side of
-    // login instead of making them redo it (see getPendingBookingDraft in
-    // the Home component above).
-    if (!user) {
-      setPendingBookingDraft({
-        artistId: artist.id,
-        serviceId: selected.id,
-        bookingDate: date,
-        bookingTime: time,
-        meetingAddress: address,
-        pocName,
-        pocPhone,
-      });
-      // The draft above is what actually survives the trip — this drawer
-      // instance is about to unmount either way, so close it explicitly
-      // rather than leaving it mounted on top of/behind AuthModal.
-      onClose();
-      router.push("/?auth=login");
-      return;
-    }
+    // Paying to book never needs an account now — guest checkout for
+    // bookings (2026-09) mirrors what shop orders already had. The only
+    // extra thing a guest needs to provide that a logged-in client's
+    // profile already has is a name + email for the receipt/confirmation
+    // (see the guest-only fields below the point-of-contact ones).
+    if (!user && (!contactName.trim() || !contactEmail.trim())) return;
     setLoading(true); setError("");
     try {
       const res = await fetch("/api/payfast/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "booking", serviceId: selected.id, artistId: artist.id, bookingDate: date, bookingTime: time, meetingAddress: address, clientPocName: pocName, clientPocPhone: pocPhone }),
+        body: JSON.stringify({
+          type: "booking", serviceId: selected.id, artistId: artist.id, bookingDate: date, bookingTime: time,
+          meetingAddress: address, clientPocName: pocName, clientPocPhone: pocPhone,
+          ...(!user ? { contactName, contactEmail } : {}),
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -1470,9 +1408,18 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
                 <input type="tel" placeholder="Contact phone" value={pocPhone} onChange={e => setPocPhone(e.target.value)} style={inputStyle} />
               </div>
 
+              {!user && (
+                <div>
+                  <p style={{ fontSize: "0.85rem", color: "var(--grey)", marginBottom: "0.3rem" }}>Your details *</p>
+                  <p style={{ fontSize: "0.78rem", color: "var(--light)", marginBottom: "0.6rem" }}>No account needed to book — just enter your name and email for the booking confirmation.</p>
+                  <input type="text" placeholder="Your name" value={contactName} onChange={e => setContactName(e.target.value)} style={{ ...inputStyle, marginBottom: "0.75rem" }} />
+                  <input type="email" placeholder="Your email" value={contactEmail} onChange={e => setContactEmail(e.target.value)} style={inputStyle} />
+                </div>
+              )}
+
               <button
                 className="btn-plum"
-                disabled={!date || !time || !(address.trim() || useCurrentLocation) || !pocName.trim() || !pocPhone.trim() || !!pendingFarSalon}
+                disabled={!date || !time || !(address.trim() || useCurrentLocation) || !pocName.trim() || !pocPhone.trim() || !!pendingFarSalon || (!user && (!contactName.trim() || !contactEmail.trim()))}
                 onClick={() => setStep("confirm")}
               >Review booking</button>
             </div>
@@ -1535,7 +1482,7 @@ function BookingDrawer({ artist, onClose, user, resume }: { artist: Artist; onCl
               You will be redirected to PayFast to complete payment securely. Once paid, you will receive a confirmation message.
             </p>
             <button className="btn-plum" style={{ width: "100%", padding: "0.875rem" }} onClick={handlePayFast} disabled={loading}>
-              {loading ? "Redirecting…" : user ? `Pay ${fmt(selected.price)} now to Book` : `Log in to pay ${fmt(selected.price)} & book`}
+              {loading ? "Redirecting…" : `Pay ${fmt(selected.price)} now to Book`}
             </button>
           </>
         )}

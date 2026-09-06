@@ -2,7 +2,7 @@
 // app/stores/[id]/page.tsx — Store detail page
 
 import { useState, useEffect, useRef, Suspense } from "react";
-import { useParams, useRouter, usePathname, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
 import SiteHeader from "@/components/SiteHeader";
@@ -232,10 +232,8 @@ function ResumeStoreBookingWatcher({ salonId, onResume }: { salonId: string; onR
 }
 
 // ── Booking form ──────────────────────────────────────────────────────────────
-function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
+function BookingForm({ salon }: { salon: Salon }) {
   const supabase = createClient();
-  const router = useRouter();
-  const pathname = usePathname();
   const oh = salon.opening_hours;
   const services = salon.services?.length ? salon.services : ["hair","nails","makeup","lashes"];
 
@@ -663,15 +661,13 @@ function BookingForm({ salon, user }: { salon: Salon; user: User | null }) {
               ? `Pay R${depositRand} now and your slot is confirmed instantly — no waiting on a callback.`
               : `Pay a R${depositRand} deposit now and your slot is confirmed instantly — no waiting on a callback.`}
           </p>
-          {user ? (
-            <button onClick={payDeposit} disabled={depositSaving} className="btn-plum" style={{ width: "100%", padding: "0.8rem", borderRadius: 100, fontSize: "0.92rem", fontWeight: 600, cursor: depositSaving?"not-allowed":"pointer", opacity: depositSaving?0.7:1 }}>
-              {depositSaving ? "Redirecting to payment…" : `Pay R${depositRand} now to Book`}
-            </button>
-          ) : (
-            <button onClick={() => router.push(`${pathname}?auth=login`)} className="btn-plum" style={{ width: "100%", padding: "0.8rem", borderRadius: 100, fontSize: "0.92rem", fontWeight: 600 }}>
-              {isFullPayment ? "Log in to pay & confirm" : "Log in to pay deposit & confirm"}
-            </button>
-          )}
+          {/* Paying to secure a slot never needed an account — this form
+              already collects name/phone/email from every booker
+              regardless of login state, and payDeposit() sends them
+              straight from form state, not a profile. */}
+          <button onClick={payDeposit} disabled={depositSaving} className="btn-plum" style={{ width: "100%", padding: "0.8rem", borderRadius: 100, fontSize: "0.92rem", fontWeight: 600, cursor: depositSaving?"not-allowed":"pointer", opacity: depositSaving?0.7:1 }}>
+            {depositSaving ? "Redirecting to payment…" : `Pay R${depositRand} now to Book`}
+          </button>
         </div>
       )}
 
@@ -852,7 +848,7 @@ export default function StoreDetailPage() {
               </section>
             )}
 
-            <BookingForm salon={salon} user={user} />
+            <BookingForm salon={salon} />
           </div>
 
         </div>
