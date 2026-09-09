@@ -9,7 +9,7 @@ export const metadata: Metadata = {
   description: "Book hair stylists, nail technicians, and makeup artists near you.",
   icons: {
     icon: "/favicon.ico",
-    apple: "/umuhle-icon.png",
+    apple: "/umuhle-apple-icon.webp",
   },
   openGraph: {
     title: "Umuhle — You are beautiful",
@@ -17,7 +17,20 @@ export const metadata: Metadata = {
     url: "https://umuhle.co.za",
     siteName: "Umuhle",
     type: "website",
-    images: [{ url: "https://umuhle.co.za/umuhle-icon.png" }],
+    images: [
+      {
+        url: "https://umuhle.co.za/og-image.webp",
+        width: 1200,
+        height: 630,
+        alt: "Umuhle — You are beautiful",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Umuhle — You are beautiful",
+    description: "Book beauty artists near you.",
+    images: ["https://umuhle.co.za/og-image.webp"],
   },
 };
 
